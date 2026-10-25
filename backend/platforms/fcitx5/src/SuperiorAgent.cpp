@@ -267,6 +267,14 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         [this](fcitx::EventSourceTime *source, std::uint64_t) {
             reloadSettings();
             pollSpeechProcess();
+            // The socket can vanish while the user stays in one window: an
+            // Fcitx5 handover, a stalled agent, a cleaned-up runtime directory.
+            // Focus events are the only other thing that rebuilds it, and
+            // waiting for one left the panels dead until the user happened to
+            // switch windows. One lstat every half second is the whole cost.
+            if (!server_.ownsSocketFile()) {
+                ensureOverlay();
+            }
             source->setNextInterval(500000);
             source->setOneShot();
             return true;
