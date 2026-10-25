@@ -67,6 +67,15 @@ scan "backend/pinyin" '#include[[:space:]]*[<"](Q|Qt)' "pinyin -> Qt"
 scan "backend/pinyin" '#include[[:space:]]*[<"]fcitx' "pinyin -> fcitx5"
 scan "backend/pinyin/include" '#include[[:space:]]*[<"](rime_api|dlfcn)' "pinyin public header -> librime/dlfcn"
 
+# Speech recognition is capture + one external process: it must stay usable on
+# Windows and Android, so no toolkit and no Fcitx5 may leak in.
+scan "backend/speech-recognition" '#include[[:space:]]*[<"](Q|Qt)' "speech-recognition -> Qt"
+scan "backend/speech-recognition" '#include[[:space:]]*[<"]fcitx' "speech-recognition -> fcitx5"
+
+# The decision layer talks to capabilities through its own contract; it must not
+# depend on a concrete capability either.
+scan "backend/core" '#include[[:space:]]*[<"]superior/(pinyin|speech-recognition|cloudpinyin)/' "core -> capability"
+
 # Runtime may use core, but its public headers must not expose core types.
 scan "backend/runtime/include" '#include[[:space:]]*[<"]superior/core/' "runtime public header -> core"
 scan "backend/runtime/include" 'superior::core' "runtime public header -> core"
