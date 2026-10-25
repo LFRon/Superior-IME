@@ -159,6 +159,12 @@ private:
     /// Starts the recogniser child on first use. Returns false when the binary
     /// is missing, which is a setup state, not a crash.
     bool ensureSpeechProcess();
+    /// Stops an overlay that holds the single-instance lock but is not connected
+    /// to us, so the next spawn can take over.
+    bool reclaimStaleOverlay();
+    /// Creates the overlay socket, recovering from a stale file and retrying
+    /// while another instance still holds it.
+    bool startSceneServer(const std::string &socketPath, std::string &error);
     /// Sends the model/engine configuration to the child. Called on start and
     /// whenever the selected model changes, so a running child cannot keep
     /// decoding with the model the user just switched away from.
@@ -256,6 +262,11 @@ private:
     std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = true;
+    /// True once the overlay socket is bound, so the retry timer can stop.
+    bool overlayListening_ = false;
+    std::unique_ptr<fcitx::EventSourceTime> socketRetryTimer_;
+    /// Set by `startSceneServer` so the retry callback can stop itself.
+    bool socketRetryStop_ = false;
     /// True while a speech draft is shown as preedit, so it is cleared exactly
     /// once and never left behind in the composition.
     bool speechPreeditActive_ = false;

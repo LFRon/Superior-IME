@@ -325,6 +325,28 @@ std::string SceneServer::defaultSocketPath() {
     return "/tmp/superior-ime-" + std::to_string(::getuid()) + ".sock";
 }
 
+namespace {
+
+/// True when something actually accepts connections on `path`.
+///
+/// A socket *file* proves nothing: the listener may be gone. Only a successful
+/// connect tells the two apart, which is what makes it safe to unlink the file.
+bool socketIsServed(const std::string &path) {
+    const int probe = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (probe < 0) {
+        return false;
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::memcpy(address.sun_path, path.c_str(), path.size());
+    const bool served =
+        ::connect(probe, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0;
+    ::close(probe);
+    return served;
+}
+
+} // namespace
+
 bool SceneServer::listen(std::string socketPath, std::string &error) {
     close();
 
@@ -338,6 +360,14 @@ bool SceneServer::listen(std::string socketPath, std::string &error) {
     if (::lstat(socketPath.c_str(), &status) == 0) {
         if (!S_ISSOCK(status.st_mode)) {
             error = "path exists and is not a socket: " + socketPath;
+            return false;
+        }
+        // Only a *dead* socket may be removed. This used to unlink whatever was
+        // there, so a second overlay stole the first one's socket: the older
+        // server kept listening on an orphaned inode while clients connected to
+        // the new one, and neither side could tell.
+        if (socketIsServed(socketPath)) {
+            error = "another Superior overlay server is already listening";
             return false;
         }
         ::unlink(socketPath.c_str());
@@ -359,8 +389,32 @@ bool SceneServer::listen(std::string socketPath, std::string &error) {
     std::memcpy(address.sun_path, socketPath.c_str(), socketPath.size());
 
     if (::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
-        error = std::string("bind(): ") + std::strerror(errno);
-        return false;
+        // A previous instance can leave the socket file behind — Fcitx5 taking
+        // over from another Fcitx5 (`fcitx5 -r`), a crash, or a session that
+        // ended while our addon was still loaded. Binding then fails with
+        // EADDRINUSE even though nobody is listening, and without this the
+        // overlay could never connect for the rest of the session: typing still
+        // worked, but every panel fell back to Fcitx5's classic UI, which looks
+        // exactly like "the input method is broken".
+        if (errno != EADDRINUSE) {
+            error = std::string("bind(): ") + std::strerror(errno);
+            return false;
+        }
+        if (socketIsServed(socketPath)) {
+            error = "another Superior overlay server is already listening";
+            return false;
+        }
+        if (::unlink(socketPath.c_str()) != 0 && errno != ENOENT) {
+            error = std::string("unlink(stale socket): ") + std::strerror(errno);
+            return false;
+        }
+        SUPERIOR_WARN(diag::categories::Socket)
+            .field("path", socketPath)
+            << "removed a stale socket left by a previous instance";
+        if (::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
+            error = std::string("bind(): ") + std::strerror(errno);
+            return false;
+        }
     }
     if (::chmod(socketPath.c_str(), 0600) != 0) {
         error = std::string("chmod(): ") + std::strerror(errno);

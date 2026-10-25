@@ -163,8 +163,62 @@ void testRefusesNonSocketPath() {
 
 } // namespace
 
+/// A socket file left behind by a previous instance must not block the next one.
+///
+/// This is not hypothetical: Fcitx5 replacing another Fcitx5 (`fcitx5 -r`) left
+/// the file in place, the new agent failed to bind with EADDRINUSE, and the
+/// overlay could never connect again — the panels silently fell back to Fcitx5's
+/// classic UI, which looks exactly like "the input method is broken".
+void testRecoversFromStaleSocketFile() {
+    const std::string path = uniquePath();
+
+    // Bind and close without unlinking: what a killed process leaves.
+    {
+        const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        CHECK(fd >= 0);
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::memcpy(address.sun_path, path.c_str(), path.size());
+        CHECK(::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        ::close(fd);
+    }
+    CHECK(std::filesystem::exists(path));
+
+    SceneServer server;
+    std::string error;
+    CHECK(server.listen(path, error));
+    CHECK(error.empty());
+
+    // A real client must reach it, i.e. the file now belongs to this server.
+    const int client = connectClient(path);
+    CHECK(client >= 0);
+    if (client >= 0) {
+        ::close(client);
+    }
+    server.close();
+    std::filesystem::remove(path);
+}
+
+/// A *live* listener must win: two overlays on one socket would fight.
+void testRefusesLiveSocket() {
+    const std::string path = uniquePath();
+    SceneServer first;
+    std::string error;
+    CHECK(first.listen(path, error));
+
+    SceneServer second;
+    std::string secondError;
+    CHECK(!second.listen(path, secondError));
+    CHECK(!secondError.empty());
+
+    first.close();
+    std::filesystem::remove(path);
+}
+
 int main() {
     testBroadcastToClient();
+    testRecoversFromStaleSocketFile();
+    testRefusesLiveSocket();
     testClientCommandReachesHandler();
     testRefusesNonSocketPath();
     return superior::test::finish("socket tests");

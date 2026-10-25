@@ -18,6 +18,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdlib>
+#include <fstream>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -138,11 +139,27 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
 
     std::string error;
     const std::string socketPath = protocol::SceneServer::defaultSocketPath();
-    if (!server_.listen(socketPath, error)) {
+    if (!startSceneServer(socketPath, error)) {
+        // A failed bind used to be permanent, which is how a Fcitx5 handover
+        // could leave the overlay dead for the rest of the session. Keep trying:
+        // the other instance is usually on its way out.
         SUPERIOR_WARN(diag::categories::Fcitx5)
             .field("path", socketPath)
             .field("error", error)
-            << "cannot listen for the UI; the overlay will not update";
+            << "cannot listen for the UI yet; retrying";
+        socketRetryTimer_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 1000000, 0,
+            [this, socketPath](fcitx::EventSourceTime *, std::uint64_t) {
+                std::string retryError;
+                if (startSceneServer(socketPath, retryError)) {
+                    ensureOverlay();
+                } else {
+                    SUPERIOR_DEBUG(diag::categories::Fcitx5)
+                        .field("error", retryError)
+                        << "UI socket still busy";
+                }
+                return !socketRetryStop_; // keep polling once a second
+            });
     } else {
         SUPERIOR_INFO(diag::categories::Fcitx5)
             .field("path", socketPath)
@@ -592,6 +609,39 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
     }
 }
 
+bool SuperiorAgent::reclaimStaleOverlay() {
+    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
+    if (runtime == nullptr || runtime[0] == '\0') {
+        return false;
+    }
+    const std::string lockPath = std::string(runtime) + "/superior-ime-ui.lock";
+    std::ifstream file(lockPath);
+    if (!file) {
+        return false;
+    }
+    // QLockFile's format: pid on the first line, then host and application name.
+    long pid = 0;
+    file >> pid;
+    if (pid <= 0 || pid == static_cast<long>(::getpid())) {
+        return false;
+    }
+    // Only signal a process that is really our overlay: a recycled PID must not
+    // take a stray SIGTERM, and this file is user-writable.
+    std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
+    std::string command;
+    if (cmdline) {
+        std::getline(cmdline, command, '\0');
+    }
+    if (command.find("superior_ui") == std::string::npos) {
+        return false;
+    }
+    if (::kill(static_cast<pid_t>(pid), SIGTERM) != 0) {
+        return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    return true;
+}
+
 void SuperiorAgent::ensureOverlay() {
     if (server_.clientCount() > 0) {
         overlaySpawned_ = true;
@@ -606,6 +656,15 @@ void SuperiorAgent::ensureOverlay() {
     const auto now = std::chrono::steady_clock::now();
     if (overlaySpawned_ && now - lastOverlayAttempt_ < std::chrono::seconds(3)) {
         return;
+    }
+    // We already have a socket but nobody is connected: either the overlay just
+    // started, or a *previous* one is wedged and still holds the single-instance
+    // lock — then every respawn prints "already running" and we never get a
+    // window again. Reclaim by stopping the holder, which is safe: the lock file
+    // lives in our own runtime directory and records the process that took it.
+    if (overlaySpawned_ && reclaimStaleOverlay()) {
+        SUPERIOR_WARN(diag::categories::Fcitx5)
+            << "stopped a stale overlay that still held the single-instance lock";
     }
     lastOverlayAttempt_ = now;
 
@@ -1461,6 +1520,21 @@ const superior::speech_recognition::ModelEntry &selectedModel(const std::string 
 }
 
 } // namespace
+
+bool SuperiorAgent::startSceneServer(const std::string &socketPath, std::string &error) {
+    if (server_.clientCount() > 0 || overlayListening_) {
+        return true;
+    }
+    if (!server_.listen(socketPath, error)) {
+        return false;
+    }
+    overlayListening_ = true;
+    // The timer keeps rescheduling itself while it runs; dropping the handle on
+    // the next tick is enough, and `reset()` here would delete a live source.
+    socketRetryStop_ = true;
+    SUPERIOR_INFO(diag::categories::Fcitx5).field("path", socketPath) << "UI socket ready";
+    return true;
+}
 
 bool SuperiorAgent::ensureSpeechProcess() {
     if (speechProcess_ && speechProcess_->running()) {
