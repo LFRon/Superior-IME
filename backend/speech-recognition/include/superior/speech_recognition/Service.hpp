@@ -65,11 +65,21 @@ private:
     /// Turns one recogniser event into our events, applying the commit cadence.
     ///
     /// The recogniser rewrites its transcript as it re-decodes, so a partial is a
-    /// *guess*, not a prefix. Only text that has survived one full cadence without
-    /// changing is committed; anything before the commit point is already typed
-    /// and can no longer be revised, which is why the gate exists at all.
+    /// *guess*, not a prefix. The last two units of a draft stay uncommitted
+    /// (see `stableTailPortion`); the rest is typed as soon as the cadence
+    /// expires, so something appears while the user keeps talking.
     void handleStreamEvent(std::string kind, std::string text, std::uint64_t nowMs,
                            bool closing);
+    /// Types out the part of the draft that is no longer likely to change.
+    ///
+    /// Called on a timer, not only on engine events: a streaming decoder emits
+    /// nothing at all while the audio is quiet, so waiting for "the same partial
+    /// twice" never commits the sentence the user just finished.
+    /// Returns true when it committed and already emitted the follow-up draft.
+    bool flushStreamTail(std::uint64_t nowMs);
+    /// Longest prefix of a draft worth typing: everything except its last two
+    /// units, where a unit is a Latin word or one character.
+    [[nodiscard]] static std::string stableTailPortion(std::string_view tail);
     /// Longest prefix of `text` that has already been committed.
     [[nodiscard]] std::size_t committedPrefixLength(std::string_view text) const;
     /// Records a committed fragment, inserting a space at a Latin word seam.
@@ -128,13 +138,18 @@ private:
     std::atomic<bool> asrKilledOnPurpose_{false};
 
     // Commit cadence for continuous dictation.
+    /// Guards `committed_` and the draft state: the recogniser thread writes them
+    /// from `pumpRecogniser`, the cadence flushes them from `poll`.
+    std::mutex streamMutex_;
     /// Text already emitted as `chunk` for the current utterance.
     std::string committed_;
-    /// Tail that is waiting to become stable, and since when it has been stable.
+    /// The part of the latest draft that has not been committed yet.
     std::string pendingTail_;
+    /// When the draft last changed, and when it was last typed out.
     std::uint64_t pendingSinceMs_ = 0;
-    /// How long a tail must stay unchanged before it is committed.
-    std::uint64_t commitCadenceMs_ = 1500;
+    std::uint64_t lastCommitMs_ = 0;
+    /// How long to wait between two commits.
+    std::uint64_t commitCadenceMs_ = 1000;
 
     /// Default input as it was when recording started, and when to put it back.
     /// Restoring is scheduled rather than immediate because the desktop flips it

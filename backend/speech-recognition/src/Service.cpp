@@ -148,11 +148,14 @@ std::uint64_t sessionCapMs() {
     return 60000;
 }
 
-/// How long a draft must stay unchanged before it is committed.
+/// How often the uncommitted draft is typed out.
 ///
-/// The recogniser rewrites its transcript while it re-decodes, so committing every
-/// second would type guesses. `SUPERIOR_SPEECH_COMMIT_MS` tunes it; 1500 ms is the
-/// measured point where a draft stops changing for Mandarin.
+/// The recogniser rewrites its transcript while it re-decodes, so the last couple
+/// of characters are never typed (see `stableTailPortion`); the rest is. Waiting
+/// for a draft to become *completely* stable sounds safer but only means "commit
+/// nothing while the user is still talking", because a growing transcript never
+/// stops changing. `SUPERIOR_SPEECH_COMMIT_MS` tunes it; 1000 ms is the point
+/// where the text still keeps up with speech.
 std::uint64_t commitCadenceFromEnvironment() {
     if (const char *value = std::getenv("SUPERIOR_SPEECH_COMMIT_MS"); value != nullptr) {
         const long long parsed = std::atoll(value);
@@ -160,8 +163,14 @@ std::uint64_t commitCadenceFromEnvironment() {
             return static_cast<std::uint64_t>(parsed);
         }
     }
-    return 1500;
+    return 1000;
 }
+
+/// How long a draft must exist before any of it is typed.
+///
+/// Without this the very first partial of a burst would be typed the instant it
+/// arrived, i.e. exactly the guess the decoder is about to revise.
+constexpr std::uint64_t kDraftDwellMs = 250;
 
 /// How much audio each streaming re-decode sees.
 ///
@@ -243,10 +252,12 @@ void Service::startCaptureThread() {
             policy.maxRecordingMs = sessionCapMs();
         }
         silence_ = SilenceWatch(policy);
+        std::lock_guard<std::mutex> lock(streamMutex_);
         commitCadenceMs_ = commitCadenceFromEnvironment();
         committed_.clear();
         pendingTail_.clear();
         pendingSinceMs_ = 0;
+        lastCommitMs_ = nowMs();
         capturedBytes_.store(0, std::memory_order_relaxed);
     }
 
@@ -332,8 +343,14 @@ std::size_t Service::committedPrefixLength(std::string_view text) const {
     while (index < limit && text[index] == committed_[index]) {
         ++index;
     }
-    // A multi-byte character cut in half is not a prefix we can trust.
-    while (index > 0 && (static_cast<unsigned char>(text[index - 1]) & 0xC0) == 0x80) {
+    // A prefix may only end *between* characters. The byte at `index` is the
+    // first one that did not match, so a continuation byte there means the two
+    // strings differ inside one character and the match has to back up to that
+    // character's lead byte. Testing `text[index - 1]` instead would back up over
+    // every multi-byte character that did match, which made each partial after a
+    // commit look like the model had rewritten already-typed text.
+    while (index > 0 && index < text.size() &&
+           (static_cast<unsigned char>(text[index]) & 0xC0) == 0x80) {
         --index;
     }
     return index;
@@ -344,40 +361,46 @@ void Service::handleStreamEvent(std::string kind, std::string text, std::uint64_
     text = cleanTranscript(text);
 
     if (kind == "partial") {
-        const std::size_t prefix = committedPrefixLength(text);
-        // Only a draft that still starts with everything already typed can be
-        // diffed; the rest of the character work is plain substring arithmetic.
-        const bool agrees = prefix >= committed_.size() || prefix == text.size();
-        std::string tail = agrees ? text.substr(std::min(committed_.size(), text.size())) : text;
-        if (!agrees && prefix < text.size()) {
-            // The model revised text we already typed. Nothing can take that back,
-            // so the only safe move is to stop trusting this draft: keep showing
-            // it, commit nothing until it agrees with what was typed again.
-            pendingTail_.clear();
-            Event event;
-            event.kind = Event::Kind::Partial;
-            event.text = text;
-            emit_(event);
-            return;
+        bool agrees = true;
+        std::string draft;
+        {
+            std::lock_guard<std::mutex> lock(streamMutex_);
+            const std::size_t prefix = committedPrefixLength(text);
+            // Only a draft that still starts with everything already typed can be
+            // diffed; the rest of the character work is plain substring arithmetic.
+            agrees = prefix >= committed_.size() || prefix == text.size();
+            if (agrees) {
+                const std::string tail = text.substr(std::min(committed_.size(), text.size()));
+                if (tail != pendingTail_) {
+                    pendingTail_ = tail;
+                    pendingSinceMs_ = nowMs;
+                }
+                draft = pendingTail_;
+            } else {
+                // The model revised text we already typed. Nothing can take that
+                // back, so this draft is not trusted and nothing is committed until
+                // it agrees again. Only the part *after* what is already typed is
+                // shown: repeating the typed prefix in the draft would read as if
+                // the sentence had been doubled on screen.
+                pendingTail_.clear();
+                pendingSinceMs_ = nowMs;
+                std::size_t start = std::min(committed_.size(), text.size());
+                while (start > 0 && start < text.size() &&
+                       (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) {
+                    --start;
+                }
+                draft = text.substr(start);
+            }
         }
-        if (tail != pendingTail_) {
-            pendingTail_ = tail;
-            pendingSinceMs_ = nowMs;
-        } else if (!tail.empty() && commitCadenceMs_ > 0 &&
-                   nowMs - pendingSinceMs_ >= commitCadenceMs_) {
-            // Stable for a full cadence: this is as close to final as a guess gets.
-            Event chunk;
-            chunk.kind = Event::Kind::Chunk;
-            chunk.text = tail;
-            commitSeam(tail);
-            emit_(chunk);
-            pendingTail_.clear();
-            pendingSinceMs_ = nowMs;
+        // A partial can be the exact moment the cadence expires, and the engine may
+        // then go silent for the rest of the sentence; flushing here is what keeps
+        // the text moving.
+        if (agrees && flushStreamTail(nowMs)) {
+            return; // the flush already emitted the new draft
         }
-
         Event event;
         event.kind = Event::Kind::Partial;
-        event.text = tail;
+        event.text = std::move(draft);
         emit_(event);
         return;
     }
@@ -388,25 +411,96 @@ void Service::handleStreamEvent(std::string kind, std::string text, std::uint64_
         // pause — commit it and keep listening; only our own close ends the
         // session, or the text spoken since the last chunk would be lost.
         std::string remainder;
-        if (text.size() >= committed_.size() && text.compare(0, committed_.size(), committed_) == 0) {
-            remainder = text.substr(committed_.size());
-        } else {
-            remainder = text;
+        {
+            std::lock_guard<std::mutex> lock(streamMutex_);
+            // Typing from the common prefix instead of from `committed_.size()`
+            // means a revised beginning is not typed a second time in full; the
+            // characters that changed after it cannot be taken back either way.
+            remainder = text.substr(committedPrefixLength(text));
+            pendingTail_.clear();
+            pendingSinceMs_ = nowMs;
+            if (!closing) {
+                commitSeam(remainder);
+                lastCommitMs_ = nowMs;
+            }
         }
         Event event;
         event.kind = closing ? Event::Kind::Final : Event::Kind::Chunk;
         event.text = remainder;
-        if (!closing) {
-            commitSeam(remainder);
-        }
         emit_(event);
         if (closing) {
+            std::lock_guard<std::mutex> lock(streamMutex_);
             committed_.clear();
+            lastCommitMs_ = 0;
         }
-        pendingTail_.clear();
-        pendingSinceMs_ = nowMs;
     }
 }
+
+bool Service::flushStreamTail(std::uint64_t nowMs) {
+    std::vector<Event> queued;
+    {
+        std::lock_guard<std::mutex> lock(streamMutex_);
+        // While closing, the engine's own final is the last word: typing a guess
+        // now would only race it.
+        if (asrClosing_.load(std::memory_order_relaxed) || pendingTail_.empty() ||
+            commitCadenceMs_ == 0) {
+            return false;
+        }
+        if (nowMs - pendingSinceMs_ < kDraftDwellMs ||
+            nowMs - lastCommitMs_ < commitCadenceMs_) {
+            return false;
+        }
+        const std::string stable = stableTailPortion(pendingTail_);
+        if (stable.empty()) {
+            return false;
+        }
+        pendingTail_.erase(0, stable.size());
+        pendingSinceMs_ = nowMs;
+        lastCommitMs_ = nowMs;
+        commitSeam(stable);
+
+        Event chunk;
+        chunk.kind = Event::Kind::Chunk;
+        chunk.text = stable;
+        queued.push_back(std::move(chunk));
+
+        // What is left is still a guess, so it stays in the composition line.
+        Event draft;
+        draft.kind = Event::Kind::Partial;
+        draft.text = pendingTail_;
+        queued.push_back(std::move(draft));
+    }
+    for (const auto &event : queued) {
+        emit_(event);
+    }
+    return true;
+}
+
+std::string Service::stableTailPortion(std::string_view tail) {
+    const auto isWordByte = [](unsigned char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+               (ch >= '0' && ch <= '9');
+    };
+    // Hold back the last two units, where a Latin word counts as one unit and
+    // anything else counts per character. That is the region a streaming decoder
+    // revises ("一二三四" becomes "一二三思"); everything before it has not moved
+    // for a whole decode step and is as final as a guess ever gets.
+    std::size_t cursor = tail.size();
+    for (int units = 0; units < 2 && cursor > 0; ++units) {
+        if (isWordByte(static_cast<unsigned char>(tail[cursor - 1]))) {
+            while (cursor > 0 && isWordByte(static_cast<unsigned char>(tail[cursor - 1]))) {
+                --cursor;
+            }
+        } else {
+            --cursor;
+            while (cursor > 0 && (static_cast<unsigned char>(tail[cursor]) & 0xC0) == 0x80) {
+                --cursor;
+            }
+        }
+    }
+    return std::string(tail.substr(0, cursor));
+}
+
 
 /// Appends `tail` to the record of committed text, with a space when the seam is
 /// between two Latin words. Chinese needs no separator, English does.
@@ -590,6 +684,18 @@ void Service::start() {
     if (capturing_ || workerBusy_) {
         return;
     }
+    if (streaming_) {
+        // The previous utterance is still flushing its last segment. Starting a
+        // second recogniser now would assign over a joinable thread (terminate)
+        // and overwrite the fds of the one still being read, so this one is ended
+        // first. It is a leftover: `stop()` already asked the engine for its final.
+        beginStreamingClose();
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+    }
     if (!captureAvailable()) {
         Event event;
         event.kind = Event::Kind::Error;
@@ -754,6 +860,10 @@ void Service::cancel() {
 void Service::poll() {
     const std::uint64_t now = nowMs();
     pollDefaultSourceRestore(now);
+    // Type out the part of the draft that has settled. This has to be a timer:
+    // the recogniser emits nothing at all while the audio is quiet, so a commit
+    // rule driven by engine events would sit on a finished sentence forever.
+    flushStreamTail(now);
     if (awaitingStreamingExit_ && asrReaderDone_.load(std::memory_order_relaxed)) {
         reapStreamingRecogniser();
         emitPhase("idle");
