@@ -470,6 +470,58 @@ void testParaformerBackendArgs() {
     }
 }
 
+/// The streaming window must span the whole session.
+///
+/// The decoder's draft is only a *prefix* of the utterance while its rolling
+/// window still covers the beginning. With the engine's 10 s default the window
+/// slides, the draft loses its head, and continuous dictation stopped committing
+/// after ten seconds — verified against Paraformer-zh: partials went
+/// "…ask not what your" -> "country can do for you…" with the head gone.
+void testStreamingWindowCoversSession() {
+    EngineConfig config;
+    config.enginePath = "/usr/bin/crispasr";
+    config.modelPath = "/models/paraformer-zh/paraformer-zh-q4_k.gguf";
+    config.backend = "paraformer";
+    std::string error;
+
+    // Default: one minute, i.e. the session cap.
+    const auto defaults = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(defaults.has_value());
+    if (defaults) {
+        const auto value = [&](const std::string &flag) -> std::string {
+            for (std::size_t i = 0; i + 1 < defaults->args.size(); ++i) {
+                if (defaults->args[i] == flag) {
+                    return defaults->args[i + 1];
+                }
+            }
+            return {};
+        };
+        CHECK(value("--stream-length") == "60000");
+        // Same span in seconds, so the closing re-decode does not truncate a
+        // longer session at the engine's own 60 s default.
+        CHECK(value("--stream-utterance-max-sec") == "60");
+        CHECK(value("--stream-step") == "2000");
+    }
+
+    // An explicit window is passed through, and the seconds follow it.
+    const auto shortWindow = buildStreamingEngineCommand(config, error, 1000, 25000);
+    CHECK(shortWindow.has_value());
+    if (shortWindow) {
+        bool sawLength = false;
+        bool sawSeconds = false;
+        for (std::size_t i = 0; i + 1 < shortWindow->args.size(); ++i) {
+            if (shortWindow->args[i] == "--stream-length") {
+                sawLength = shortWindow->args[i + 1] == "25000";
+            }
+            if (shortWindow->args[i] == "--stream-utterance-max-sec") {
+                sawSeconds = shortWindow->args[i + 1] == "25";
+            }
+        }
+        CHECK(sawLength);
+        CHECK(sawSeconds);
+    }
+}
+
 /// Continuous dictation: a mid-sentence pause must not end the session, and the
 /// cap must be visible before it arrives.
 void testContinuousModeNeverEndsOnSilence() {
@@ -513,6 +565,7 @@ int main() {
     testCatalogDefault();
     testResolveStoredModel();
     testParaformerBackendArgs();
+    testStreamingWindowCoversSession();
     testDefaultSourceRestoreRules();
     testLevelMath();
     testSilenceWatchEndsUtterance();

@@ -277,6 +277,10 @@ echo '{"cmd":"start"}' >&3
 sleep 0.6
 grep -q "stepMs=${expected_step}" "$current/err" ||
     fail "the default decode step is not ${expected_step} ms (see the 'streaming recogniser started' log line)"
+# The window has to cover the session, or the decoder's draft stops being a
+# prefix of the utterance after 10 s (see `streamingWindowMs`).
+grep -q "windowMs=60000" "$current/err" ||
+    fail "the streaming window does not cover the session (see the 'streaming recogniser started' log line)"
 echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"final"' || fail "no final event after stop (step default)"
 stop_process

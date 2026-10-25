@@ -166,6 +166,27 @@ std::uint64_t commitCadenceFromEnvironment() {
     return 1000;
 }
 
+/// Rolling context the streaming decoder keeps.
+///
+/// It must span the whole session, otherwise the decoder's window slides past the
+/// beginning of the utterance and its draft stops being a *prefix* of what was said
+/// — it loses its head. `committed_` is a prefix of the draft, and that is the one
+/// invariant the commit logic has; with a sliding window, continuous dictation went
+/// silent after ten seconds. Measured cost of the bigger window (Paraformer-zh,
+/// 55 s of audio): 0.48x realtime instead of 0.18x, i.e. still twice as fast as
+/// the microphone. `SUPERIOR_SPEECH_WINDOW_MS` overrides it.
+int streamingWindowMs() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_WINDOW_MS"); value != nullptr) {
+        const long parsed = std::atol(value);
+        if (parsed >= 2000) {
+            return static_cast<int>(std::min<long>(parsed, 600000));
+        }
+    }
+    // Only ever larger than the session cap: a window shorter than the session is
+    // exactly the bug this exists to prevent.
+    return static_cast<int>(std::max<std::uint64_t>(sessionCapMs(), 10000));
+}
+
 /// How long a draft must exist before any of it is typed.
 ///
 /// Without this the very first partial of a burst would be typed the instant it
@@ -555,8 +576,9 @@ bool Service::startStreamingRecogniser() {
         streaming.puncPath = "off";
     }
     const int step = streamingStepMs();
+    const int window = streamingWindowMs();
     std::string error;
-    const auto command = buildStreamingEngineCommand(streaming, error, step);
+    const auto command = buildStreamingEngineCommand(streaming, error, step, window);
     if (!command) {
         SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
             .field("reason", error)
@@ -629,6 +651,7 @@ bool Service::startStreamingRecogniser() {
         .field("pid", static_cast<std::int64_t>(pid))
         .field("threads", static_cast<std::int64_t>(streaming.threads))
         .field("stepMs", static_cast<std::int64_t>(step))
+        .field("windowMs", static_cast<std::int64_t>(window))
         << "streaming recogniser started (threads and step chosen from current load)";
     return true;
 }

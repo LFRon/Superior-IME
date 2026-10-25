@@ -37,12 +37,22 @@ struct EngineCommand {
 /// `final` after a short pause. `stepMs` is how much audio each re-decode sees —
 /// smaller is more responsive and more expensive.
 ///
+/// `windowMs` is the rolling context the recogniser keeps. It has to cover the
+/// whole session: the decoder's draft is a *prefix* of the utterance only while
+/// the window has not slid past the beginning. Once it slides, the draft loses its
+/// head and no longer starts with the text already typed, which is the one thing
+/// the commit logic relies on. Measured with Paraformer-zh on 55 s of audio:
+/// a full-length window costs 0.48x realtime, a sliding 10 s window 0.18x — the
+/// extra cost buys correct continuous dictation, and it is still twice as fast as
+/// the microphone.
+///
 /// `SUPERIOR_ASR_STREAM_CMD` overrides the whole command line, with the same
 /// `{model}`/`{threads}`/`{language}`/`{backend}` placeholders as the batch form,
 /// so the pipeline can be tested without a model.
 [[nodiscard]] std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &config,
                                                                       std::string &error,
-                                                                      int stepMs = 2000);
+                                                                      int stepMs = 2000,
+                                                                      int windowMs = 60000);
 
 /// Runs the command with stdout captured; returns the trimmed transcript.
 ///

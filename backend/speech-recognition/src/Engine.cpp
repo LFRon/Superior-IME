@@ -173,7 +173,8 @@ std::string cleanTranscript(std::string_view raw) {
 }
 
 std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &config,
-                                                         std::string &error, int stepMs) {
+                                                         std::string &error, int stepMs,
+                                                         int windowMs) {
     if (config.modelPath.empty()) {
         error = "no model path";
         return std::nullopt;
@@ -211,7 +212,14 @@ std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &con
     // a draft. 800 ms is the engine default and matches speech rhythm.
     command.args = {"--backend", backend, "-m", config.modelPath, "--stream", "--stream-json",
                     "-t", threads, "--stream-step", std::to_string(stepMs),
+                    "--stream-length", std::to_string(windowMs),
                     "--stream-final-on-silence-ms", "800"};
+    // The same span in seconds, so a finished utterance is re-decoded over exactly
+    // the audio the streaming pass saw. Left at the engine default it would cap at
+    // 60 s, i.e. silently truncate a longer session's final transcript.
+    const int windowSeconds = (windowMs + 999) / 1000;
+    command.args.push_back("--stream-utterance-max-sec");
+    command.args.push_back(std::to_string(windowSeconds));
     command.args.push_back("--punc-model");
     command.args.push_back(config.puncPath.empty() ? "off" : config.puncPath);
     if (!config.language.empty() && config.language != "auto") {
