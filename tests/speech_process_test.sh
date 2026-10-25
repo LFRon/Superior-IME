@@ -295,4 +295,34 @@ echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"final"' || fail "no final event after stop (step override)"
 stop_process
 
+# --- Scenario 9: the recogniser dies while the microphone is open -----------
+#
+# A crash or an OOM kill used to be completely invisible: the capture thread only
+# noticed its pipe closing and kept metering the level, so the panel looked like it
+# was listening while every word went nowhere, until the 60 s cap expired. The
+# session has to end at once, with an error, and the process has to stay usable.
+cat > "$root/dying-stream.sh" <<'STREAM'
+#!/bin/sh
+echo '{"type":"partial","text":"一二三"}'
+sleep 0.4
+exit 1
+STREAM
+chmod +x "$root/dying-stream.sh"
+
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 20"' \
+    'bash -c "echo 不该走批处理"' "$root/dying-stream.sh"
+wait_for '"ev":"ready"' || fail "no ready event (dead recogniser)"
+echo '{"cmd":"start"}' >&3
+wait_for '"code":"recognition_failed"' ||
+    fail "a recogniser that dies mid-session must be reported"
+wait_for '"ev":"phase","name":"idle"' || fail "the session did not end after the recogniser died"
+# The capability must still answer: a dead child must not wedge the command loop.
+echo '{"cmd":"start"}' >&3
+sleep 0.5
+grep -q '"ev":"phase","name":"recording"' "$current/out" ||
+    fail "the capability stopped accepting commands after the recogniser died"
+echo '{"cmd":"stop"}' >&3
+wait_for '"ev":"phase","name":"idle"' || fail "no idle after stopping the second session"
+stop_process
+
 echo "speech process: ok"

@@ -948,6 +948,30 @@ void Service::poll() {
         reapStreamingRecogniser();
         emitPhase("idle");
     }
+    // The recogniser died while the microphone was still open: a crash, an OOM
+    // kill, a model file that disappeared mid-session. Nothing used to notice. The
+    // capture thread only sees its pipe go away and keeps metering the level, so
+    // the panel looked like it was listening while every word went nowhere, until
+    // the session cap expired a minute later. Ending the session at once is the
+    // honest answer, and the error says why.
+    if (capturing_ && streaming_ && !awaitingStreamingExit_ &&
+        asrReaderDone_.load(std::memory_order_relaxed)) {
+        stopCapture();
+        // Abandon it on purpose: it is already dead, and a blocking `waitpid` on a
+        // process that only closed stdout would freeze the command loop.
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+        Event event;
+        event.kind = Event::Kind::Error;
+        event.code = "recognition_failed";
+        event.message = "语音识别引擎意外退出，请检查日志";
+        emit_(event);
+        emitPhase("idle");
+        return;
+    }
     if (capturing_) {
         double level = 0.0;
         {
