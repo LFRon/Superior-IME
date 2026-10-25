@@ -73,6 +73,13 @@ public:
     bool setAsciiMode(bool ascii);
     [[nodiscard]] bool asciiMode();
 
+    /// Generic schema switch, for options such as `ascii_punct` / `full_shape`.
+    ///
+    /// The platform layer owns the toolbar, so it needs to read and write the
+    /// schema switches without knowing librime's C API.
+    bool setOption(std::string_view name, bool value);
+    [[nodiscard]] bool getOption(std::string_view name);
+
     /// Candidate index from a 1-based id, or -1 when out of range.
     ///
     /// The UI sends ids back verbatim; re-validating here is what makes a stale

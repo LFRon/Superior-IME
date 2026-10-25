@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <fcitx/action.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
@@ -10,7 +11,9 @@
 #include <fcitx/inputmethodengine.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
+#include <fcitx/statusarea.h>
 #include <fcitx/text.h>
+#include <fcitx/userinterfacemanager.h>
 
 #include <fcitx-utils/handlertable.h>
 
@@ -91,10 +94,22 @@ private:
     /// list's own `CandidateWord::select()` keeps both cases correct.
     bool handleSelectionKey(fcitx::InputContext *inputContext, fcitx::KeyEvent &event);
 
+    /// Attaches the punctuation action to a context and syncs its state.
+    void attachPunctuation(fcitx::InputContext *inputContext, Session &session);
+    /// Mirrors the schema's `ascii_punct` switch into the toolbar action.
+    void refreshPunctuationAction(Session &session);
+    /// Toggles Chinese (full-width) vs ASCII (half-width) punctuation.
+    void togglePunctuation(fcitx::InputContext *inputContext);
+
     fcitx::AddonManager *manager_ = nullptr;
     fcitx::Instance *instance_ = nullptr;
     std::map<fcitx::InputContext *, std::unique_ptr<Session>> sessions_;
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> destroyedHandler_;
+    fcitx::SimpleAction punctuationAction_;
+    bool punctuationRegistered_ = false;
+    /// The first session seeds the toolbar; later sessions copy its state so
+    /// the glyph never disagrees with the window being typed in.
+    bool punctuationSeeded_ = false;
     rime::Paths paths_;
     bool libraryReady_ = false;
     std::string startError_;

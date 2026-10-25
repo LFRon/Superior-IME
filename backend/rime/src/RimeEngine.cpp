@@ -159,6 +159,20 @@ bool RimeEngine::asciiMode() {
     return ascii_;
 }
 
+bool RimeEngine::setOption(std::string_view name, bool value) {
+    if (!sessionOpen_) {
+        return false;
+    }
+    return port_.setOption(name, value);
+}
+
+bool RimeEngine::getOption(std::string_view name) {
+    if (!sessionOpen_) {
+        return false;
+    }
+    return port_.getOption(name);
+}
+
 int RimeEngine::indexForId(std::uint32_t id, int count) noexcept {
     if (id == 0 || count <= 0) {
         return -1;

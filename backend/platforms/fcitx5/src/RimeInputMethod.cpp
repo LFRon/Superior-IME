@@ -168,6 +168,23 @@ RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
             << "librime is not available; the Rime input method cannot be used";
     }
 
+    if (instance_ != nullptr && libraryReady_) {
+        punctuationAction_.setCheckable(true);
+        punctuationAction_.setChecked(true); // schema default: 中标/全角
+        punctuationAction_.setShortText("全角");
+        punctuationAction_.setLongText("切换标点全角/半角");
+        punctuationAction_.setIcon("fcitx-punc-active");
+        punctuationAction_.connect<fcitx::SimpleAction::Activated>(
+            [this](fcitx::InputContext *inputContext) { togglePunctuation(inputContext); });
+        punctuationRegistered_ =
+            instance_->userInterfaceManager().registerAction("punctuation", &punctuationAction_);
+        if (!punctuationRegistered_) {
+            SUPERIOR_WARN(diag::categories::Rime)
+                << "status action 'punctuation' is already registered; "
+                   "leaving punctuation to the other addon";
+        }
+    }
+
     if (instance_ != nullptr) {
         // `InputMethodEngine` has no per-context destruction hook; the instance
         // event is the only way to close a session when a window goes away.
@@ -180,6 +197,9 @@ RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
 }
 
 RimeInputMethod::~RimeInputMethod() {
+    if (instance_ != nullptr && punctuationRegistered_) {
+        instance_->userInterfaceManager().unregisterAction(&punctuationAction_);
+    }
     destroyedHandler_.reset();
     for (auto &[context, session] : sessions_) {
         (void)context;
@@ -248,6 +268,7 @@ void RimeInputMethod::activate(const fcitx::InputMethodEntry &entry,
     auto *session = sessionFor(inputContext);
     inputContext->inputPanel().reset();
     if (session != nullptr) {
+        attachPunctuation(inputContext, *session);
         updatePanel(inputContext, *session);
     }
 }
@@ -276,6 +297,7 @@ void RimeInputMethod::reset(const fcitx::InputMethodEntry &entry,
     auto *session = sessionFor(inputContext);
     inputContext->inputPanel().reset();
     if (session != nullptr) {
+        attachPunctuation(inputContext, *session);
         updatePanel(inputContext, *session);
     }
 }
@@ -497,6 +519,61 @@ void RimeInputMethod::updatePanel(fcitx::InputContext *inputContext, Session &se
 
     panel.setCandidateList(std::move(list));
     inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+void RimeInputMethod::attachPunctuation(fcitx::InputContext *inputContext, Session &session) {
+    if (!punctuationRegistered_) {
+        return;
+    }
+    if (!punctuationSeeded_) {
+        // The first session decides what the global toolbar shows.
+        refreshPunctuationAction(session);
+        punctuationSeeded_ = true;
+    } else {
+        // The toolbar is global; a window that takes focus later must agree
+        // with it instead of silently keeping the schema default.
+        session.engine.setOption("ascii_punct", !punctuationAction_.isChecked(inputContext));
+    }
+    inputContext->statusArea().addAction(fcitx::StatusGroup::InputMethod, &punctuationAction_);
+}
+
+void RimeInputMethod::refreshPunctuationAction(Session &session) {
+    const bool ascii = session.engine.getOption("ascii_punct");
+    // `isChecked` drives the glyph: full width is a filled circle.
+    punctuationAction_.setChecked(!ascii);
+    punctuationAction_.setShortText(ascii ? "半角" : "全角");
+    punctuationAction_.setIcon(ascii ? "fcitx-punc-inactive" : "fcitx-punc-active");
+}
+
+void RimeInputMethod::togglePunctuation(fcitx::InputContext *inputContext) {
+    SUPERIOR_DEBUG(diag::categories::Rime)
+        .field("program", inputContext != nullptr ? inputContext->program() : std::string{})
+        .field("sessions", static_cast<std::int64_t>(sessions_.size()))
+        << "punctuation action activated";
+    const auto it = sessions_.find(inputContext);
+    if (it == sessions_.end()) {
+        SUPERIOR_DEBUG(diag::categories::Rime)
+            .field("program", inputContext != nullptr ? inputContext->program() : std::string{})
+            << "punctuation action ignored: no session for this context";
+        return;
+    }
+
+    const bool ascii = !it->second->engine.getOption("ascii_punct");
+    // `ascii_punct` is a schema switch that Rime persists globally, so every
+    // open session has to receive the new value; otherwise a window that takes
+    // focus later would keep the old punctuation.
+    for (auto &[context, session] : sessions_) {
+        (void)context;
+        session->engine.setOption("ascii_punct", ascii);
+    }
+    punctuationSeeded_ = true;
+    refreshPunctuationAction(*it->second);
+
+    inputContext->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+    SUPERIOR_INFO(diag::categories::Rime)
+        .field("ascii", ascii)
+        .field("program", inputContext->program())
+        << "punctuation width changed";
 }
 
 std::string RimeInputMethod::subMode(const fcitx::InputMethodEntry &entry,

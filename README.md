@@ -242,10 +242,14 @@ superior-config rime lookup nihao   # 端到端自检
 偏移的圆」，缺口用工具栏底色绘制而不是抠透明，否则会露出后面的窗口。缺口方向
 从正右（0°）逆时针旋转 45°（`kMoonRotationDegrees`），所以月牙开口朝右上。
 
-状态来源要注意：`punctuation` 这个 action 的 `isChecked()` 永远是 false，真正
-的状态在它的图标名 `fcitx-punc-active` / `fcitx-punc-inactive` 里。所以
-`statusIconIsOn()` 先匹配 `-inactive` 再匹配 `-active`——「inactive」本身就包含
-「active」，只做子串搜索会把半角当成全角。
+状态来源：内置 Rime 引擎注册的 `punctuation` action 用 `isChecked()` 表示全角，
+同时把图标设成 `fcitx-punc-active` / `fcitx-punc-inactive`。旧的 Fcitx 标点模块
+只翻图标、不暴露 checked，所以 `statusIconIsOn()` 仍然先匹配 `-inactive` 再匹配
+`-active`——「inactive」本身就包含「active」，只做子串搜索会把半角当成全角。
+
+点击这个按钮会把 Rime 的 `ascii_punct` 开关（中标/英标）同步到所有打开的会话，
+所以下一个获得焦点的窗口也会用同一种标点。状态在 Fcitx5 重启后回到方案默认的
+中标/全角（目前没有单独持久化）。
 
 引擎的 `pinyin-prediction`（预测开关）被过滤掉，不出现在工具栏：它是配置项，
 不是打字时要按的按钮。

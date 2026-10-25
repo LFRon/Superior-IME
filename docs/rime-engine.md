@@ -120,6 +120,23 @@ patch:
   在会话开始时强制 `ascii_mode=false`。这是为了照顾还没来得及重新部署的数据目录，
   不是替代上面的 patch。
 
+## 标点全角/半角
+
+状态栏的月牙/实心圆不是装饰，它对应 schema 的 `ascii_punct` 开关：
+
+- `ascii_punct=false`（默认，中标/全角）：`,` → `，`、`.` → `。`；
+- `ascii_punct=true`（英标/半角）：`,` → `,`、`.` → `.`。
+
+`RimeInputMethod` 注册一个名为 `punctuation` 的 `SimpleAction`，agent 已有的
+`StatusMapping` 直接把它画成月牙/实心圆；点击时：
+
+1. 读取当前会话的 `ascii_punct` 并取反；
+2. 把这个值写入**所有**打开的 session（这个开关是方案级的，下一个窗口也必须一致）；
+3. 更新 action 的 checked/短文本/图标，触发 `StatusArea` 重绘。
+
+新会话在 `activate`/`reset` 时会复制工具栏状态，所以切窗口不会让标点突然变回
+另一种宽度。状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
+
 ## 翻页
 
 `RimeApi::change_page()` 在 librime 1.17 里是空实现（返回 false，菜单不动）。

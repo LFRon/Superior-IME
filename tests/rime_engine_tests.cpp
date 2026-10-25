@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -82,13 +83,15 @@ public:
 
     bool setOption(std::string_view name, bool value) override {
         options.emplace_back(std::string(name), value);
+        values[std::string(name)] = value;
         if (name == "ascii_mode") {
             ascii = value;
         }
         return true;
     }
     bool getOption(std::string_view name) override {
-        return name == "ascii_mode" && ascii;
+        const auto it = values.find(std::string(name));
+        return it != values.end() && it->second;
     }
 
     bool asciiMode() override { return ascii; }
@@ -103,6 +106,7 @@ public:
     std::vector<Key> keys;
     std::vector<bool> pages;
     std::vector<std::pair<std::string, bool>> options;
+    std::map<std::string, bool> values;
     Composition pendingComposition;
     Menu pendingMenu;
     std::string pendingCommit;
@@ -347,6 +351,26 @@ void testCandidateIndexFromId() {
     CHECK(RimeEngine::indexForId(1, -3) == -1);
 }
 
+void testSchemaOptionsForwardToPort() {
+    FakePort port;
+    port.schema = "wanxiang";
+    RimeEngine engine(port);
+    std::string error;
+    CHECK(engine.start(testPaths(), error));
+
+    // Schema switches such as ascii_punct are plain options; the toolbar reads
+    // and writes them through this pair.
+    CHECK(!engine.getOption("ascii_punct"));
+    CHECK(engine.setOption("ascii_punct", true));
+    CHECK(engine.getOption("ascii_punct"));
+    CHECK(!engine.getOption("full_shape"));
+
+    FakePort idle;
+    RimeEngine stopped(idle);
+    CHECK(!stopped.setOption("ascii_punct", true));
+    CHECK(!stopped.getOption("ascii_punct"));
+}
+
 void testSelectAndPageForwardToPort() {
     FakePort port;
     port.schema = "wanxiang";
@@ -460,6 +484,7 @@ int main() {
     testDeployReopensSession();
     testDeployFailureIsReported();
     testCandidateIndexFromId();
+    testSchemaOptionsForwardToPort();
     testSelectAndPageForwardToPort();
     testTakeCommitAfterSelection();
     testOperationsBeforeStartAreNoOps();

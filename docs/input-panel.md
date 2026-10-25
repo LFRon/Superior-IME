@@ -151,19 +151,21 @@ Fcitx5 的 action 名。
 
 | action | 角色 | 呈现 |
 |---|---|---|
-| `punctuation` | `Punctuation` | 月牙（半角）/ 实心圆（全角） |
+| `punctuation` | `Punctuation` | 月牙（半角）/ 实心圆（全角）；内置 Rime 引擎注册，切换 `ascii_punct` |
 | `pinyin-prediction` | 过滤 | 不显示（其它引擎的预测开关；当前引擎没有） |
 | 其它 | `Text` | 原样显示 `shortText` |
 
 点击处理：UI 发 `ToggleStatusItem{id}` → agent 在 `StatusArea` 里按名查找 action →
 调用 `action->activate(ic)` → 请求 `StatusArea` 重绘并刷新场景。引擎状态从不被 UI
-直接改写，punctuation / fullwidth 的语义仍留在引擎里。
+直接改写，punctuation / fullwidth 的语义仍留在引擎里。内置 Rime 引擎的
+`punctuation` action 会把 `ascii_punct` 应用到所有会话，再由 Rime 的 punctuator
+决定输出 `，` 还是 `,`。
 
 ### 状态从哪里读
 
-`punctuation` 的 `isChecked()` 恒为 false（它是 `ToggleAction`，但没有暴露 checked
-状态），真正的状态在图标名：
-`fcitx-punc-active`（全角）/ `fcitx-punc-inactive`（半角）。
+内置 Rime 引擎的 `punctuation` action 是 `SimpleAction`，`isChecked()` 表示全角，
+并同步设置 `fcitx-punc-active`（全角）/ `fcitx-punc-inactive`（半角）图标；旧的
+Fcitx 标点模块只翻图标、不暴露 checked，所以两种来源都要认。
 
 `statusIconIsOn()` 因此按**后缀**判断，且先判 `-inactive`：「inactive」本身包含
 「active」，子串搜索会把半角误判成全角，图标就永远不翻。
