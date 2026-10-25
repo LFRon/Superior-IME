@@ -187,6 +187,22 @@ int streamingWindowMs() {
     return static_cast<int>(std::max<std::uint64_t>(sessionCapMs(), 10000));
 }
 
+/// How long a recogniser may take to exit after its stdin was closed.
+///
+/// A real flush re-decodes the utterance: one to two seconds for a minute of
+/// speech. Fifteen is a wide margin, and `SUPERIOR_SPEECH_FLUSH_MS` makes it
+/// testable. Waiting forever is not an option: while it waits, the session is
+/// "finishing", and nothing the user does can move it.
+std::uint64_t flushTimeoutMs() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_FLUSH_MS"); value != nullptr) {
+        const long long parsed = std::atoll(value);
+        if (parsed > 0) {
+            return static_cast<std::uint64_t>(parsed);
+        }
+    }
+    return 15000;
+}
+
 /// How long a draft must exist before any of it is typed.
 ///
 /// Without this the very first partial of a burst would be typed the instant it
@@ -709,6 +725,7 @@ void Service::beginStreamingClose() {
         asrWriteFd_ = -1;
     }
     awaitingStreamingExit_ = true;
+    closeRequestedMs_ = nowMs();
 }
 
 void Service::reapStreamingRecogniser() {
@@ -758,6 +775,7 @@ void Service::reapStreamingRecogniser() {
         << "streaming recogniser reaped";
     streaming_ = false;
     awaitingStreamingExit_ = false;
+    closeRequestedMs_ = 0;
 }
 
 void Service::start() {
@@ -946,6 +964,27 @@ void Service::poll() {
     flushStreamTail(now);
     if (awaitingStreamingExit_ && asrReaderDone_.load(std::memory_order_relaxed)) {
         reapStreamingRecogniser();
+        emitPhase("idle");
+    }
+    // A flush that does not finish: the recogniser is still alive long after its
+    // stdin was closed, which means it either never saw EOF or is wedged inside a
+    // decode. Left alone it keeps `awaitingStreamingExit_` set forever, so every
+    // later `stop()` returns early and the session never ends.
+    if (awaitingStreamingExit_ && !asrReaderDone_.load(std::memory_order_relaxed) &&
+        closeRequestedMs_ != 0 && now - closeRequestedMs_ > flushTimeoutMs()) {
+        SUPERIOR_WARN(diag::categories::SpeechRecognition)
+            .field("waitedMs", static_cast<std::int64_t>(now - closeRequestedMs_))
+            << "recogniser did not exit after its stdin was closed; killing it";
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+        Event event;
+        event.kind = Event::Kind::Error;
+        event.code = "recognition_timeout";
+        event.message = "语音识别没有在预期时间内结束，已停止";
+        emit_(event);
         emitPhase("idle");
     }
     // The recogniser died while the microphone was still open: a crash, an OOM

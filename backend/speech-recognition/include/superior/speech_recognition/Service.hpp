@@ -138,6 +138,11 @@ private:
     std::atomic<bool> asrReaderStopping_{false};
     /// True between "stop requested" and "recogniser flushed".
     bool awaitingStreamingExit_ = false;
+    /// When the recogniser's stdin was closed. A flush that never finishes must
+    /// not leave the session "busy" forever: the panel shows "识别中", refuses
+    /// every click, and nothing else ever moves it — exactly the state a report of
+    /// "second utterance does nothing" turned out to be in.
+    std::uint64_t closeRequestedMs_ = 0;
     /// Set when we killed the recogniser on purpose (cancel/shutdown). Its
     /// non-zero exit is then expected: reporting "the engine returned nothing"
     /// after a cancel showed a scary error for a deliberate action.

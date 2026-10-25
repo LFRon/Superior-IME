@@ -325,4 +325,37 @@ echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"phase","name":"idle"' || fail "no idle after stopping the second session"
 stop_process
 
+# --- Scenario 10: a recogniser that never finishes its flush ---------------
+#
+# The engine is supposed to exit when its stdin closes. If it does not — wedged
+# inside a decode, or never seeing EOF because something else still holds the
+# write end — the session used to stay "finishing" forever: every later `stop()`
+# returned early and every later click was refused because the phase was still
+# busy. A bounded flush turns that into one failed utterance.
+cat > "$root/wedged-stream.sh" <<'STREAM'
+#!/bin/sh
+echo '{"type":"partial","text":"你好"}'
+cat > /dev/null
+# stdin closed, but never exit: exactly the wedged case.
+sleep 60
+STREAM
+chmod +x "$root/wedged-stream.sh"
+
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 8"' \
+    'bash -c "echo 不该走批处理"' "$root/wedged-stream.sh" "SUPERIOR_SPEECH_FLUSH_MS=1200"
+wait_for '"ev":"ready"' || fail "no ready event (wedged flush)"
+echo '{"cmd":"start"}' >&3
+sleep 0.6
+echo '{"cmd":"stop"}' >&3
+wait_for '"code":"recognition_timeout"' ||
+    fail "a flush that never ends must time out instead of hanging the session"
+wait_for '"ev":"phase","name":"idle"' || fail "no idle after the flush timeout"
+# And the session must be startable again: that is the whole point.
+echo '{"cmd":"start"}' >&3
+sleep 0.5
+grep -q '"ev":"phase","name":"recording"' "$current/out" ||
+    fail "a wedged flush must not leave the capability unable to start again"
+echo '{"cmd":"stop"}' >&3
+stop_process
+
 echo "speech process: ok"
