@@ -1,0 +1,21 @@
+# Input method entry for Superior-IME.
+#
+# Fcitx5 derives the unique name from the file name, so this file registers the
+# input method as "super-ime". It deliberately does not reuse "pinyin", which
+# already belongs to the stock entry.
+#
+# Addon=pinyin means the engine is Fcitx5's own pinyin engine (libime).
+# Superior does not reimplement pinyin: this entry gives the engine its own
+# identity, icon and label so it can be added from "Add input method", and lets
+# the Superior UI observe the session.
+[InputMethod]
+Name=先！进！输入法
+Name[zh_CN]=先！进！输入法
+Name[zh_TW]=先！進！輸入法
+Comment=Superior UI and skin on top of the libime pinyin engine
+Comment[zh_CN]=使用 libime 拼音引擎，由 Superior 提供皮肤与状态栏
+Icon=org.superior.ime
+Label=进
+LangCode=zh_CN
+Addon=pinyin
+Configurable=True

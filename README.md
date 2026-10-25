@@ -1,0 +1,270 @@
+# Superior-IME
+
+先！进！的跨平台输入法,目标是完全取代老旧的搜狗输入法
+目标支持Android,GNU/Linux,Windows三平台 (苹果系没设备暂缓)
+
+- 输入引擎交给 Fcitx5（拼音 / Rime），本项目不重写引擎。
+- 前端与后端分离：UI 只通过契约与后端通信。
+- 皮肤使用自有的 `superior.skin/1`：声明式、版本化、可校验、可确定性渲染。
+- 语音、Windows、macOS、Android 是后续里程碑，接口已预留。
+
+详细设计：[PLAN.md](PLAN.md)、[docs/architecture.md](docs/architecture.md)、
+[docs/skin-format.md](docs/skin-format.md)、[docs/logging.md](docs/logging.md)、
+[docs/dictionary.md](docs/dictionary.md)、[docs/fcitx5-integration.md](docs/fcitx5-integration.md)。
+
+---
+
+## 当前状态
+
+| 里程碑 | 内容 | 状态 |
+|---|---|---|
+| M0 | 构建系统、脚本、`backend/api`、边界检查 | ✅ |
+| M1 | `superior.skin/1`、loader/validator、`specHash`、`skin-lint`、默认皮肤 | ✅ |
+| M2 | `backend/core`、`backend/runtime` | ✅ |
+| M2.5 | `backend/protocol`：帧、`Hello` / `Scene` / `Command`、Unix socket | ✅ |
+| M3 | Fcitx5 观察者 agent、Qt 桌面壳、X11 浮层 | ✅ 自绘候选窗与状态栏已实测 |
+| M3.5 | 统一日志、词库布局对齐、搜狗细胞词库导入 | ✅ |
+| M4 | XWayland 自动选择、classicui 主题导出 | 🚧 自动选择已完成；layer-shell 状态栏待做 |
+| P2 | `.ssf` 导入器（可选工具，不进入运行时） | 未计划 |
+| P3 | 本地流式语音（sherpa-onnx） | 未计划 |
+
+---
+
+## 构建
+
+要求：CMake ≥ 3.25、Ninja、C++20 编译器、`nlohmann-json3-dev`。
+
+```bash
+./scripts/bootstrap.sh          # 只检查依赖，不安装任何东西
+./scripts/configure.sh          # 默认 linux-debug
+./scripts/build.sh
+./scripts/test.sh
+```
+
+其他 preset：
+
+```bash
+./scripts/configure.sh linux-release
+./scripts/build.sh linux-release
+
+./scripts/configure.sh linux-asan    # ASan + UBSan
+./scripts/test.sh linux-asan
+
+./scripts/configure.sh linux-ui      # Fcitx5 agent + Qt 浮层
+./scripts/build.sh linux-ui
+```
+
+---
+
+## 运行桌面浮层（XWayland）
+
+状态栏与候选窗都是 override-redirect 窗口：永久置顶、不抢焦点、
+不出现在任务栏。它们只是另一个进程，**不参与输入路径**。
+
+`superior_ui` 启动时自己选择平台插件：Wayland 会话且存在 `DISPLAY` 时强制
+`QT_QPA_PLATFORM=xcb`（走 XWayland），这样窗口才保持 override-redirect；
+`SUPERIOR_UI_PLATFORM` 可覆盖这个选择。判定逻辑与用例见
+`frontend/desktop/src/PlatformChoice.{hpp,cpp}` 与 `tests/qt_platform_tests.cpp`。
+
+```bash
+# 1. 构建
+./scripts/configure.sh linux-ui
+./scripts/build.sh linux-ui
+
+# 2. 没有安装 agent 时，用模拟器看效果
+./build/linux-ui/tools/scene-sim/superior_scene_sim &
+./scripts/run-ui.sh
+# 默认同时绘制候选窗与状态栏；候选窗只接管 super-ime，
+# 其他输入法仍由 Fcitx5 classicui 绘制：
+#   ./scripts/run-ui.sh --no-candidates   # 只显示状态栏
+
+# 3. 用户目录安装（推荐，可干净卸载，随会话自启动）
+./scripts/install-user.sh
+# agent 加载后会自动拉起 superior_ui；不需要时设 SUPERIOR_UI_AUTOSTART=0
+
+# 4. 添加输入法：fcitx5-configtool 里选「先！进！输入法」
+#    或直接切换
+fcitx5-remote -s super-ime
+```
+
+安装后得到两个不同的东西：
+
+| 产物 | 类型 |
+|---|---|
+| `libsuperioragent.so` + `superioragent.conf` | `Category=Module` 观察者 addon（不是输入法） |
+| `super-ime.conf` | 输入法条目，uniqueName = `super-ime`，绑定 `Addon=pinyin` |
+
+新增条目必须**重启** Fcitx5 才会出现在“添加输入法”里；`fcitx5-remote -r` 不够，
+`Controller1.ResetIMList` 会重建分组并丢掉用户条目，不要用。
+详见 [docs/fcitx5-integration.md](docs/fcitx5-integration.md)。
+
+验证窗口语义：
+
+```bash
+DISPLAY=:0 xwininfo -name "Superior-IME Status" | grep "Override Redirect"
+DISPLAY=:0 xprop -name "Superior-IME Status" WM_HINTS _NET_WM_STATE
+```
+
+预期：`Override Redirect State: yes`、`Client accepts input or input focus: False`、
+`_NET_WM_STATE_ABOVE`。细节见 [docs/xwayland-ui.md](docs/xwayland-ui.md)。
+
+Fcitx5 agent 是 `Category=Module` 的被动观察者：不注册输入法、不抢 UI addon、
+不修改预编辑。因此 Wayland 客户端继续使用 Fcitx5 的 wayland 前端，
+X11 客户端继续使用 XCB/XIM 前端，应用输入框内的预编辑行为不变。
+
+唯一例外是**内联英文模式**：轻按 Shift 后，字母由 agent 直接 `commitString`
+上屏（这是搜狗式的中英文切换，不切换输入法、不加载英文键盘布局）；
+`Ctrl` / `Alt` / `Super` 组合与功能键一律放行。规则见
+[docs/input-panel.md](docs/input-panel.md)。
+
+---
+
+## 日志
+
+全项目统一入口，无 Qt 依赖，Qt 消息也会汇入同一格式：
+
+```bash
+SUPERIOR_LOG_LEVEL=debug ./superior_ui
+SUPERIOR_LOG="superior.protocol=trace,superior.ui=debug" ./superior_ui
+SUPERIOR_LOG_FILE=~/.cache/superior-ime/log.txt ./superior_ui
+SUPERIOR_LOG_VIA_QT=1 QT_LOGGING_RULES="superior.*=true" ./superior_ui
+```
+
+规则与安全约束见 [docs/logging.md](docs/logging.md)。核心原则：**不记录用户输入内容**，
+预编辑/候选一律用 `redacted()` 只留长度。
+
+---
+
+## 词库
+
+拼音引擎仍是 `fcitx5-pinyin` + `libime`，Superior 不复制词库格式，只按同样的
+XDG 布局读取、检测、报告：
+
+```bash
+./build/linux-ui/tools/dict-tool/superior_dict diagnose
+```
+
+搜狗细胞词库导入使用与 fcitx5-pinyin 相同的工具链
+（`scel2org5` → `libime_pinyindict`），产物落在
+`~/.local/share/fcitx5/pinyin/dictionaries/`：
+
+```bash
+./build/linux-ui/tools/dict-tool/superior_dict import 网络流行.scel
+fcitx5-remote -e && fcitx5 -d
+```
+
+细节见 [docs/dictionary.md](docs/dictionary.md)。
+
+---
+
+## Shift 中英文切换
+
+轻按 Shift 在输入法内部切换中英文，与搜狗一致：
+
+- 英文模式下字母、数字、符号直接上屏，不经过拼音；
+- 长按 Shift 打大写字母、`Ctrl`/`Alt`/`Super` 组合键都不会触发切换；
+- `Esc` 立刻回到中文；模式是**全局**的，切窗口不会改变；
+- 关闭设置页的「Shift 切换中英文」后，Shift 完全归还给应用。
+
+判定逻辑（`ShiftTapDetector`）在 `backend/platforms/fcitx5/src/ShiftTap.cpp`，
+不依赖 Fcitx5 或 Qt，单测见 `tests/shift_tap_tests.cpp`。
+
+---
+
+## 设置
+
+```bash
+~/.local/bin/superior_settings      # 或从应用菜单打开「先！进！输入法设置」
+# 真正的可执行文件在 ~/.local/share/superior-ime/bin/，~/.local/bin 里只是 200 字节的包装脚本
+```
+
+设置写在 `~/.config/superior-ime/settings.json`，**两个进程都轮询这个文件**，
+所以改完 500 ms 内生效，不需要重启 Fcitx5，也不需要重启浮层：
+
+| 键 | 作用 |
+|---|---|
+| `skinId` | 浮层重新加载皮肤 |
+| `uiScale` | 候选窗与状态栏的字号、内边距、命中区一起缩放（0.75–3.0） |
+| `showStatusBar` | 状态栏显隐（是设置项，不会被下一帧场景覆盖） |
+| `statusPlacement` | `bottomRight` / `bottomLeft` / `topRight` / `topLeft` |
+| `shiftToggle` | 内联中英文切换总开关 |
+
+状态栏是可点击的：点「中/英」徽标切换中英文，动作以语义命令
+`ToggleStatusItem{inline-mode}` 发给 agent，agent 校验后改状态并回一帧场景。
+浮层本身永远不持输入状态，也不抢焦点。
+
+窗口位置与缩放的纯计算在 `frontend/desktop/src/LayoutRules.{hpp,cpp}`，
+单测见 `tests/layout_rules_tests.cpp`。
+
+---
+
+## 可选：把皮肤导出成 Fcitx5 主题
+
+自绘候选窗不依赖 Fcitx5 主题。只有当你想让 **Fcitx5 自己的面板**（Rime 等）
+也用同一套配色时，才需要导出：
+
+```bash
+./build/linux-debug/tools/skin-lint/skin_lint skins/default --strict \
+    --export-theme ~/.local/share/fcitx5/themes/org.superior.default
+```
+
+然后在 classicui 配置里选 `org.superior.default`。这是全局设置，会影响所有
+输入法；默认不写。详见 [docs/fcitx5-theme.md](docs/fcitx5-theme.md)。
+
+---
+
+## 皮肤工具
+
+```bash
+# 校验（warning 也视为失败）
+./build/linux-debug/tools/skin-lint/skin_lint skins/default --strict
+
+# 机器可读
+./build/linux-debug/tools/skin-lint/skin_lint skins/default --json
+
+# 打印规范化后的 spec（用于 diff / golden）
+./build/linux-debug/tools/skin-lint/skin_lint skins/default --print-spec
+```
+
+退出码：`0` 干净，`1` 有诊断，`2` 用法或 I/O 错误。
+
+---
+
+## 目录
+
+```
+backend/
+├─ api/        契约（事件、场景、命令、端口）
+├─ skin/       皮肤模型 + 校验 + 哈希
+├─ core/       纯逻辑
+├─ runtime/    串行泵 + 票据
+├─ protocol/   帧编解码 + Unix socket
+└─ platforms/  fcitx5（观察者 agent）
+
+frontend/
+├─ app/        （后续）应用装配
+├─ render/     （后续）离屏渲染
+├─ desktop/    Qt 桌面壳：状态栏 + X11 候选窗
+├─ mobile/     （预留）
+└─ widgets/    （后续）共享控件
+
+tools/skin-lint
+skins/default
+tests/
+docs/
+```
+
+边界规则由 `scripts/check-boundaries.sh` 强制执行，并作为 ctest 用例运行：
+
+- `frontend/` 不得依赖 `backend/core`、`backend/runtime`、`fcitx*`；
+- `backend/core` 不得依赖 Qt / Fcitx5 / 墙钟；
+- `backend/skin` 不得依赖 Qt 或做像素解码；
+- `backend/api` 不得依赖任何实现。
+
+---
+
+## 许可
+
+GPL-3.0-or-later，见 [LICENSE](LICENSE)。
+
+内置皮肤为本项目自绘，不含任何第三方输入法的素材、字体或图标。

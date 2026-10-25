@@ -1,0 +1,182 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SUPERIOR_BUILD_TESTS": "ON",
+        "SUPERIOR_BUILD_TOOLS": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SUPERIOR_BUILD_TESTS": "ON",
+        "SUPERIOR_BUILD_TOOLS": "ON"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "displayName": "Linux Debug + ASan/UBSan",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-asan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "linux-werror",
+      "displayName": "Linux Release + -Werror",
+      "inherits": "linux-release",
+      "binaryDir": "${sourceDir}/build/linux-werror",
+      "cacheVariables": {
+        "SUPERIOR_WERROR": "ON"
+      }
+    },
+    {
+      "name": "linux-fcitx5",
+      "displayName": "Linux Debug + Fcitx5 agent",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-fcitx5",
+      "cacheVariables": {
+        "SUPERIOR_ENABLE_FCITX5": "ON"
+      }
+    },
+    {
+      "name": "linux-ui",
+      "displayName": "Linux Debug + Fcitx5 agent + Qt UI",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-ui",
+      "cacheVariables": {
+        "SUPERIOR_ENABLE_FCITX5": "ON",
+        "SUPERIOR_ENABLE_QT": "ON"
+      }
+    },
+    {
+      "name": "linux-ui-werror",
+      "displayName": "Linux UI + Fcitx5 + -Werror",
+      "inherits": "linux-ui",
+      "binaryDir": "${sourceDir}/build/linux-ui-werror",
+      "cacheVariables": {
+        "SUPERIOR_WERROR": "ON"
+      }
+    },
+    {
+      "name": "linux-system",
+      "displayName": "System install to /usr (Fcitx5 auto-loads at login)",
+      "inherits": "linux-ui",
+      "binaryDir": "${sourceDir}/build/linux-system",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_INSTALL_PREFIX": "/usr"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan"
+    },
+    {
+      "name": "linux-werror",
+      "configurePreset": "linux-werror"
+    },
+    {
+      "name": "linux-fcitx5",
+      "configurePreset": "linux-fcitx5"
+    },
+    {
+      "name": "linux-ui",
+      "configurePreset": "linux-ui"
+    },
+    {
+      "name": "linux-ui-werror",
+      "configurePreset": "linux-ui-werror"
+    },
+    {
+      "name": "linux-system",
+      "configurePreset": "linux-system"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "linux-fcitx5",
+      "configurePreset": "linux-fcitx5",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "linux-ui",
+      "configurePreset": "linux-ui",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "linux-system",
+      "configurePreset": "linux-system",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    }
+  ]
+}

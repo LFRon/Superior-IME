@@ -1,0 +1,4 @@
+add_executable(superior_scene_sim main.cpp)
+target_link_libraries(superior_scene_sim PRIVATE Superior::Protocol Superior::Diagnostics)
+target_compile_features(superior_scene_sim PRIVATE cxx_std_20)
+superior_set_warnings(superior_scene_sim)

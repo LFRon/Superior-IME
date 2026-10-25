@@ -1,0 +1,20 @@
+# Build output
+/build/
+/.cache/
+/compile_commands.json
+*.o
+*.a
+*.so
+*.so.*
+
+# IDE
+/.idea/
+/.vscode/
+*.user
+.cache/
+
+# Local install staging
+/stage/
+
+# Python / tooling noise
+__pycache__/

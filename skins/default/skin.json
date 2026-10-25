@@ -1,0 +1,154 @@
+{
+  "schema": "superior.skin/1",
+  "id": "org.superior.default",
+  "name": "Superior Default",
+  "version": "0.1.0",
+  "author": "Superior-IME",
+  "license": "GPL-3.0-or-later",
+  "description": "Neutral dark skin shipped with Superior-IME. Drawn from scratch; not derived from any third-party skin.",
+  "preview": "assets/preview.svg",
+  "modes": ["light", "dark"],
+  "defaultMode": "dark",
+
+  "tokens": {
+    "color.text": "#E8EAED",
+    "color.text.first": "#7CC4FF",
+    "color.text.comment": "#9AA0A6",
+    "color.selection": "#2A6FDB",
+    "color.hover": "#FFFFFF14",
+    "color.separator": "#FFFFFF1F",
+    "color.surface": "#1E2126F2",
+    "color.accent": "#7CC4FF",
+    "font.ui": { "family": "Noto Sans CJK SC", "size": 15, "weight": 500 },
+    "font.candidate": { "family": "Noto Sans CJK SC", "size": 16, "weight": 500 },
+    "font.preedit": { "family": "Noto Sans CJK SC", "size": 14, "weight": 400 },
+    "radius.panel": 10,
+    "radius.cell": 6
+  },
+
+  "panel": {
+    "variants": [
+      { "when": { "orientation": "horizontal" }, "use": "h1" },
+      { "when": { "orientation": "vertical" }, "use": "v1" }
+    ],
+    "styles": {
+      "h1": {
+        "background": {
+          "image": { "image": "assets/panel-h1.svg", "slice": [24, 20, 24, 20], "fit": "stretch" },
+          "color": "$color.surface",
+          "radius": "$radius.panel"
+        },
+        "padding": [8, 12, 8, 12],
+        "gap": 8,
+        "preedit": { "font": "$font.preedit", "color": "$color.text" },
+        "candidates": {
+          "flow": "horizontal",
+          "maxVisible": 7,
+          "cell": { "padding": [4, 8, 4, 8], "gap": 2 },
+          "text": {
+            "font": "$font.candidate",
+            "color": "$color.text",
+            "firstColor": "$color.text.first",
+            "commentColor": "$color.text.comment"
+          },
+          "selected": { "color": "$color.selection", "radius": "$radius.cell" },
+          "hover": { "color": "$color.hover", "radius": "$radius.cell" },
+          "paging": "dots"
+        },
+        "separator": { "enabled": false, "color": "$color.separator", "thickness": 1 },
+        "shadow": { "color": "#00000066", "blur": 16, "offset": [0, 4] }
+      },
+      "v1": {
+        "background": {
+          "image": { "image": "assets/panel-v1.svg", "slice": [20, 24, 20, 24], "fit": "stretch" },
+          "color": "$color.surface",
+          "radius": "$radius.panel"
+        },
+        "padding": [8, 10, 8, 10],
+        "gap": 6,
+        "preedit": { "font": "$font.preedit", "color": "$color.text" },
+        "candidates": {
+          "flow": "vertical",
+          "maxVisible": 9,
+          "cell": { "padding": [4, 8, 4, 8], "gap": 2 },
+          "text": {
+            "font": "$font.candidate",
+            "color": "$color.text",
+            "firstColor": "$color.text.first",
+            "commentColor": "$color.text.comment"
+          },
+          "selected": { "color": "$color.selection", "radius": "$radius.cell" },
+          "hover": { "color": "$color.hover", "radius": "$radius.cell" },
+          "paging": "arrows"
+        },
+        "separator": { "enabled": false, "color": "$color.separator", "thickness": 1 },
+        "shadow": { "color": "#00000066", "blur": 16, "offset": [0, 4] }
+      }
+    }
+  },
+
+  "status": {
+    "background": {
+      "image": { "image": "assets/bar.svg", "slice": [12, 10, 12, 10], "fit": "stretch" },
+      "color": "$color.surface",
+      "radius": 8
+    },
+    "orientation": "horizontal",
+    "padding": [4, 8, 4, 8],
+    "spacing": 6,
+    "items": [
+      {
+        "id": "ime",
+        "kind": "toggle",
+        "action": "toggle-input-mode",
+        "size": [22, 22],
+        "icons": { "cn": "assets/icon-cn.svg", "en": "assets/icon-en.svg" }
+      },
+      {
+        "id": "punct",
+        "kind": "toggle",
+        "action": "toggle-punctuation",
+        "size": [22, 22],
+        "icons": { "cn": "assets/icon-punct.svg", "en": "assets/icon-punct-en.svg" }
+      },
+      {
+        "id": "fullwidth",
+        "kind": "toggle",
+        "action": "toggle-fullwidth",
+        "size": [22, 22],
+        "icons": { "full": "assets/icon-full.svg", "half": "assets/icon-half.svg" }
+      },
+      {
+        "id": "menu",
+        "kind": "button",
+        "action": "open-menu",
+        "size": [22, 22],
+        "icons": { "default": "assets/icon-menu.svg" }
+      },
+      {
+        "id": "voice",
+        "kind": "button",
+        "action": "toggle-voice",
+        "size": [22, 22],
+        "icons": { "default": "assets/icon-voice.svg" }
+      }
+    ]
+  },
+
+  "voice": {
+    "background": { "color": "$color.surface", "radius": "$radius.panel" },
+    "mic": {
+      "idle": "assets/mic-idle.svg",
+      "active": "assets/mic-active.svg",
+      "size": [56, 56]
+    },
+    "meter": { "bars": 24, "color": "$color.accent", "decay": 0.85 },
+    "partialText": { "font": "$font.candidate", "color": "$color.text" }
+  },
+
+  "motion": {
+    "panel.show": { "type": "spring", "stiffness": 420, "damping": 34, "mass": 1 },
+    "panel.hide": { "type": "tween", "durationMs": 120, "easing": "cubic-out" },
+    "candidate.select": { "type": "tween", "durationMs": 90, "easing": "linear" }
+  }
+}

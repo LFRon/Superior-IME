@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=先！进！输入法设置
+Name[en]=Superior IME Settings
+Comment=Configure skins, Shift toggle and status bar
+Comment[zh_CN]=配置皮肤、Shift 切换与状态栏
+Exec=superior_settings
+Icon=org.superior.ime
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=input;method;ime;skin;fcitx;

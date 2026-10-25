@@ -1,0 +1,13 @@
+[Addon]
+Name=Superior Agent
+Name[zh_CN]=Superior 输入法代理
+Comment=Passive observer that streams input state to the Superior UI
+Comment[zh_CN]=将输入状态转发给 Superior UI 的被动观察者
+Type=SharedLibrary
+Library=libsuperioragent
+Category=Module
+Version=@PROJECT_VERSION@
+Configurable=False
+
+[Addon/Dependencies]
+0=core:@FCITX5_CORE_VERSION@
