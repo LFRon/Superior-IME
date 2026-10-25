@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -49,12 +50,31 @@ EngineConfig defaults() {
     return config;
 }
 
+std::uint64_t positiveFromEnvironment(const char *name, std::uint64_t fallback) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(value, nullptr, 10);
+    return errno == 0 && parsed > 0 ? static_cast<std::uint64_t>(parsed) : fallback;
+}
+
+/// The pause that ends an utterance depends on the room and the microphone, so it
+/// is tunable without a rebuild. Everything else stays at the defaults.
+SilencePolicy policyFromEnvironment() {
+    SilencePolicy policy;
+    policy.holdMs = positiveFromEnvironment("SUPERIOR_SPEECH_SILENCE_MS", policy.holdMs);
+    return policy;
+}
+
 } // namespace
 
 int main() {
     Service service(emit);
     EngineConfig config = defaults();
     service.configure(config);
+    service.setSilencePolicy(policyFromEnvironment());
 
     if (!enginePresent()) {
         emitError("engine_missing", "没有找到语音识别引擎。");

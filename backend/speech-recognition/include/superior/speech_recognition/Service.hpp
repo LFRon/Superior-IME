@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "superior/speech_recognition/Capture.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
 
 namespace superior::speech_recognition {
@@ -29,6 +30,8 @@ public:
     Service &operator=(const Service &) = delete;
 
     void configure(EngineConfig config);
+    /// Overrides the default silence policy; mainly for tests and tuning.
+    void setSilencePolicy(SilencePolicy policy);
 
     void start();
     void stop();
@@ -53,7 +56,6 @@ private:
 
     // Capture
     bool capturing_ = false;
-    bool stopping_ = false;
     int captureFd_ = -1;
     pid_t capturePid_ = -1;
     std::thread captureThread_;
@@ -61,6 +63,11 @@ private:
     std::vector<std::int16_t> audio_;
     double pendingLevel_ = 0.0;
     std::uint64_t lastLevelMs_ = 0;
+    /// Set by the capture thread when the tool exits without being asked to.
+    std::atomic<bool> captureEnded_{false};
+    /// Ends the utterance when the user stops talking, so the panel does not
+    /// require a second click after every sentence.
+    SilenceWatch silence_;
 
     // Recognition
     bool workerBusy_ = false;

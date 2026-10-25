@@ -109,6 +109,12 @@ CaptureCommand defaultCaptureCommand() {
 }
 
 bool captureAvailable() {
+    // A configured command is itself the answer: the user may be recording with
+    // something we do not know about, and none of the three tools.
+    const char *custom = std::getenv("SUPERIOR_CAPTURE_CMD");
+    if (custom != nullptr && custom[0] != '\0') {
+        return true;
+    }
     return existsInPath("pw-record") || existsInPath("parec") || existsInPath("arecord");
 }
 
@@ -126,6 +132,47 @@ double rmsLevel(const std::int16_t *samples, std::size_t count) noexcept {
     // without turning the panel into a solid bar on loud input.
     const double scaled = rms * 3.0;
     return scaled > 1.0 ? 1.0 : scaled;
+}
+
+SilenceWatch::SilenceWatch(SilencePolicy policy) : policy_(policy) {}
+
+void SilenceWatch::begin(std::uint64_t nowMs) {
+    startMs_ = nowMs;
+    lastObserveMs_ = nowMs;
+    lastVoiceMs_ = nowMs;
+    voicedMs_ = 0;
+    begun_ = true;
+}
+
+void SilenceWatch::observe(double level, std::uint64_t nowMs) {
+    if (!begun_ || nowMs < lastObserveMs_) {
+        return;
+    }
+    const std::uint64_t delta = nowMs - lastObserveMs_;
+    lastObserveMs_ = nowMs;
+    if (level >= policy_.voiceLevel) {
+        lastVoiceMs_ = nowMs;
+        voicedMs_ += delta;
+    }
+}
+
+std::uint64_t SilenceWatch::elapsedMs(std::uint64_t nowMs) const {
+    return begun_ && nowMs >= startMs_ ? nowMs - startMs_ : 0;
+}
+
+bool SilenceWatch::finished(std::uint64_t nowMs) const {
+    if (!begun_ || nowMs < startMs_) {
+        return false;
+    }
+    if (elapsedMs(nowMs) >= policy_.maxRecordingMs) {
+        return true;
+    }
+    // Silence before any speech is not an ending: the user pressed the button and
+    // is still gathering their words. It does expire, just much later.
+    if (voicedMs_ < policy_.minSpeechMs) {
+        return elapsedMs(nowMs) >= policy_.noSpeechTimeoutMs;
+    }
+    return nowMs >= lastVoiceMs_ && nowMs - lastVoiceMs_ >= policy_.holdMs;
 }
 
 bool writeWavFile(const fs::path &path, const std::vector<std::int16_t> &pcm, int rate) {

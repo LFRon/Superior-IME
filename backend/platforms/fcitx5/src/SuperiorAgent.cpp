@@ -1540,8 +1540,16 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
     if (kind == "ready") {
         speech_.refreshSetup(true, true);
     } else if (kind == "phase") {
+        // The child drives the session as well as the button does: it ends an
+        // utterance on its own after a pause. Following its phase events is what
+        // keeps `acceptFinal` from dropping a transcript whose stop nobody
+        // clicked. Every transition is idempotent, so the UI-driven ones win.
         const std::string name = parsed.value("name", std::string{});
-        if (name == "idle") {
+        if (name == "recording") {
+            speech_.recordingStarted();
+        } else if (name == "transcribing") {
+            speech_.beginTranscribing();
+        } else if (name == "idle") {
             speech_.idle();
         }
     } else if (kind == "level") {

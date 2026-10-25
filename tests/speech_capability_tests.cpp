@@ -89,6 +89,60 @@ void testWavHeader() {
     fs::remove(path, error);
 }
 
+/// A pause after speech ends the utterance; a pause before it does not.
+void testSilenceWatchEndsUtterance() {
+    SilencePolicy policy;
+    SilenceWatch watch(policy);
+    watch.begin(1000);
+
+    // 600 ms of speech, then 700 ms of silence: still recording.
+    for (std::uint64_t t = 0; t <= 600; t += 100) {
+        watch.observe(0.4, 1000 + t);
+    }
+    watch.observe(0.0, 1700);
+    CHECK(watch.heardSpeech());
+    CHECK(!watch.finished(1700));
+
+    // Past `holdMs` (1200) of silence, the utterance is over.
+    CHECK(!watch.finished(2100));
+    CHECK(watch.finished(2900));
+}
+
+/// Silence from the start must not end the recording immediately, but it must
+/// not wait forever either.
+void testSilenceWatchNoSpeechTimeout() {
+    SilenceWatch watch(SilencePolicy{});
+    watch.begin(0);
+    for (std::uint64_t t = 0; t <= 4000; t += 100) {
+        watch.observe(0.0, t);
+    }
+    CHECK(!watch.heardSpeech());
+    CHECK(!watch.finished(4000));
+    CHECK(watch.finished(8000));
+}
+
+/// A single click is not a sentence: `minSpeechMs` guards the hold timer.
+void testSilenceWatchIgnoresBlip() {
+    SilenceWatch watch(SilencePolicy{});
+    watch.begin(0);
+    watch.observe(0.9, 50);
+    watch.observe(0.0, 100);
+    // Even after a long silence the blip is not enough speech to end on.
+    CHECK(!watch.finished(6000));
+    // The absolute cap still ends it.
+    CHECK(watch.finished(60001));
+}
+
+/// Levels at or above the threshold count as speech, below do not.
+void testSilenceThresholdBoundary() {
+    const SilencePolicy policy;
+    SilenceWatch watch(policy);
+    watch.begin(0);
+    watch.observe(policy.voiceLevel, 100);
+    watch.observe(policy.voiceLevel - 0.01, 200);
+    CHECK(watch.heardSpeech());
+}
+
 void testEngineCommandDefault() {
     ::setenv("SUPERIOR_ASR_CMD", "", 1);
     EngineConfig config;
@@ -211,6 +265,10 @@ void testProtocolRoundTrip() {
 int main() {
     testCaptureArgv();
     testLevelMath();
+    testSilenceWatchEndsUtterance();
+    testSilenceWatchNoSpeechTimeout();
+    testSilenceWatchIgnoresBlip();
+    testSilenceThresholdBoundary();
     testWavHeader();
     testEngineCommandDefault();
     testEngineCommandOverride();

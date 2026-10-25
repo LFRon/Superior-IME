@@ -30,7 +30,7 @@ constexpr std::uint64_t kLevelIntervalMs = 50;
 
 /// Reads the whole capture stream, appending samples and keeping an RMS value.
 void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
-                 double &level, std::atomic<bool> &stopping) {
+                 double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended) {
     std::vector<std::int16_t> chunk(1600); // 100 ms at 16 kHz
     while (!stopping.load(std::memory_order_relaxed)) {
         const ssize_t bytes = ::read(fd, chunk.data(), chunk.size() * sizeof(std::int16_t));
@@ -44,6 +44,9 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
                      chunk.begin() + static_cast<std::ptrdiff_t>(samples));
         level = measured;
     }
+    // The tool exited (device busy, unplugged, killed). Say so: without this the
+    // service would keep "recording" silence until the no-speech timeout.
+    ended.store(true, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -56,6 +59,10 @@ Service::~Service() {
 
 void Service::configure(EngineConfig config) {
     config_ = std::move(config);
+}
+
+void Service::setSilencePolicy(SilencePolicy policy) {
+    silence_ = SilenceWatch(policy);
 }
 
 void Service::emitPhase(const std::string &phase) {
@@ -124,9 +131,13 @@ void Service::startCaptureThread() {
     captureFd_ = pipeFd[0];
     capturing_ = true;
 
+    captureEnded_.store(false, std::memory_order_relaxed);
     captureThread_ = std::thread([this] {
-        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, revoked_);
+        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, revoked_, captureEnded_);
     });
+    // The clock starts when capture starts: time spent waiting for the panel to
+    // open is not part of the utterance.
+    silence_.begin(nowMs());
     emitPhase("recording");
 }
 
@@ -223,19 +234,58 @@ void Service::cancel() {
 }
 
 void Service::poll() {
+    const std::uint64_t now = nowMs();
     if (capturing_) {
         double level = 0.0;
         {
             std::lock_guard<std::mutex> lock(captureMutex_);
             level = pendingLevel_;
         }
-        const std::uint64_t now = nowMs();
         if (now - lastLevelMs_ >= kLevelIntervalMs) {
             lastLevelMs_ = now;
             Event event;
             event.kind = Event::Kind::Level;
             event.level = level;
             emit_(event);
+        }
+
+        // `capturing_` is still true here, so this EOF came from the tool, not
+        // from a stop we asked for.
+        if (captureEnded_.load(std::memory_order_relaxed)) {
+            std::size_t captured = 0;
+            {
+                std::lock_guard<std::mutex> lock(captureMutex_);
+                captured = audio_.size();
+            }
+            if (captured > 0) {
+                stop();
+            } else {
+                cancel();
+                Event event;
+                event.kind = Event::Kind::Error;
+                event.code = "capture_failed";
+                event.message = "麦克风不可用或已被占用。";
+                emit_(event);
+            }
+            return;
+        }
+
+        // Auto-stop: the user speaks, pauses, and the utterance ends by itself.
+        // `stop()` is the same path a manual stop takes, so nothing downstream
+        // needs to know which one happened.
+        silence_.observe(level, now);
+        if (silence_.finished(now)) {
+            if (silence_.heardSpeech()) {
+                stop();
+            } else {
+                // Nothing was said, so loading the model would only waste time.
+                cancel();
+                Event event;
+                event.kind = Event::Kind::Error;
+                event.code = "no_speech";
+                event.message = "没有说话，已停止录音。";
+                emit_(event);
+            }
         }
     }
 

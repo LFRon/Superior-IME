@@ -31,6 +31,55 @@ struct CaptureCommand {
 /// Root-mean-square of a PCM block, normalised to 0..1.
 [[nodiscard]] double rmsLevel(const std::int16_t *samples, std::size_t count) noexcept;
 
+/// When to end a recording without the user asking.
+///
+/// Energy-based, because a model-based VAD would mean shipping a second model
+/// just to know when to stop listening. The thresholds are deliberately generous:
+/// stopping too late costs a little latency, stopping too early truncates a
+/// sentence the user already spoke.
+struct SilencePolicy {
+    /// Level (0..1, same scale as `rmsLevel`) that counts as speech.
+    double voiceLevel = 0.06;
+    /// Silence after speech that ends the utterance.
+    std::uint64_t holdMs = 1200;
+    /// Ignore a short burst: a cough or a click must not end the recording.
+    std::uint64_t minSpeechMs = 300;
+    /// Absolute cap, so a forgotten panel cannot record forever.
+    std::uint64_t maxRecordingMs = 60000;
+    /// How long to wait for the first word before giving up. Without this a user
+    /// who pressed the button and changed their mind waits a full minute.
+    std::uint64_t noSpeechTimeoutMs = 8000;
+};
+
+/// Tracks level samples and answers one question: is this utterance over?
+///
+/// Kept free of I/O and clocks so the policy can be unit-tested with synthetic
+/// timelines; `Service` feeds it `steady_clock` milliseconds.
+class SilenceWatch {
+public:
+    explicit SilenceWatch(SilencePolicy policy = {});
+
+    void begin(std::uint64_t nowMs);
+    void observe(double level, std::uint64_t nowMs);
+
+    /// True once the utterance is over: enough speech followed by enough silence,
+    /// or the absolute cap was hit.
+    [[nodiscard]] bool finished(std::uint64_t nowMs) const;
+
+    /// Whether any speech was heard at all. Drives the "you said nothing" hint.
+    [[nodiscard]] bool heardSpeech() const noexcept { return voicedMs_ > 0; }
+
+    [[nodiscard]] std::uint64_t elapsedMs(std::uint64_t nowMs) const;
+
+private:
+    SilencePolicy policy_;
+    std::uint64_t startMs_ = 0;
+    std::uint64_t lastObserveMs_ = 0;
+    std::uint64_t lastVoiceMs_ = 0;
+    std::uint64_t voicedMs_ = 0;
+    bool begun_ = false;
+};
+
 /// Writes a mono 16-bit PCM buffer as a `.wav` file. Returns false on any I/O
 /// error; the caller reports it instead of feeding the engine a broken file.
 bool writeWavFile(const std::filesystem::path &path, const std::vector<std::int16_t> &pcm,
