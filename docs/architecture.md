@@ -1,5 +1,9 @@
 # 架构
 
+> 本文档描述运行拓扑与模块划分。**分层判据以仓库外的
+> [`架构设计.md`](../../架构设计.md) 为准**：状态、决策、能力、效果四个盒子，
+> 以及 P-1~P-5 五条第一原则。两者冲突时修正本文档。
+
 Superior-IME 的第一原则：**前端与后端分开，UI 只能通过契约与后端通信。**
 
 参考 `fl-scx` 的排布（`lib/backend` 纯后端、`lib/pages` + `lib/widgets` 纯前端），C++ 侧对应为 `backend/` 与 `frontend/`。
@@ -67,12 +71,11 @@ flowchart LR
 
 硬规则：
 
-1. `frontend/` 不得 include 或链接 `superior/core`、`superior/runtime`、任何 `fcitx*`。
+1. `frontend/` 不得 include 或链接 `superior/core`、任何 `fcitx*`。
 2. `backend/core` 不得 include Qt / Fcitx5 / 平台头，也不读墙钟。
 3. `backend/skin` 是纯数据层：不依赖 Qt，不做像素解码。
 4. `backend/api` 无实现依赖。
-5. `backend/runtime` 私有链接 core，公共头文件不出现 core 类型。
-6. 前后端只通过 `superior::api` 类型与 `superior::proto` 帧通信。
+5. 前后端只通过 `superior::api` 类型与 `superior::proto` 帧通信。
 
 这些规则由 `scripts/check-boundaries.sh` 机械化检查，并作为 ctest 用例执行。它不是"注释里的约定"。
 
@@ -193,8 +196,7 @@ MovePanel         { session, deltaX, deltaY }
 | `backend/skin` | 已实现：加载、校验、token、资源、哈希 |
 | `tools/skin-lint` | 已实现 |
 | `skins/default` | 已提供 |
-| `backend/core` | 已实现：`CandidateModel`、`MotionTimeline`、`ImeSession` |
-| `backend/runtime` | 已实现：`LatestOperation`、`SerialPump`、`SessionRuntime` |
+| `backend/core` | 已实现：`Modes`（模式唯一 owner）、`KeyPolicy`（按键归属）、`CandidateModel`（代次稳定 id）、`SceneInput`（引擎/宿主事实折叠）、`ImeSession` |
 | `backend/protocol` | 已实现：帧、JSON 编解码、Unix socket 广播 |
 | `backend/rime` | 已实现：librime 端口、会话状态机、路径与部署检测 |
 | `backend/platforms/fcitx5` | 已实现：Rime 引擎适配、观察者 agent、内联中英文、command 处理 |

@@ -56,7 +56,7 @@ private:
 ///
 /// Architecture: this frontend includes only `superior/api`, `superior/skin`,
 /// `superior/config` and `superior/theme`. It never touches `superior/core`,
-/// `superior/runtime` or any Fcitx5 header.
+/// any Fcitx5 header.
 class SettingsWindow : public QWidget {
 public:
     explicit SettingsWindow(config::Paths paths, QWidget *parent = nullptr);

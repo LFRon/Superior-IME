@@ -170,7 +170,7 @@ RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
 
     if (instance_ != nullptr && libraryReady_) {
         punctuationAction_.setCheckable(true);
-        punctuationAction_.setChecked(true); // schema default: 中标/全角
+        punctuationAction_.setChecked(!modes_.halfPunctuation());
         punctuationAction_.setShortText("全角");
         punctuationAction_.setLongText("切换标点全角/半角");
         punctuationAction_.setIcon("fcitx-punc-active");
@@ -525,24 +525,25 @@ void RimeInputMethod::attachPunctuation(fcitx::InputContext *inputContext, Sessi
     if (!punctuationRegistered_) {
         return;
     }
-    if (!punctuationSeeded_) {
-        // The first session decides what the global toolbar shows.
-        refreshPunctuationAction(session);
-        punctuationSeeded_ = true;
-    } else {
-        // The toolbar is global; a window that takes focus later must agree
-        // with it instead of silently keeping the schema default.
-        session.engine.setOption("ascii_punct", !punctuationAction_.isChecked(inputContext));
-    }
+    // A window that takes focus later must agree with the toolbar, so the
+    // session is *told* the current mode instead of being asked for its default.
+    applyModes(session);
     inputContext->statusArea().addAction(fcitx::StatusGroup::InputMethod, &punctuationAction_);
 }
 
-void RimeInputMethod::refreshPunctuationAction(Session &session) {
-    const bool ascii = session.engine.getOption("ascii_punct");
+void RimeInputMethod::applyModes(Session &session) {
+    // Only the switches this addon owns: language belongs to the agent, and
+    // pushing `ascii_mode` from here would be a second writer again.
+    session.engine.setOption("ascii_punct", modes_.halfPunctuation());
+    session.engine.setOption("full_shape", modes_.fullShape());
+}
+
+void RimeInputMethod::refreshPunctuationAction() {
+    const bool half = modes_.halfPunctuation();
     // `isChecked` drives the glyph: full width is a filled circle.
-    punctuationAction_.setChecked(!ascii);
-    punctuationAction_.setShortText(ascii ? "半角" : "全角");
-    punctuationAction_.setIcon(ascii ? "fcitx-punc-inactive" : "fcitx-punc-active");
+    punctuationAction_.setChecked(!half);
+    punctuationAction_.setShortText(half ? "半角" : "全角");
+    punctuationAction_.setIcon(half ? "fcitx-punc-inactive" : "fcitx-punc-active");
 }
 
 void RimeInputMethod::togglePunctuation(fcitx::InputContext *inputContext) {
@@ -558,20 +559,19 @@ void RimeInputMethod::togglePunctuation(fcitx::InputContext *inputContext) {
         return;
     }
 
-    const bool ascii = !it->second->engine.getOption("ascii_punct");
-    // `ascii_punct` is a schema switch that Rime persists globally, so every
-    // open session has to receive the new value; otherwise a window that takes
-    // focus later would keep the old punctuation.
+    modes_.togglePunctuation();
+    const bool half = modes_.halfPunctuation();
+    // Every open session has to receive the new value; a window that takes
+    // focus later would otherwise keep the punctuation of the previous window.
     for (auto &[context, session] : sessions_) {
         (void)context;
-        session->engine.setOption("ascii_punct", ascii);
+        applyModes(*session);
     }
-    punctuationSeeded_ = true;
-    refreshPunctuationAction(*it->second);
+    refreshPunctuationAction();
 
     inputContext->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
     SUPERIOR_INFO(diag::categories::Rime)
-        .field("ascii", ascii)
+        .field("halfWidth", half)
         .field("program", inputContext->program())
         << "punctuation width changed";
 }

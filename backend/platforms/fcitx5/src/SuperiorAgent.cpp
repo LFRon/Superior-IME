@@ -25,9 +25,8 @@
 
 #include "superior/diagnostics/Log.hpp"
 #include "superior/config/Settings.hpp"
-#include "superior/fcitx5/CandidateActions.hpp"
+#include "superior/core/KeyPolicy.hpp"
 #include "superior/fcitx5/InlineText.hpp"
-#include "superior/fcitx5/PanelMapper.hpp"
 #include "superior/fcitx5/PreeditSource.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/fcitx5/StatusMapping.hpp"
@@ -44,8 +43,6 @@ namespace superior::fcitx5 {
 namespace diag = ::superior::diagnostics;
 
 namespace {
-constexpr int kMinPageSize = 1;
-constexpr int kMaxPageSize = 32;
 
 std::size_t byteCursor(const fcitx::Text &text) {
     const int cursor = text.cursor();
@@ -327,20 +324,27 @@ core::ImeSession &SuperiorAgent::sessionFor(fcitx::InputContext *inputContext) {
     return reference;
 }
 
-PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
-    PanelFacts facts;
-    facts.program = inputContext->program();
-    facts.scale = inputContext->scaleFactor();
+void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts &engine,
+                            core::HostFacts &host) {
+    host.program = inputContext->program();
+    host.scale = inputContext->scaleFactor();
     if (const auto *entry = instance_->inputMethodEntry(inputContext)) {
-        facts.inputMethod = entry->uniqueName();
+        host.inputMethod = entry->uniqueName();
+        engine.engineId = entry->uniqueName();
     }
 
     const auto &cursor = inputContext->cursorRect();
-    facts.cursorRect = api::Rect{static_cast<double>(cursor.left()),
-                                 static_cast<double>(cursor.top()),
-                                 static_cast<double>(cursor.width()),
-                                 static_cast<double>(cursor.height())};
-    facts.cursorValid = inputContext->hasFocus();
+    host.cursorRect = api::Rect{static_cast<double>(cursor.left()),
+                                static_cast<double>(cursor.top()),
+                                static_cast<double>(cursor.width()),
+                                static_cast<double>(cursor.height())};
+    host.cursorValid = inputContext->hasFocus();
+
+    const auto flags = inputContext->capabilityFlags();
+    host.clientPreedit = flags.test(fcitx::CapabilityFlag::Preedit);
+    host.surroundingText = flags.test(fcitx::CapabilityFlag::SurroundingText);
+    host.password = flags.test(fcitx::CapabilityFlag::Password) ||
+                    flags.test(fcitx::CapabilityFlag::PasswordOrSensitive);
 
     const auto &panel = inputContext->inputPanel();
     // The composition row is drawn by us, but which field carries the text
@@ -353,35 +357,27 @@ PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
     const PreeditView preedit = choosePreedit(panelPreedit.toString(), byteCursor(panelPreedit),
                                               clientPreedit.toString(),
                                               byteCursor(clientPreedit));
-    facts.preedit = preedit.text;
-    facts.preeditCursor = preedit.cursor;
-    facts.preeditFromClient = preedit.fromClient;
+    engine.preedit = preedit.text;
+    engine.preeditCursor = preedit.cursor;
 
     if (auto candidateList = panel.candidateList()) {
         const int size = candidateList->size();
-        facts.candidates.reserve(static_cast<std::size_t>(std::max(0, size)));
+        engine.candidates.reserve(static_cast<std::size_t>(std::max(0, size)));
         for (int index = 0; index < size; ++index) {
             const auto &word = candidateList->candidate(index);
-            CandidateEntry entry;
-            entry.id = static_cast<api::CandidateId>(index + 1);
+            core::EngineCandidate entry;
             entry.label = candidateList->label(index).toString();
             entry.text = word.text().toString();
             entry.comment = word.comment().toString();
-            facts.candidates.push_back(std::move(entry));
+            engine.candidates.push_back(std::move(entry));
         }
-        facts.cursorIndex = candidateList->cursorIndex();
-        facts.vertical = candidateList->layoutHint() == fcitx::CandidateLayoutHint::Vertical;
+        engine.highlighted = candidateList->cursorIndex();
+        engine.vertical = candidateList->layoutHint() == fcitx::CandidateLayoutHint::Vertical;
 
         if (auto *pageable = candidateList->toPageable()) {
-            // `size()` is the number of candidates in the *current* page, not
-            // the total. Deriving a page size from it produced one item per
-            // page; the page itself is already the slice we should display.
-            if (size > 0) {
-                facts.pageSize = std::clamp(size, kMinPageSize, kMaxPageSize);
-            }
-            facts.pageCount = pageable->totalPages();
+            engine.pageCount = pageable->totalPages();
             const int current = pageable->currentPage();
-            facts.pageIndex = current >= 0 ? current + 1 : 1;
+            engine.pageIndex = current >= 0 ? current + 1 : 1;
         }
     }
 
@@ -408,32 +404,33 @@ PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
             .field("icon", item.icon)
             .redacted("label", item.label)
             << "status action collected";
-        facts.statusItems.push_back(std::move(item));
+        host.statusItems.push_back(std::move(item));
     }
 
-    const bool english = englishMode_;
+    // The inline mode chip is ours, not the engine's: it mirrors `modes_`, the
+    // only owner of the Chinese/English switch.
     api::StatusItem modeItem;
     modeItem.id = "inline-mode";
-    modeItem.label = english ? "英" : "中";
-    modeItem.active = english;
-    facts.statusItems.insert(facts.statusItems.begin(), std::move(modeItem));
+    modeItem.label = modes_.english() ? "英" : "中";
+    modeItem.active = modes_.english();
+    host.statusItems.insert(host.statusItems.begin(), std::move(modeItem));
 
-    facts.composing = !facts.preedit.empty() || !facts.candidates.empty();
+    // L-4: a composition is visible even when the engine has no candidate yet.
+    engine.composing = !engine.preedit.empty() || !engine.candidates.empty();
 
     // Never log the composition itself: log shape only.
     SUPERIOR_TRACE(diag::categories::Fcitx5)
-        .field("program", facts.program)
-        .field("im", facts.inputMethod)
-        .redacted("preedit", facts.preedit)
-        .field("preeditSource", facts.preeditFromClient ? "client" : "panel")
-        .field("candidates", static_cast<std::uint64_t>(facts.candidates.size()))
-        .field("pageSize", static_cast<std::int64_t>(facts.pageSize))
-        .field("cursorIndex", static_cast<std::int64_t>(facts.cursorIndex))
-        .field("vertical", facts.vertical)
-        .field("statusItems", static_cast<std::uint64_t>(facts.statusItems.size()))
-        .field("scale", facts.scale, 2)
-        << "collected panel facts";
-    return facts;
+        .field("program", host.program)
+        .field("im", host.inputMethod)
+        .redacted("preedit", engine.preedit)
+        .field("preeditSource", preedit.fromClient ? "client" : "panel")
+        .field("candidates", static_cast<std::uint64_t>(engine.candidates.size()))
+        .field("cursorIndex", static_cast<std::int64_t>(engine.highlighted))
+        .field("vertical", engine.vertical)
+        .field("statusItems", static_cast<std::uint64_t>(host.statusItems.size()))
+        .field("scale", host.scale, 2)
+        .field("surroundingText", host.surroundingText)
+        << "collected engine/host facts";
 }
 
 void SuperiorAgent::reloadSettings() {
@@ -508,17 +505,18 @@ void SuperiorAgent::reloadSettings() {
 
     // Turning the feature off must also leave English mode; otherwise letters
     // would keep being committed directly even though the user disabled it.
-    if (!inlineEnglishEnabled_ && englishMode_) {
+    if (!inlineEnglishEnabled_ && modes_.english()) {
         setEnglishMode(activeContext_, false, "settings");
     }
 }
 
 void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool english,
                                    const char *reason) {
-    if (englishMode_ == english) {
+    // `Modes` is the only owner. A no-op must not reset the composition or
+    // repaint: setLanguage reports whether anything actually changed.
+    if (!modes_.setLanguage(english ? core::Language::English : core::Language::Chinese)) {
         return;
     }
-    englishMode_ = english;
 
     if (english && inputContext != nullptr && instance_ != nullptr) {
         // Drop the half-finished pinyin composition, otherwise its stale
@@ -534,7 +532,7 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
     }
 
     SUPERIOR_INFO(diag::categories::Fcitx5)
-        .field("english", englishMode_)
+        .field("english", modes_.english())
         .field("reason", std::string(reason))
         .field("program", inputContext != nullptr ? inputContext->program() : std::string{})
         << "inline input mode changed";
@@ -729,12 +727,12 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
             .field("sym", static_cast<std::int64_t>(sym))
             .field("release", release)
             .field("tap", result == ShiftTapDetector::Result::Toggle)
-            .field("english", englishMode_)
+            .field("english", modes_.english())
             .field("program", inputContext->program())
             << "shift key";
         if (result == ShiftTapDetector::Result::Toggle) {
             if (inlineEnglishEnabled_) {
-                setEnglishMode(inputContext, !englishMode_, "shift tap");
+                setEnglishMode(inputContext, !modes_.english(), "shift tap");
             } else {
                 SUPERIOR_DEBUG(diag::categories::Fcitx5)
                     .field("program", inputContext->program())
@@ -751,45 +749,51 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
         shiftTap.otherKeyPressed();
     }
 
-    if (release || !englishMode_) {
-        return false;
-    }
+    // Who owns this key is a product decision, so it lives in the decision
+    // layer (`core::decideKey`) instead of here. This adapter only reports the
+    // facts the policy cannot know: whether a composition is active and whether
+    // the key produces text in the current layout.
+    const auto &panel = inputContext->inputPanel();
+    const bool composing = !panel.preedit().toString().empty() ||
+                           !panel.clientPreedit().toString().empty() ||
+                           panel.candidateList() != nullptr;
 
-    // Shortcuts must reach the application: only plain typing (optionally with
-    // Shift for capitals) is turned into committed text.
     const auto states = event.key().states();
-    const bool plainTyping = !states.test(fcitx::KeyState::Ctrl) &&
-                             !states.test(fcitx::KeyState::Alt) &&
-                             !states.test(fcitx::KeyState::Super);
-    if (!plainTyping) {
-        return false;
-    }
+    const auto inlineText = inlineTextFor(static_cast<std::uint32_t>(sym),
+                                          states.test(fcitx::KeyState::Shift));
 
-    if (sym == FcitxKey_Escape) {
+    const core::KeyDecision decision = core::decideKey(core::KeyPolicyInput{
+        .key = core::KeyPress{.sym = static_cast<std::uint32_t>(sym),
+                              .shift = states.test(fcitx::KeyState::Shift),
+                              .control = states.test(fcitx::KeyState::Ctrl),
+                              .alt = states.test(fcitx::KeyState::Alt),
+                              .super = states.test(fcitx::KeyState::Super),
+                              .release = release},
+        .composing = composing,
+        .english = modes_.english(),
+        .printable = inlineText.has_value() && !inlineText->empty(),
+    });
+
+    switch (decision.intent) {
+    case core::KeyIntent::ToggleLanguage:
         setEnglishMode(inputContext, false, "escape");
-        event.filterAndAccept();
-        return true;
-    }
-    // Editing and navigation keys are never consumed in English mode.
-    //
-    // Inline text is committed straight to the client, so the client already
-    // owns the characters: its own Backspace/Delete/arrow handling is correct,
-    // and forwarding the key keeps undo, selection and IME-less widgets intact.
-    // Deleting here via deleteSurroundingText broke Backspace on every client
-    // that does not implement surrounding text (most of them), because the key
-    // was consumed and nothing was removed.
-    if (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete) {
-        return false;
-    }
-    if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter || sym == FcitxKey_Tab) {
-        // Leave navigation keys to the application.
+        break;
+    case core::KeyIntent::CommitInline:
+        if (inlineText && !inlineText->empty()) {
+            inputContext->commitString(*inlineText);
+        }
+        break;
+    case core::KeyIntent::Ignore:
+    case core::KeyIntent::Forward:
+    case core::KeyIntent::Engine:
+    case core::KeyIntent::Cancel:
+        // Cancel and Engine are both "the composition is not ours to clear
+        // here": the engine's own Escape/Backspace handling is correct, and
+        // forwarding keeps undo, selection and IME-less widgets intact.
         return false;
     }
 
-    if (const auto text = inlineTextFor(static_cast<std::uint32_t>(sym),
-                                        event.key().states().test(fcitx::KeyState::Shift));
-        text && !text->empty()) {
-        inputContext->commitString(*text);
+    if (decision.consumed) {
         event.filterAndAccept();
         return true;
     }
@@ -819,7 +823,13 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     // Cloud candidates are spliced into the engine's list *before* it is read,
     // so the frame we are about to build already contains them.
     syncCloudCandidate(inputContext);
-    PanelMapper::apply(collect(inputContext), session, skinId_);
+    // The scene is folded from two independent projections: what the engine
+    // produced, and what the host knows. Fcitx5 supplies both here, but a
+    // Windows or Android adapter only has to supply the same two structs.
+    core::EngineFacts engine;
+    core::HostFacts host;
+    collect(inputContext, engine, host);
+    core::updateSession(engine, host, session, skinId_);
 
     if (server_.clientCount() > 0) {
         broadcast(inputContext);
@@ -933,7 +943,7 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                     << "status bar toggle ignored: inline English is disabled in settings";
                 return;
             }
-            setEnglishMode(activeContext_, !englishMode_, "status bar");
+            setEnglishMode(activeContext_, !modes_.english(), "status bar");
         } else if constexpr (std::is_same_v<T, api::SetInputMode>) {
             if (!inlineEnglishEnabled_) {
                 SUPERIOR_DEBUG(diag::categories::Fcitx5)
@@ -999,7 +1009,7 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
     // Password fields are the one gate that also disables the *local* history:
     // remembering that someone typed a password would be worse than losing a
     // preference.
-    if (englishMode_ ||
+    if (modes_.english() ||
         inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
         state = CloudContext{};
         clearPendingCloud(inputContext);
@@ -1400,21 +1410,27 @@ void SuperiorAgent::activateCandidate(const api::ActivateCandidate &command) {
         return;
     }
 
-    const auto index = candidateIndexFor(command.candidate, candidateList->size());
-    if (!index) {
-        SUPERIOR_WARN(diag::categories::Fcitx5)
+    // The id encodes the list generation it was painted from. If the list has
+    // been rebuilt since, the click refers to a word the user never saw and is
+    // dropped instead of selecting whatever now sits at that position.
+    auto *session = findSession(inputContext);
+    const auto position = session != nullptr
+                              ? session->candidates().positionOf(command.candidate)
+                              : std::nullopt;
+    if (!position || *position >= static_cast<std::size_t>(candidateList->size())) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
             .field("candidate", static_cast<std::int64_t>(command.candidate))
             .field("size", static_cast<std::int64_t>(candidateList->size()))
-            << "candidate activation ignored: id outside the current page";
+            << "candidate activation ignored: stale or out-of-range id";
         return;
     }
 
     SUPERIOR_DEBUG(diag::categories::Fcitx5)
         .field("candidate", static_cast<std::int64_t>(command.candidate))
-        .field("index", static_cast<std::int64_t>(*index))
+        .field("index", static_cast<std::int64_t>(*position))
         .field("program", inputContext->program())
         << "candidate activated from the UI";
-    candidateList->candidate(*index).select(inputContext);
+    candidateList->candidate(static_cast<int>(*position)).select(inputContext);
     refresh(inputContext);
 }
 

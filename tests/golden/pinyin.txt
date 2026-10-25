@@ -1,0 +1,18 @@
+# Pinyin -> expected first candidate.
+#
+# This is the regression guard for the *data*: 万象 pins a version and a
+# SHA-256, but a schema update can still reorder candidates, and a cloud or
+# module change can quietly take over the first slot. Every line here is the
+# engine's own answer, without cloud pinyin and without learned words.
+#
+# Format: <pinyin> <expected first candidate>
+# Lines starting with '#' and blank lines are ignored.
+#
+# The test skips (exit 0) when no schema is deployed, so a fresh clone can run
+# the suite before running scripts/fetch-rime-data.sh.
+
+yubianyi    预编译
+yuanshen    原神
+nihao       你好
+zhongguo    中国
+yijian      意见

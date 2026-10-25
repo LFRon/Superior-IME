@@ -38,7 +38,6 @@ add_subdirectory(backend/cloudpinyin)
 add_subdirectory(backend/rime)
 add_subdirectory(backend/theme)
 add_subdirectory(backend/core)
-add_subdirectory(backend/runtime)
 add_subdirectory(backend/protocol)
 add_subdirectory(backend/platforms/fcitx5)
 

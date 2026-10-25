@@ -1,7 +1,5 @@
 add_library(superior_fcitx5_mapping STATIC
-    src/CandidateActions.cpp
     src/InlineText.cpp
-    src/PanelMapper.cpp
     src/PreeditSource.cpp
     src/ShiftTap.cpp
     src/StatusMapping.cpp)
@@ -68,6 +66,7 @@ if(SUPERIOR_ENABLE_FCITX5)
 
     target_link_libraries(superior_fcitx5_rime PRIVATE
         Fcitx5::Core
+        Superior::Core
         Superior::Rime
         Superior::Diagnostics)
 

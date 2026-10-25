@@ -17,12 +17,6 @@ target_include_directories(superior_inline_text_tests PRIVATE "${CMAKE_CURRENT_S
 target_compile_features(superior_inline_text_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_inline_text_tests)
 
-add_executable(superior_candidate_actions_tests candidate_actions_tests.cpp)
-target_link_libraries(superior_candidate_actions_tests PRIVATE Superior::Fcitx5Mapping)
-target_include_directories(superior_candidate_actions_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_features(superior_candidate_actions_tests PRIVATE cxx_std_20)
-superior_set_warnings(superior_candidate_actions_tests)
-
 add_executable(superior_shift_tap_tests shift_tap_tests.cpp)
 target_link_libraries(superior_shift_tap_tests PRIVATE Superior::Fcitx5Mapping)
 target_include_directories(superior_shift_tap_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -148,17 +142,35 @@ target_include_directories(superior_core_tests PRIVATE "${CMAKE_CURRENT_SOURCE_D
 target_compile_features(superior_core_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_core_tests)
 
+add_executable(superior_modes_tests modes_tests.cpp)
+target_link_libraries(superior_modes_tests PRIVATE Superior::Core)
+target_include_directories(superior_modes_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_modes_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_modes_tests)
+
+add_executable(superior_key_policy_tests key_policy_tests.cpp)
+target_link_libraries(superior_key_policy_tests PRIVATE Superior::Core)
+target_include_directories(superior_key_policy_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_key_policy_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_key_policy_tests)
+
+add_executable(superior_scene_input_tests scene_input_tests.cpp)
+target_link_libraries(superior_scene_input_tests PRIVATE Superior::Core)
+target_include_directories(superior_scene_input_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_scene_input_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_scene_input_tests)
+
+add_executable(superior_golden_pinyin_tests golden_pinyin_tests.cpp)
+target_link_libraries(superior_golden_pinyin_tests PRIVATE Superior::Rime)
+target_include_directories(superior_golden_pinyin_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_golden_pinyin_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_golden_pinyin_tests)
+
 add_executable(superior_protocol_tests protocol_tests.cpp)
 target_link_libraries(superior_protocol_tests PRIVATE Superior::Protocol)
 target_include_directories(superior_protocol_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(superior_protocol_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_protocol_tests)
-
-add_executable(superior_fcitx5_mapper_tests fcitx5_mapper_tests.cpp)
-target_link_libraries(superior_fcitx5_mapper_tests PRIVATE Superior::Fcitx5Mapping)
-target_include_directories(superior_fcitx5_mapper_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_features(superior_fcitx5_mapper_tests PRIVATE cxx_std_20)
-superior_set_warnings(superior_fcitx5_mapper_tests)
 
 add_executable(superior_socket_tests socket_tests.cpp)
 target_link_libraries(superior_socket_tests PRIVATE Superior::Protocol)
@@ -166,16 +178,9 @@ target_include_directories(superior_socket_tests PRIVATE "${CMAKE_CURRENT_SOURCE
 target_compile_features(superior_socket_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_socket_tests)
 
-add_executable(superior_runtime_tests runtime_tests.cpp)
-target_link_libraries(superior_runtime_tests PRIVATE Superior::Runtime)
-target_include_directories(superior_runtime_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_features(superior_runtime_tests PRIVATE cxx_std_20)
-superior_set_warnings(superior_runtime_tests)
-
 add_test(NAME diagnostics COMMAND superior_diagnostics_tests)
 add_test(NAME skin COMMAND superior_skin_tests)
 add_test(NAME inline-text COMMAND superior_inline_text_tests)
-add_test(NAME candidate-actions COMMAND superior_candidate_actions_tests)
 add_test(NAME shift-tap COMMAND superior_shift_tap_tests)
 add_test(NAME qt-platform COMMAND superior_qt_platform_tests)
 add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
@@ -192,10 +197,13 @@ add_test(NAME config COMMAND superior_config_tests)
 add_test(NAME inputmethod COMMAND superior_inputmethod_tests)
 add_test(NAME theme COMMAND superior_theme_tests)
 add_test(NAME core COMMAND superior_core_tests)
-add_test(NAME runtime COMMAND superior_runtime_tests)
+add_test(NAME modes COMMAND superior_modes_tests)
+add_test(NAME key-policy COMMAND superior_key_policy_tests)
+add_test(NAME scene-input COMMAND superior_scene_input_tests)
+add_test(NAME golden-pinyin
+    COMMAND superior_golden_pinyin_tests "${PROJECT_SOURCE_DIR}/tests/golden/pinyin.txt")
 add_test(NAME protocol COMMAND superior_protocol_tests)
 add_test(NAME socket COMMAND superior_socket_tests)
-add_test(NAME fcitx5-mapper COMMAND superior_fcitx5_mapper_tests)
 
 add_test(
     NAME boundaries

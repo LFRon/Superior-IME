@@ -28,7 +28,8 @@
 #include "superior/cloudpinyin/CloudState.hpp"
 #include "superior/cloudpinyin/Fetcher.hpp"
 #include "superior/core/ImeSession.hpp"
-#include "superior/fcitx5/PanelFacts.hpp"
+#include "superior/core/Modes.hpp"
+#include "superior/core/SceneInput.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/protocol/SceneServer.hpp"
 
@@ -161,7 +162,12 @@ private:
     void activateCandidate(const api::ActivateCandidate &command);
     /// Pages the candidate list by one step (`+1` next, `-1` previous).
     void pageCandidates(const api::PageCandidates &command);
-    [[nodiscard]] PanelFacts collect(fcitx::InputContext *inputContext);
+    /// Splits what Fcitx5 reports into engine facts (what the language engine
+    /// produced) and host facts (where the cursor is, which client capabilities
+    /// exist). The two are never mixed again: that split is what lets a second
+    /// platform produce a scene without an `InputPanel`.
+    void collect(fcitx::InputContext *inputContext, core::EngineFacts &engine,
+                 core::HostFacts &host);
     core::ImeSession &sessionFor(fcitx::InputContext *inputContext);
     core::ImeSession *findSession(fcitx::InputContext *inputContext);
     void broadcast(fcitx::InputContext *inputContext);
@@ -208,7 +214,10 @@ private:
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;
     std::unique_ptr<fcitx::EventSourceTime> startupTimer_;
     bool inlineEnglishEnabled_ = true;
-    bool englishMode_ = false;
+    /// The single owner of Chinese/English. Nothing else may keep its own copy:
+    /// two booleans flipping on the same Shift release is exactly the bug this
+    /// member replaced.
+    core::Modes modes_;
     std::string skinId_ = "org.superior.default";
     fcitx::InputContext *activeContext_ = nullptr;
     bool refreshing_ = false;

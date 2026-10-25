@@ -111,11 +111,8 @@ diag::setSink([](const diag::Record &record) { /* 写文件、转发、测试 */
 |---|---|---|
 | `superior.diagnostics` | `Log.cpp` | 配置生效、最小级别 |
 | `superior.skin` | `Skin.cpp` | 加载/拒绝、哈希、资源数、每条诊断、扫描结果 |
-| `superior.core` | `CandidateModel.cpp` | 候选数量、分页、选中变化 |
+| `superior.core` | `CandidateModel.cpp` | 候选数量、分页、选中变化、代次 |
 | `superior.core` | `ImeSession.cpp` | 提交（文本已脱敏）、拒绝过期 id |
-| `superior.core` | `MotionTimeline.cpp` | 动画启动 |
-| `superior.runtime` | `SessionRuntime.cpp` | 帧合并、呈现、停止 |
-| `superior.runtime` | `SerialPump.cpp` | drain 期间入队 |
 | `superior.protocol` | `Wire.cpp` | 帧解码（类型、字节数） |
 | `superior.protocol.socket` | `SceneServer.cpp` | 监听、连接/断开、队列丢弃、关闭 |
 | `superior.fcitx5` | `SuperiorAgent.cpp` | 启动/停止、焦点、光标矩形、IM 切换、事实摘要、广播、命令 |

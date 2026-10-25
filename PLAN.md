@@ -83,7 +83,7 @@ backend/platforms/fcitx5  ──►  backend/runtime  ──►  backend/core  �
 
 硬规则（由 `scripts/check-boundaries.sh` + `nm` 检查强制）：
 
-1. `frontend/` 不得 include 或链接 `superior/core`、`superior/runtime`、任何 `fcitx*`。
+1. `frontend/` 不得 include 或链接 `superior/core`、任何 `fcitx*`。
 2. `backend/core` 不得 include Qt / Fcitx5 / 平台头 / 系统时钟。
 3. `backend/skin` 只做模型与校验，不解码像素、不依赖 Qt。
 4. `backend/api` 是纯头文件契约，无实现依赖。

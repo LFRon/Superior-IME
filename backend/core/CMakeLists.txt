@@ -1,7 +1,14 @@
+# The decision layer: mode state, key policy, candidate model and scene folds.
+#
+# Nothing here may include Qt, Fcitx5 or any other platform header — the same
+# code has to run inside the Fcitx5 addon today and inside a Windows service or
+# an Android IME process later.
 add_library(superior_core STATIC
     src/CandidateModel.cpp
     src/ImeSession.cpp
-    src/MotionTimeline.cpp)
+    src/KeyPolicy.cpp
+    src/Modes.cpp
+    src/SceneInput.cpp)
 
 add_library(Superior::Core ALIAS superior_core)
 

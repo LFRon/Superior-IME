@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "superior/core/Modes.hpp"
 #include "superior/rime/LibrimePort.hpp"
 #include "superior/rime/RimeEngine.hpp"
 
@@ -96,8 +97,10 @@ private:
 
     /// Attaches the punctuation action to a context and syncs its state.
     void attachPunctuation(fcitx::InputContext *inputContext, Session &session);
-    /// Mirrors the schema's `ascii_punct` switch into the toolbar action.
-    void refreshPunctuationAction(Session &session);
+    /// Pushes the decision layer's punctuation mode into one engine session.
+    void applyModes(Session &session);
+    /// Mirrors `modes_` into the toolbar action.
+    void refreshPunctuationAction();
     /// Toggles Chinese (full-width) vs ASCII (half-width) punctuation.
     void togglePunctuation(fcitx::InputContext *inputContext);
 
@@ -107,9 +110,17 @@ private:
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> destroyedHandler_;
     fcitx::SimpleAction punctuationAction_;
     bool punctuationRegistered_ = false;
-    /// The first session seeds the toolbar; later sessions copy its state so
-    /// the glyph never disagrees with the window being typed in.
-    bool punctuationSeeded_ = false;
+    /// Punctuation width, and its only owner.
+    ///
+    /// The toolbar action and every session's `ascii_punct` option are *views*
+    /// of this value. Before, the state was inferred back out of the engine and
+    /// a `punctuationSeeded_` flag decided which session won; that is two
+    /// writers for one switch.
+    ///
+    /// Scope note: this addon owns punctuation (it owns the status action); the
+    /// agent owns the Chinese/English switch. Each `Modes` instance therefore
+    /// owns exactly the fields its process can write.
+    core::Modes modes_;
     rime::Paths paths_;
     bool libraryReady_ = false;
     std::string startError_;
