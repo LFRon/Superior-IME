@@ -331,6 +331,20 @@ void Service::startCaptureThread() {
     const CaptureCommand command =
         defaultCaptureCommand(restoreDefaultSourceEnabled() ? defaultSourceBefore_ : std::string{});
 
+    // Both early returns below leave the recogniser we just started with nothing to
+    // feed it: it would sit on a model in RAM until the next session. End it here.
+    const auto abandonRecogniser = [this] {
+        if (!streaming_) {
+            return;
+        }
+        beginStreamingClose();
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+    };
+
     int pipeFd[2] = {-1, -1};
     if (::pipe(pipeFd) != 0) {
         Event event;
@@ -338,6 +352,7 @@ void Service::startCaptureThread() {
         event.code = "capture_failed";
         event.message = std::string("cannot create a pipe: ") + std::strerror(errno);
         emit_(event);
+        abandonRecogniser();
         return;
     }
 
@@ -360,6 +375,7 @@ void Service::startCaptureThread() {
         event.code = "capture_failed";
         event.message = std::string("cannot fork: ") + std::strerror(errno);
         emit_(event);
+        abandonRecogniser();
         return;
     }
     if (pid == 0) {
