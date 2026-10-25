@@ -118,6 +118,10 @@ void ModelDownloader::start(const QUrl &url, const QString &partPath) {
                                                             ? Status::Ok
                                                             : Status::Failed;
                                  self->running_.store(false);
+                                 if (current->manager != nullptr) {
+                                     current->manager->deleteLater();
+                                     current->manager = nullptr;
+                                 }
                                  delete current;
                                  self->transfer_ = nullptr;
                                  QMetaObject::invokeMethod(
