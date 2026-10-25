@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "SpeechRecognitionPanel.hpp"
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDir>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
+#include <QPalette>
 #include <QPainterPath>
 #include <QPaintEvent>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QStyledItemDelegate>
 #include <QSignalBlocker>
 #include <QUrl>
 
@@ -53,14 +59,76 @@ QString styleFor(const SkinTheme &theme) {
                "QPushButton#close { border: none; background: transparent; font-size: 16px; }"
                "QComboBox { background: rgba(255,255,255,14); color: %1;"
                " border: 1px solid rgba(255,255,255,40); border-radius: 6px; padding: 3px 8px; }"
-               "QComboBox QAbstractItemView { background: %5; color: %1; }"
+               // Row colours are *not* set here. A stylesheet `color` on
+               // QAbstractItemView does not reach the items: QComboBox draws
+               // them with the view's palette, so the popup stayed black-on-dark.
+               // The palette is set in applyPopupPalette() instead, where it
+               // actually takes effect.
+               "QComboBox::drop-down { border: none; width: 18px; }"
                "QLabel { color: %1; background: transparent; }")
         .arg(theme.text.name(QColor::HexArgb), theme.comment.name(QColor::HexArgb),
-             theme.selection.name(QColor::HexArgb), theme.selectionText.name(QColor::HexArgb),
-             theme.surface.name(QColor::HexArgb));
+             theme.selection.name(QColor::HexArgb), theme.selectionText.name(QColor::HexArgb));
 }
 
 } // namespace
+
+/// Draws the model list with the skin's colours.
+///
+/// The list is a window of its own, and neither a palette nor a stylesheet set
+/// on it reached the rows: the system light style kept painting black text on
+/// the dark popup. Colours are therefore forced at draw time, which is the one
+/// place that cannot be overridden.
+class PopupDelegate : public QStyledItemDelegate {
+public:
+    PopupDelegate(const SkinTheme &theme, QComboBox *combo)
+        : QStyledItemDelegate(combo), theme_(theme), combo_(combo) {}
+
+    void setTheme(const SkinTheme &theme) { theme_ = theme; }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override {
+        const bool selected = option.state & QStyle::State_Selected;
+        painter->save();
+        painter->fillRect(option.rect, theme_.surface);
+
+        QRect row = option.rect.adjusted(2, 1, -2, -1);
+        QPainterPath shape;
+        shape.addRoundedRect(QRectF(row), 5, 5);
+        if (selected) {
+            painter->fillPath(shape, theme_.selection);
+        }
+
+        int textLeft = row.left() + 10;
+        // The current row is marked here because the style's check indicator is
+        // drawn with the system palette too, i.e. invisible on a dark popup.
+        const bool current = combo_ != nullptr && combo_->model() != nullptr &&
+                             index == combo_->model()->index(combo_->currentIndex(), 0);
+        if (current) {
+            painter->setPen(selected ? theme_.selectionText : theme_.text);
+            QRect tick{textLeft, row.top(), 14, row.height()};
+            painter->drawText(tick, Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("✓"));
+        }
+        textLeft += 18;
+
+        painter->setPen(selected ? theme_.selectionText : theme_.text);
+        const QRect textRect{textLeft, row.top(), std::max(0, row.right() - textLeft - 8),
+                             row.height()};
+        const QString text = option.fontMetrics.elidedText(
+            index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width());
+        painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, text);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        QSize size = QStyledItemDelegate::sizeHint(option, index);
+        size.setHeight(std::max(size.height(), option.fontMetrics.height() + 12));
+        return size;
+    }
+
+private:
+    SkinTheme theme_;
+    QComboBox *combo_ = nullptr;
+};
 
 SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent) {
     makeOverlay(*this);
@@ -86,6 +154,10 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
         model_->addItem(QString::fromStdString(entry.displayName),
                         QString::fromStdString(entry.id));
     }
+    popupDelegate_ = new PopupDelegate(theme_, model_);
+    model_->setItemDelegate(popupDelegate_);
+    model_->view()->installEventFilter(this);
+    applyPopupPalette();
 
     primary_ = new QPushButton(QStringLiteral("开始说话"), this);
     primary_->setObjectName(QStringLiteral("primary"));
@@ -132,9 +204,43 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
         }
     });
 
-    const Size initial = speechPanelSize(true, 1.0);
-    resize(initial.width, initial.height);
+    // Real layouts, not hand-computed geometry: a translated sentence wraps to a
+    // different number of lines, and a missing row must collapse instead of
+    // leaving a hole. Both are ordinary layout work and were exactly what broke
+    // when the positions were computed by hand.
+    mic_ = new QWidget(this);
+    mic_->setFixedHeight(kMicDiameter + 12);
+    mic_->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    auto *header = new QHBoxLayout();
+    header->setContentsMargins(0, 0, 0, 0);
+    header->addWidget(title_, 1);
+    header->addWidget(close_, 0);
+
+    auto *setupRow = new QHBoxLayout();
+    setupRow->setContentsMargins(0, 0, 0, 0);
+    setupRow->addWidget(model_, 1);
+    setupRow->addWidget(download_, 0);
+
+    auto *actionRow = new QHBoxLayout();
+    actionRow->setContentsMargins(0, 0, 0, 0);
+    actionRow->addWidget(discard_, 0);
+    actionRow->addStretch(1);
+    actionRow->addWidget(primary_, 0);
+
+    root_ = new QVBoxLayout(this);
+    root_->setContentsMargins(kMargin, 10, kMargin, kMargin);
+    root_->setSpacing(8);
+    root_->addLayout(header);
+    root_->addWidget(mic_);
+    root_->addWidget(message_);
+    root_->addWidget(partial_);
+    root_->addLayout(setupRow);
+    root_->addLayout(actionRow);
+
+    setFixedWidth(speechPanelWidth(1.0));
     updateActions();
+    relayout();
 }
 
 void SpeechRecognitionPanel::setCommandHandler(CommandHandler handler) {
@@ -143,9 +249,8 @@ void SpeechRecognitionPanel::setCommandHandler(CommandHandler handler) {
 
 void SpeechRecognitionPanel::setScale(double scale) {
     scale_ = clampScale(scale);
-    const Size size = speechPanelSize(setupPhase(), scale_);
-    resize(size.width, size.height);
-    reposition();
+    setFixedWidth(speechPanelWidth(scale_));
+    relayout();
 }
 
 void SpeechRecognitionPanel::setScreen(const Rect &available) {
@@ -163,8 +268,22 @@ bool SpeechRecognitionPanel::setupPhase() const {
 }
 
 QSize SpeechRecognitionPanel::sizeHint() const {
-    const Size size = speechPanelSize(setupPhase(), scale_);
-    return QSize(size.width, size.height);
+    const int height = root_ != nullptr ? root_->sizeHint().height() : 0;
+    return QSize(speechPanelWidth(scale_), height);
+}
+
+void SpeechRecognitionPanel::relayout() {
+    if (root_ == nullptr) {
+        return;
+    }
+    // `activate()` first: a row that just became visible only contributes its
+    // real height after the layout has seen it.
+    root_->activate();
+    const int height = root_->sizeHint().height();
+    if (height != this->height()) {
+        resize(width(), height);
+    }
+    reposition();
 }
 
 Rect SpeechRecognitionPanel::occupiedRect() const {
@@ -178,9 +297,113 @@ void SpeechRecognitionPanel::reposition() {
     if (screen_.width <= 0) {
         return;
     }
-    const Rect placed =
-        placeSpeechPanel(screen_, statusBar_, speechPanelSize(setupPhase(), scale_), kOverlayMargin);
+    // The actual size, not a predicted one: the panel's height depends on how
+    // many lines the current message needs.
+    const Size size{width(), height()};
+    // A dragged position is a user decision, so it outranks the anchor. Only
+    // clamping still applies: the window must stay reachable.
+    const Rect placed = customPosition_ ? clampToScreen(screen_, size, *customPosition_, kOverlayMargin)
+                                        : placeSpeechPanel(screen_, statusBar_, size, kOverlayMargin);
     move(placed.left, placed.top);
+    if (customPosition_) {
+        customPosition_ = Point{placed.left, placed.top};
+    }
+}
+
+void SpeechRecognitionPanel::resetPosition() {
+    customPosition_.reset();
+    reposition();
+}
+
+void SpeechRecognitionPanel::mousePressEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    dragging_ = true;
+    dragOffset_ = event->position().toPoint();
+    event->accept();
+}
+
+void SpeechRecognitionPanel::mouseMoveEvent(QMouseEvent *event) {
+    if (!dragging_ || !(event->buttons() & Qt::LeftButton)) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    const QPoint target = event->globalPosition().toPoint() - dragOffset_;
+    customPosition_ = Point{target.x(), target.y()};
+    reposition();
+    event->accept();
+}
+
+void SpeechRecognitionPanel::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton && dragging_) {
+        dragging_ = false;
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+/// Double-click resets: without it, a panel dragged into a corner would have no
+/// way back to "above the toolbar" short of restarting the input method.
+void SpeechRecognitionPanel::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+    resetPosition();
+    event->accept();
+}
+
+/// The popup is a top-level window with the system palette, so its *frame* was
+/// light even after the rows were fixed. It does not exist until the list is
+/// opened, hence a fix-up on every show rather than one in the constructor.
+bool SpeechRecognitionPanel::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::Show && model_ != nullptr && watched == model_->view()) {
+        QWidget *popup = model_->view()->window();
+        if (popup != nullptr && popup != this) {
+            QPalette palette = popup->palette();
+            for (const QPalette::ColorRole role :
+                 {QPalette::Window, QPalette::Base, QPalette::Button, QPalette::ToolTipBase}) {
+                palette.setColor(role, theme_.surface);
+            }
+            for (const QPalette::ColorRole role :
+                 {QPalette::WindowText, QPalette::Text, QPalette::ButtonText}) {
+                palette.setColor(role, theme_.text);
+            }
+            for (const QPalette::ColorRole role : {QPalette::Light, QPalette::Midlight,
+                                                   QPalette::Dark, QPalette::Mid, QPalette::Shadow}) {
+                palette.setColor(role, theme_.border);
+            }
+            popup->setPalette(palette);
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+/// Paints the model list with the skin's colours.
+///
+/// The list lives in its own window with its own palette, so the panel's
+/// stylesheet does not colour it; without this the popup was the system light
+/// palette: white window, black items, and unreadable selected rows.
+void SpeechRecognitionPanel::applyPopupPalette() {
+    QAbstractItemView *view = model_ != nullptr ? model_->view() : nullptr;
+    if (view == nullptr) {
+        return;
+    }
+    QPalette palette = view->palette();
+    palette.setColor(QPalette::Base, theme_.surface);
+    palette.setColor(QPalette::Window, theme_.surface);
+    palette.setColor(QPalette::Button, theme_.surface);
+    palette.setColor(QPalette::Text, theme_.text);
+    palette.setColor(QPalette::WindowText, theme_.text);
+    palette.setColor(QPalette::ButtonText, theme_.text);
+    palette.setColor(QPalette::Highlight, theme_.selection);
+    palette.setColor(QPalette::HighlightedText, theme_.selectionText);
+    view->setPalette(palette);
+    view->viewport()->setPalette(palette);
+    view->setAutoFillBackground(true);
 }
 
 void SpeechRecognitionPanel::saveModelChoice(const std::string &id) {
@@ -207,6 +430,10 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     if (theme.text != theme_.text || theme_.selection != theme.selection) {
         theme_ = theme;
         setStyleSheet(styleFor(theme_));
+        popupDelegate_ = new PopupDelegate(theme_, model_);
+    model_->setItemDelegate(popupDelegate_);
+    model_->view()->installEventFilter(this);
+    applyPopupPalette();
     }
 
     if (!scene.visible) {
@@ -231,11 +458,8 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     }
 
     updateActions();
-    if (wasSetup != setupPhase()) {
-        const Size size = speechPanelSize(setupPhase(), scale_);
-        resize(size.width, size.height);
-    }
-    reposition();
+    Q_UNUSED(wasSetup);
+    relayout();
     update();
     if (!isVisible()) {
         show();
@@ -292,35 +516,6 @@ void SpeechRecognitionPanel::updateActions() {
     discard_->setEnabled(recording || transcribing);
 }
 
-void SpeechRecognitionPanel::resizeEvent(QResizeEvent *event) {
-    QWidget::resizeEvent(event);
-    const int width = this->width();
-    const int height = this->height();
-
-    close_->setGeometry(width - 34, 8, 26, 24);
-    title_->setGeometry(kMargin, 6, width - 2 * kMargin - 30, kHeaderHeight - 6);
-
-    const int micTop = kHeaderHeight + 6;
-    const int controlsTop = height - 44;
-
-    if (setupPhase()) {
-        message_->setGeometry(kMargin, micTop + kMicDiameter + 6, width - 2 * kMargin, 44);
-        model_->setGeometry(kMargin, message_->geometry().bottom() + 6, width - 2 * kMargin, 28);
-        download_->setGeometry(kMargin, height - 42, width - 2 * kMargin, 30);
-        primary_->setVisible(false);
-        discard_->setVisible(false);
-        partial_->setVisible(false);
-    } else {
-        message_->setGeometry(kMargin, micTop + kMicDiameter + 4, width - 2 * kMargin, 22);
-        partial_->setGeometry(kMargin, message_->geometry().bottom() + 2, width - 2 * kMargin, 40);
-        primary_->setGeometry(width - kMargin - 110, controlsTop, 110, 32);
-        discard_->setGeometry(kMargin, controlsTop, 70, 32);
-        primary_->setVisible(true);
-        model_->setVisible(false);
-        download_->setVisible(false);
-    }
-}
-
 void SpeechRecognitionPanel::paintEvent(QPaintEvent *event) {
     Q_UNUSED(event);
     QPainter painter(this);
@@ -335,7 +530,8 @@ void SpeechRecognitionPanel::paintEvent(QPaintEvent *event) {
 
     // Microphone: a filled capsule, an arc handle and a stem. Drawn instead of
     // loaded so the panel needs no SVG dependency and stays crisp at any scale.
-    const QPointF center(width() / 2.0, kHeaderHeight + 6 + kMicDiameter / 2.0);
+    const QRectF band = mic_ != nullptr ? QRectF(mic_->geometry()) : QRectF();
+    const QPointF center(band.center());
     const double bodyWidth = 12.0;
     const double bodyHeight = 20.0;
     const bool active = scene_.phase == api::SpeechPhase::Recording;

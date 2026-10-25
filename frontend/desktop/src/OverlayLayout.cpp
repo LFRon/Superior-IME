@@ -8,10 +8,10 @@ namespace superior::ui {
 
 namespace {
 
-constexpr int kSpeechPanelWidth = 320;
-constexpr int kSpeechPanelHeight = 150;
-constexpr int kSpeechSetupHeight = 200;
+constexpr int kSpeechPanelWidth = 360;
 constexpr int kSpeechBottomGap = 24;
+/// Distance between the panel and the bar it is anchored to.
+constexpr int kSpeechAnchorGap = 10;
 
 bool empty(const Rect &rect) noexcept {
     return rect.width <= 0 || rect.height <= 0;
@@ -31,9 +31,8 @@ int scaled(int value, double scale) {
 
 } // namespace
 
-Size speechPanelSize(bool setup, double scale) noexcept {
-    return Size{scaled(kSpeechPanelWidth, scale),
-                scaled(setup ? kSpeechSetupHeight : kSpeechPanelHeight, scale)};
+int speechPanelWidth(double scale) noexcept {
+    return scaled(kSpeechPanelWidth, scale);
 }
 
 Rect placeSpeechPanel(Rect screen, Rect statusBar, Size desired, int margin) noexcept {
@@ -45,19 +44,19 @@ Rect placeSpeechPanel(Rect screen, Rect statusBar, Size desired, int margin) noe
     Rect panel;
     panel.width = std::min(desired.width, available);
     panel.height = std::min(desired.height, std::max(0, screen.height - 2 * margin));
-    panel.left = screen.left + (screen.width - panel.width) / 2;
-    panel.top = screen.top + screen.height - panel.height - margin - kSpeechBottomGap;
-
-    // A dragged status bar can end up anywhere, including on top of the panel.
-    // Lifting the panel is deterministic; asking the window manager for stacking
-    // favours is not (there is no window manager for override-redirect windows).
-    if (intersects(panel, statusBar)) {
-        panel.top = statusBar.top - panel.height - margin;
+    if (!empty(statusBar)) {
+        // Above the bar, centred on it: the panel is opened from a button there,
+        // so it must appear next to that button, not in the middle of the screen.
+        panel.left = statusBar.left + (statusBar.width - panel.width) / 2;
+        panel.top = statusBar.top - panel.height - kSpeechAnchorGap;
         if (panel.top < screen.top + margin) {
-            // Not enough room above: move beside it instead, which keeps both
-            // windows fully visible on very short screens.
-            panel.top = statusBar.top + statusBar.height + margin;
+            // The bar sits at the top of the screen, so "above" does not exist.
+            // Going below keeps both windows fully visible.
+            panel.top = statusBar.top + statusBar.height + kSpeechAnchorGap;
         }
+    } else {
+        panel.left = screen.left + (screen.width - panel.width) / 2;
+        panel.top = screen.top + screen.height - panel.height - margin - kSpeechBottomGap;
     }
 
     panel.top = std::clamp(panel.top, screen.top + margin,
@@ -67,6 +66,22 @@ Rect placeSpeechPanel(Rect screen, Rect statusBar, Size desired, int margin) noe
                             std::max(screen.left + margin,
                                      screen.left + screen.width - panel.width - margin));
     return panel;
+}
+
+Rect clampToScreen(Rect screen, Size desired, Point position, int margin) noexcept {
+    if (screen.width <= 0 || screen.height <= 0 || desired.width <= 0 || desired.height <= 0) {
+        return Rect{};
+    }
+    Rect rect;
+    rect.width = std::min(desired.width, std::max(0, screen.width - 2 * margin));
+    rect.height = std::min(desired.height, std::max(0, screen.height - 2 * margin));
+    rect.left = std::clamp(position.x, screen.left + margin,
+                           std::max(screen.left + margin,
+                                    screen.left + screen.width - rect.width - margin));
+    rect.top = std::clamp(position.y, screen.top + margin,
+                          std::max(screen.top + margin,
+                                   screen.top + screen.height - rect.height - margin));
+    return rect;
 }
 
 Rect liftAbove(Rect candidate, Rect speechPanel, Rect screen, int margin) noexcept {

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QPoint>
 #include <QString>
 #include <QWidget>
 
@@ -16,13 +17,17 @@
 #include "SkinTheme.hpp"
 
 class QComboBox;
+class QEvent;
 class QLabel;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QPushButton;
 class QTimer;
+class QVBoxLayout;
 
 namespace superior::ui {
+
+class PopupDelegate;
 
 /// The speech-recognition panel: a persistent, always-on-top surface.
 ///
@@ -55,11 +60,26 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
-    void resizeEvent(QResizeEvent *event) override;
+    // Dragging: the anchor is only the *default* place. Once the user moves the
+    // panel, that position is the truth until the screen shrinks or the panel is
+    // re-opened in a new session.
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    /// Repaints the model popup's frame, which is a separate window.
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     [[nodiscard]] bool setupPhase() const;
+    /// Resizes to the layout's preferred height for the current width and
+    /// re-anchors. Called whenever a row appears or disappears.
+    void relayout();
     void reposition();
+    /// Cancel a custom position and go back to the anchor above the toolbar.
+    void resetPosition();
+    /// Skin colours for the model popup, which is a separate window.
+    void applyPopupPalette();
     void updateActions();
     void beginDownload();
     void cancelDownload();
@@ -76,10 +96,21 @@ private:
     /// Live input level from the capability process, `[0, 1]`.
     double level_ = 0.0;
 
+    /// Position chosen by dragging; empty means "use the anchor".
+    std::optional<Point> customPosition_;
+    bool dragging_ = false;
+    /// Grab point inside the panel, so the window does not jump on press.
+    QPoint dragOffset_;
+
+    QVBoxLayout *root_ = nullptr;
+    /// Empty spacer the microphone is painted into; it exists so the layout
+    /// reserves exactly the space the drawing needs.
+    QWidget *mic_ = nullptr;
     QLabel *title_ = nullptr;
     QLabel *message_ = nullptr;
     QLabel *partial_ = nullptr;
     QComboBox *model_ = nullptr;
+    PopupDelegate *popupDelegate_ = nullptr;
     QPushButton *primary_ = nullptr;
     QPushButton *discard_ = nullptr;
     QPushButton *close_ = nullptr;

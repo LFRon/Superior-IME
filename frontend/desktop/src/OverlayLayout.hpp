@@ -18,14 +18,26 @@ struct OverlayGeometry {
     Rect voicePanel; // current speech panel rect; may be empty when hidden
 };
 
-/// Desired size for the speech panel in the given phase; the panel itself has
-/// two layouts (setup is taller because it holds the download row).
-[[nodiscard]] Size speechPanelSize(bool setup, double scale) noexcept;
+/// Width of the speech panel. The height is content-driven: it comes from the
+/// Qt layout, because a translated label wraps to a different number of lines.
+[[nodiscard]] int speechPanelWidth(double scale) noexcept;
 
-/// Bottom-centre placement for the speech panel, narrowed and lifted so it never
-/// intersects the status bar.
+/// Places the speech panel above the status bar, centred on it.
+///
+/// The panel belongs to the toolbar: it is opened from a button there, so it must
+/// appear next to it rather than in the middle of the screen. With no status bar
+/// visible it falls back to bottom-centre, and a toolbar at the very top of the
+/// screen pushes the panel below itself instead of off-screen.
 [[nodiscard]] Rect placeSpeechPanel(Rect screen, Rect statusBar, Size desired,
                                     int margin = kOverlayMargin) noexcept;
+
+/// Keeps a dragged speech panel inside the screen.
+///
+/// The panel starts anchored above the toolbar, but it can be dragged anywhere.
+/// A user position wins over the anchor; it is only nudged back when the screen
+/// shrank or the panel grew, so dragging can never lose the window off-screen.
+[[nodiscard]] Rect clampToScreen(Rect screen, Size desired, Point position,
+                                 int margin = kOverlayMargin) noexcept;
 
 /// Where the candidate panel should go so it does not cover the speech panel.
 ///

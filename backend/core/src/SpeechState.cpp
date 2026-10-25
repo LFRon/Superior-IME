@@ -11,10 +11,11 @@ namespace diag = ::superior::diagnostics;
 
 namespace {
 
-constexpr std::string_view kEngineMissing =
-    "还没有安装语音识别引擎。安装后即可在本机识别，音频不会上传。";
-constexpr std::string_view kModelMissing =
-    "还没有下载语音识别模型。语音只在本机识别，音频不会上传。";
+// Short and actionable. The privacy note ("audio never leaves the device") used
+// to be appended here; it is true, but it repeated on every panel opening and
+// pushed the actual next step out of the first glance.
+constexpr std::string_view kEngineMissing = "还没有安装语音识别引擎。";
+constexpr std::string_view kModelMissing = "还没有下载语音识别模型。";
 
 } // namespace
 
