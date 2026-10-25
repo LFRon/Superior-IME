@@ -5,9 +5,9 @@
 #include <string>
 #include <string_view>
 
-#include "superior/rime/Types.hpp"
+#include "superior/pinyin/Types.hpp"
 
-namespace superior::rime {
+namespace superior::pinyin {
 
 /// Everything `RimeEngine` needs from librime, as an interface.
 ///
@@ -55,4 +55,4 @@ public:
     [[nodiscard]] virtual std::string schemaId() = 0;
 };
 
-} // namespace superior::rime
+} // namespace superior::pinyin

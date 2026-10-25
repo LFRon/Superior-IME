@@ -11,13 +11,16 @@
 #include "superior/cloudpinyin/Cloud.hpp"
 #include "superior/cloudpinyin/CloudState.hpp"
 #include "superior/cloudpinyin/Fetcher.hpp"
+#include "superior/config/Learning.hpp"
 #include "superior/config/Settings.hpp"
 #include "superior/diagnostics/Log.hpp"
-#include "superior/rime/LibrimePort.hpp"
-#include "superior/rime/RimeEngine.hpp"
-#include "superior/rime/RimePaths.hpp"
+#include "superior/pinyin/LibrimePort.hpp"
+#include "superior/pinyin/RimeEngine.hpp"
+#include "superior/pinyin/Layout.hpp"
 #include "superior/theme/ClassicUiTheme.hpp"
 #include "superior/skin/Skin.hpp"
+
+namespace pinyin = superior::pinyin;
 
 namespace {
 
@@ -33,17 +36,18 @@ void usage(std::ostream &out) {
            "  theme select NAME            select an already installed theme\n"
            "  cloud probe [--backend NAME] [PINYIN]\n"
            "                               ask the cloud provider once and report\n"
-           "  rime status                  report librime, data directories and artifacts\n"
-           "  rime deploy                  compile the schema in the shared directory\n"
-           "  rime lookup [PINYIN]         type PINYIN into a real session and print the frame\n"
+           "  pinyin status                report the engine, data directories and artifacts\n"
+           "  pinyin deploy                compile the schema in the shared directory\n"
+           "  pinyin lookup [PINYIN]       type PINYIN into a real session and print the frame\n"
+           "  migrate [--dry-run]          rename legacy data directories to the new layout\n"
            "\n"
            "Inline Chinese/English switching is handled inside the input method and\n"
            "is not a global Fcitx5 hotkey; see docs/input-panel.md.\n"
            "\n"
            "options:\n"
            "  --skin-dir DIR               where skins live (default: <dataHome>/superior-ime/skins)\n"
-           "  --shared DIR                 Rime shared data directory (default: <dataHome>/superior-ime/rime/shared)\n"
-           "  --user DIR                   Rime user data directory (default: <dataHome>/superior-ime/rime/user)\n"
+           "  --shared DIR                 pinyin shared data directory (default: <dataHome>/superior-ime/pinyin/shared)\n"
+           "  --user DIR                   pinyin user data directory (default: <dataHome>/superior-ime/pinyin/user)\n"
            "\n"
            "After changing the theme or trigger keys, restart Fcitx5:\n"
            "  fcitx5-remote -e && fcitx5 -d\n";
@@ -256,9 +260,111 @@ int handleCloudProbe(const std::string &backendName, const std::string &pinyin) 
     return 1;
 }
 
-/// Fills in the Rime paths, honouring command-line overrides.
-rime::Paths rimePaths(const fs::path &sharedOverride, const fs::path &userOverride) {
-    rime::Paths paths = rime::Paths::fromEnvironment();
+
+/// Reports (and, unless `dryRun`, performs) the layout migrations.
+///
+/// Everything here is idempotent: the agent runs the same steps on start, so
+/// this command exists for scripted upgrades and for showing the user exactly
+/// what moved.
+int handleMigrate(bool dryRun) {
+    const char *dataEnv = std::getenv("XDG_DATA_HOME");
+    const char *homeEnv = std::getenv("HOME");
+    fs::path dataHome;
+    if (dataEnv != nullptr && dataEnv[0] != '\0') {
+        dataHome = dataEnv;
+    } else if (homeEnv != nullptr && homeEnv[0] != '\0') {
+        dataHome = fs::path(homeEnv) / ".local" / "share";
+    }
+
+    int status = 0;
+    if (dataHome.empty()) {
+        std::cout << "data      : HOME is unset, nothing to migrate\n";
+    } else {
+        const fs::path appDir = dataHome / "superior-ime";
+        const fs::path legacy = appDir / "rime";
+        const fs::path current = appDir / "pinyin";
+        std::error_code error;
+        const bool legacyExists = fs::is_directory(legacy, error);
+        const bool currentExists = fs::is_directory(current, error);
+
+        if (dryRun) {
+            if (currentExists) {
+                std::cout << "data      : already at " << current << "\n";
+            } else if (legacyExists) {
+                std::cout << "data      : would rename " << legacy << " -> " << current << "\n";
+            } else {
+                std::cout << "data      : nothing to migrate\n";
+            }
+        } else {
+            const pinyin::LayoutResolution resolution =
+                pinyin::resolvePinyinRootFromEnvironment();
+            if (resolution.root.empty()) {
+                std::cout << "data      : cannot resolve the data directory\n";
+                status = 1;
+            } else if (resolution.migrated) {
+                std::cout << "data      : migrated to " << resolution.root << "\n";
+            } else if (resolution.decision == pinyin::LayoutDecision::UseLegacyFallback) {
+                std::cout << "data      : kept " << resolution.root << " (" << resolution.detail
+                          << ")\n";
+                status = 1;
+            } else {
+                std::cout << "data      : already at " << resolution.root << "\n";
+            }
+        }
+    }
+
+    if (dryRun) {
+        // Do not call `defaultLearningPath()` here: it performs the rename.
+        const char *configEnv = std::getenv("XDG_CONFIG_HOME");
+        const char *configHomeEnv = std::getenv("HOME");
+        fs::path configHome;
+        if (configEnv != nullptr && configEnv[0] != '\0') {
+            configHome = configEnv;
+        } else if (configHomeEnv != nullptr && configHomeEnv[0] != '\0') {
+            configHome = fs::path(configHomeEnv) / ".config";
+        }
+        const fs::path appDir = configHome.empty() ? fs::path{} : configHome / "superior-ime";
+        const fs::path legacy = appDir.empty() ? fs::path{} : appDir / "learning.json";
+        const fs::path current = appDir.empty() ? fs::path{} : appDir / "pinyin" / "learning.json";
+        std::error_code error;
+        if (!current.empty() && fs::exists(current, error)) {
+            std::cout << "learning  : already at " << current << "\n";
+        } else if (!legacy.empty() && fs::is_regular_file(legacy, error)) {
+            std::cout << "learning  : would rename " << legacy << " -> " << current << "\n";
+        } else {
+            std::cout << "learning  : nothing to migrate\n";
+        }
+    } else {
+        const fs::path learning = config::defaultLearningPath();
+        std::cout << "learning  : "
+                  << (learning.empty() ? std::string("unavailable") : learning.string()) << "\n";
+    }
+
+    // Rewriting the settings file drops the pre-rename key; loading accepts it,
+    // so this is safe even when the file is already current.
+    const fs::path settingsPath = config::defaultSettingsPath();
+    const auto loaded = config::loadSettings(settingsPath);
+    if (loaded.existed) {
+        if (dryRun) {
+            std::cout << "settings  : would rewrite " << settingsPath << "\n";
+        } else {
+            std::string error;
+            if (config::saveSettings(settingsPath, loaded.settings, error)) {
+                std::cout << "settings  : rewrote " << settingsPath << "\n";
+            } else {
+                std::cerr << "settings  : cannot rewrite: " << error << "\n";
+                status = 1;
+            }
+        }
+    } else {
+        std::cout << "settings  : not present, nothing to rewrite\n";
+    }
+    return status;
+}
+
+/// Fills in the pinyin data paths, honouring command-line overrides.
+pinyin::Paths pinyinPaths(const fs::path &sharedOverride, const fs::path &userOverride) {
+    pinyin::Paths paths = pinyin::Paths::fromEnvironment();
     if (!sharedOverride.empty()) {
         paths.sharedData = fs::absolute(sharedOverride);
     }
@@ -270,7 +376,7 @@ rime::Paths rimePaths(const fs::path &sharedOverride, const fs::path &userOverri
 
 /// Reports what the engine would see: library, directories, compiled artifacts.
 int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverride) {
-    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
+    const pinyin::Paths paths = pinyinPaths(sharedOverride, userOverride);
     std::error_code error;
     const bool shared = fs::is_directory(paths.sharedData, error);
 
@@ -278,7 +384,7 @@ int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverrid
     std::cout << "user      : " << paths.userData << '\n';
 
     {
-        rime::LibrimePort probe;
+        pinyin::LibrimePort probe;
         if (!probe.available()) {
             std::cout << "library   : unavailable (" << probe.unavailableReason() << ")\n";
             return 1;
@@ -299,11 +405,11 @@ int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverrid
         }
     }
     std::cout << "schemas   : " << schemas << " in the shared directory\n";
-    const bool artifacts = rime::hasCompiledArtifacts(paths);
-    std::cout << "artifacts : " << (artifacts ? "present" : "missing (run: superior-config rime deploy)")
+    const bool artifacts = pinyin::hasCompiledArtifacts(paths);
+    std::cout << "artifacts : " << (artifacts ? "present" : "missing (run: superior-config pinyin deploy)")
               << '\n';
     if (!shared) {
-        std::cout << "verdict   : no schema data; run scripts/fetch-rime-data.sh first\n";
+        std::cout << "verdict   : no schema data; run scripts/fetch-pinyin-data.sh first\n";
         return 1;
     }
     return artifacts ? 0 : 1;
@@ -315,15 +421,15 @@ int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverrid
 /// minutes, and doing it inside the addon would block every key press (or need a
 /// worker thread that Fcitx5 may unload from under librime).
 int handleRimeDeploy(const fs::path &sharedOverride, const fs::path &userOverride) {
-    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
+    const pinyin::Paths paths = pinyinPaths(sharedOverride, userOverride);
     std::error_code error;
     if (!fs::is_directory(paths.sharedData, error)) {
         std::cerr << "superior-config: no shared data at " << paths.sharedData
-                  << "; run scripts/fetch-rime-data.sh first\n";
+                  << "; run scripts/fetch-pinyin-data.sh first\n";
         return 1;
     }
 
-    rime::LibrimePort port;
+    pinyin::LibrimePort port;
     if (!port.available()) {
         std::cerr << "superior-config: librime is not available: " << port.unavailableReason()
                   << '\n';
@@ -343,7 +449,7 @@ int handleRimeDeploy(const fs::path &sharedOverride, const fs::path &userOverrid
         std::cerr << "superior-config: deployment failed: " << message << '\n';
         return 1;
     }
-    if (!rime::hasCompiledArtifacts(paths)) {
+    if (!pinyin::hasCompiledArtifacts(paths)) {
         std::cerr << "superior-config: deployment reported success but produced no .bin files\n";
         return 1;
     }
@@ -359,15 +465,15 @@ int handleRimeDeploy(const fs::path &sharedOverride, const fs::path &userOverrid
 /// enabled", so this exists as a one-command answer.
 int handleRimeLookup(const std::string &word, const fs::path &sharedOverride,
                      const fs::path &userOverride) {
-    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
-    rime::LibrimePort port;
+    const pinyin::Paths paths = pinyinPaths(sharedOverride, userOverride);
+    pinyin::LibrimePort port;
     if (!port.available()) {
         std::cerr << "superior-config: librime is not available: " << port.unavailableReason()
                   << '\n';
         return 1;
     }
 
-    rime::RimeEngine engine(port);
+    pinyin::RimeEngine engine(port);
     std::string message;
     if (!engine.start(paths, message)) {
         std::cerr << "superior-config: " << message << '\n';
@@ -386,11 +492,11 @@ int handleRimeLookup(const std::string &word, const fs::path &sharedOverride,
         }
         // X11 keysyms for ASCII letters are the character codes themselves.
         const auto result = engine.processKey(
-            rime::KeyInput{static_cast<std::uint32_t>(character), 0, false});
+            pinyin::KeyInput{static_cast<std::uint32_t>(character), 0, false});
         committed += result.commit;
     }
 
-    const rime::Snapshot snapshot = engine.snapshot();
+    const pinyin::Snapshot snapshot = engine.snapshot();
     std::cout << "schema    : " << port.schemaId() << '\n';
     std::cout << "preedit   : " << snapshot.composition.preedit << '\n';
     std::cout << "page      : " << snapshot.menu.pageIndex
@@ -428,9 +534,12 @@ int main(int argc, char **argv) {
     fs::path skinOverride;
     fs::path sharedOverride;
     fs::path userOverride;
+    bool dryRun = false;
     std::vector<std::string> positional;
     for (std::size_t i = 0; i < arguments.size(); ++i) {
-        if (arguments[i] == "--skin-dir" && i + 1 < arguments.size()) {
+        if (arguments[i] == "--dry-run") {
+            dryRun = true;
+        } else if (arguments[i] == "--skin-dir" && i + 1 < arguments.size()) {
             skinOverride = arguments[++i];
         } else if (arguments[i] == "--shared" && i + 1 < arguments.size()) {
             sharedOverride = arguments[++i];
@@ -466,9 +575,17 @@ int main(int argc, char **argv) {
         }
         return handleCloudProbe(backend, pinyin);
     }
-    if (command == "rime") {
+    if (command == "migrate") {
+        return handleMigrate(dryRun);
+    }
+    if (command == "pinyin" || command == "rime") {
+        // `rime` is a deprecated alias: the subcommand is named after the
+        // capability, not after the engine it currently uses.
+        if (command == "rime") {
+            std::cerr << "superior-config: 'rime' is deprecated; use 'pinyin'\n";
+        }
         if (positional.size() < 2) {
-            std::cerr << "superior-config: rime needs 'status' or 'deploy'\n";
+            std::cerr << "superior-config: pinyin needs 'status', 'deploy' or 'lookup'\n";
             return 2;
         }
         const std::string &action = positional[1];
@@ -482,7 +599,7 @@ int main(int argc, char **argv) {
             return handleRimeLookup(positional.size() > 2 ? positional[2] : std::string("nihao"),
                                     sharedOverride, userOverride);
         }
-        std::cerr << "superior-config: unknown rime action '" << action << "'\n";
+        std::cerr << "superior-config: unknown pinyin action '" << action << "'\n";
         return 2;
     }
     if (command == "theme") {

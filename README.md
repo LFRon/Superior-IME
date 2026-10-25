@@ -12,7 +12,7 @@
 详细设计：[PLAN.md](PLAN.md)、[docs/architecture.md](docs/architecture.md)、
 [docs/skin-format.md](docs/skin-format.md)、[docs/logging.md](docs/logging.md)、
 [docs/fcitx5-integration.md](docs/fcitx5-integration.md)、
-[docs/rime-engine.md](docs/rime-engine.md)。
+[docs/pinyin-engine.md](docs/pinyin-engine.md)。
 
 ---
 
@@ -121,17 +121,17 @@ setsid fcitx5 -d
 | 产物 | 类型 |
 |---|---|
 | `libsuperioragent.so` + `superioragent.conf` | `Category=Module` 观察者 addon（不是输入法） |
-| `libsuperiorrime.so` + `superiorrime.conf` | `Category=InputMethod` 的引擎 addon（内置 librime） |
-| `super-ime.conf` | **唯一**输入法条目，uniqueName = `super-ime`，绑定 `Addon=superiorrime` |
+| `libsuperiorpinyin.so` + `superiorpinyin.conf` | `Category=InputMethod` 的引擎 addon（内置 librime） |
+| `super-ime.conf` | **唯一**输入法条目，uniqueName = `super-ime`，绑定 `Addon=superiorpinyin` |
 
 Rime 条目的方案数据不在安装包里，需要单独下载并编译（约 26 MB，一次即可）：
 
 ```bash
-scripts/fetch-rime-data.sh
+scripts/fetch-pinyin-data.sh
 ```
 
 没下载时条目仍然存在，但打字没有候选，日志会说明缺什么。
-只有一个条目，没有需要二选一的“兼容模式”，详见 [docs/rime-engine.md](docs/rime-engine.md)。
+只有一个条目，没有需要二选一的“兼容模式”，详见 [docs/pinyin-engine.md](docs/pinyin-engine.md)。
 
 新增条目必须**重启** Fcitx5 才会出现在“添加输入法”里；`fcitx5-remote -r` 不够，
 `Controller1.ResetIMList` 会重建分组并丢掉用户条目，不要用。
@@ -179,15 +179,15 @@ SUPERIOR_LOG_VIA_QT=1 QT_LOGGING_RULES="superior.*=true" ./superior_ui
 方案数据不在仓库里，由脚本下载并部署到独立目录：
 
 ```bash
-scripts/fetch-rime-data.sh
-superior-config rime lookup nihao   # 端到端自检
+scripts/fetch-pinyin-data.sh
+superior-config pinyin lookup nihao   # 端到端自检
 ```
 
 - 方案：万象拼音 Pure（版本固定在脚本里，SHA-256 校验）
-- 位置：`$XDG_DATA_HOME/superior-ime/rime/{shared,user}`
+- 位置：`$XDG_DATA_HOME/superior-ime/pinyin/{shared,user}`
 - 与 `~/.config/fcitx5/rime` 完全隔离，不读取也不修改系统的 Rime 配置
 - 用户词频由 Rime 的 `userdb` 维护；云端选词由 `learning.json` 维护
-- 设计、部署、翻页与语法模型的取舍见 [docs/rime-engine.md](docs/rime-engine.md)
+- 设计、部署、翻页与语法模型的取舍见 [docs/pinyin-engine.md](docs/pinyin-engine.md)
 
 ---
 
@@ -392,7 +392,7 @@ docs/
 
 - `frontend/` 不得依赖 `backend/core`、`backend/runtime`、`fcitx*`；
 - `backend/core` 不得依赖 Qt / Fcitx5 / 墙钟；
-- `backend/rime` 不得依赖 Qt / Fcitx5，公共头不得出现 `rime_api.h` / `dlfcn.h`；
+- `backend/pinyin` 不得依赖 Qt / Fcitx5，公共头不得出现 `rime_api.h` / `dlfcn.h`；
 - `backend/skin` 不得依赖 Qt 或做像素解码；
 - `backend/api` 不得依赖任何实现。
 
@@ -404,6 +404,6 @@ GPL-3.0-or-later，见 [LICENSE](LICENSE)。
 
 内置皮肤为本项目自绘，不含任何第三方输入法的素材、字体或图标。
 
-可选下载的万象拼音方案/词库不随仓库分发，由 `scripts/fetch-rime-data.sh`
+可选下载的万象拼音方案/词库不随仓库分发，由 `scripts/fetch-pinyin-data.sh`
 按需获取，其许可为 CC-BY-4.0（作者 amzxyz），详见
-[docs/rime-engine.md](docs/rime-engine.md)。
+[docs/pinyin-engine.md](docs/pinyin-engine.md)。

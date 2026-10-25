@@ -18,8 +18,10 @@ done
 
 files=(
     "$HOME/.local/lib/fcitx5/libsuperioragent.so"
+    "$HOME/.local/lib/fcitx5/libsuperiorpinyin.so"
     "$HOME/.local/lib/fcitx5/libsuperiorrime.so"
     "$HOME/.local/share/fcitx5/addon/superioragent.conf"
+    "$HOME/.local/share/fcitx5/addon/superiorpinyin.conf"
     "$HOME/.local/share/fcitx5/addon/superiorrime.conf"
     "$HOME/.local/share/fcitx5/inputmethod/super-ime.conf"
     # Cleanup for installs made before the engine became the only entry.

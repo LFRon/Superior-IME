@@ -11,11 +11,13 @@
 #include <utility>
 
 #include "superior/diagnostics/Log.hpp"
-#include "superior/rime/RimePaths.hpp"
+#include "superior/pinyin/Layout.hpp"
 
 namespace superior::fcitx5 {
 
 namespace diag = ::superior::diagnostics;
+
+namespace pinyin = superior::pinyin;
 
 namespace {
 
@@ -142,28 +144,28 @@ int selectionSlot(const fcitx::Key &key) {
 RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
     : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr) {
     diag::configureFromEnvironment();
-    paths_ = rime::Paths::fromEnvironment();
+    paths_ = pinyin::Paths::fromEnvironment();
 
     // Probe without initializing: the addon must stay loadable on a machine
     // where librime is missing, so the log explains the failure instead of
     // Fcitx5 reporting a broken addon.
     {
-        rime::LibrimePort probe;
+        pinyin::LibrimePort probe;
         libraryReady_ = probe.available();
         if (!libraryReady_) {
             startError_ = probe.unavailableReason();
         } else {
-            SUPERIOR_INFO(diag::categories::Rime)
+            SUPERIOR_INFO(diag::categories::Pinyin)
                 .field("version", probe.libraryVersion())
                 .field("shared", paths_.sharedData.string())
                 .field("user", paths_.userData.string())
-                .field("artifacts", rime::hasCompiledArtifacts(paths_))
+                .field("artifacts", pinyin::hasCompiledArtifacts(paths_))
                 << "rime input method addon starting";
         }
     }
 
     if (!libraryReady_) {
-        SUPERIOR_WARN(diag::categories::Rime)
+        SUPERIOR_WARN(diag::categories::Pinyin)
             .field("error", startError_)
             << "librime is not available; the Rime input method cannot be used";
     }
@@ -179,7 +181,7 @@ RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
         punctuationRegistered_ =
             instance_->userInterfaceManager().registerAction("punctuation", &punctuationAction_);
         if (!punctuationRegistered_) {
-            SUPERIOR_WARN(diag::categories::Rime)
+            SUPERIOR_WARN(diag::categories::Pinyin)
                 << "status action 'punctuation' is already registered; "
                    "leaving punctuation to the other addon";
         }
@@ -226,14 +228,14 @@ RimeInputMethod::Session *RimeInputMethod::sessionFor(fcitx::InputContext *input
     auto session = std::make_unique<Session>();
     std::string error;
     if (!session->engine.start(paths_, error)) {
-        SUPERIOR_WARN(diag::categories::Rime)
+        SUPERIOR_WARN(diag::categories::Pinyin)
             .field("program", inputContext->program())
             .field("error", error)
             << "cannot open a rime session for this input context";
         return nullptr;
     }
     if (session->engine.needsDeploy()) {
-        SUPERIOR_WARN(diag::categories::Rime)
+        SUPERIOR_WARN(diag::categories::Pinyin)
             .field("shared", paths_.sharedData.string())
             .field("user", paths_.userData.string())
             << "rime has no compiled schema yet; run scripts/fetch-rime-data.sh, then restart";
@@ -251,7 +253,7 @@ void RimeInputMethod::forget(fcitx::InputContext *inputContext) {
     }
     it->second->engine.stop();
     sessions_.erase(it);
-    SUPERIOR_DEBUG(diag::categories::Rime)
+    SUPERIOR_DEBUG(diag::categories::Pinyin)
         .field("remaining", static_cast<std::int64_t>(sessions_.size()))
         << "rime session closed";
 }
@@ -322,12 +324,12 @@ void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyE
     }
 
     const bool asciiBefore = session->engine.asciiMode();
-    rime::KeyInput key;
+    pinyin::KeyInput key;
     key.sym = static_cast<std::uint32_t>(event.key().sym());
     key.states = static_cast<std::uint32_t>(event.key().states() & rimeModifierMask());
     key.release = event.isRelease();
 
-    const rime::RimeEngine::KeyResult result = session->engine.processKey(key);
+    const pinyin::RimeEngine::KeyResult result = session->engine.processKey(key);
 
     // Defense for an old deployment: with the shipped `default.custom.yaml`
     // librime never toggles, but a data directory deployed before that patch
@@ -336,12 +338,12 @@ void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyE
     // "switch back to Chinese still types English".
     if (isAsciiToggleKey(event.key().sym()) && session->engine.asciiMode()) {
         session->engine.setAsciiMode(false);
-        SUPERIOR_DEBUG(diag::categories::Rime)
+        SUPERIOR_DEBUG(diag::categories::Pinyin)
             .field("sym", static_cast<std::int64_t>(event.key().sym()))
             << "librime tried to switch ascii_mode; kept it off (the agent owns the switch)";
     }
 
-    SUPERIOR_TRACE(diag::categories::Rime)
+    SUPERIOR_TRACE(diag::categories::Pinyin)
         .field("sym", static_cast<std::int64_t>(key.sym))
         .field("release", key.release)
         .field("consumed", result.consumed)
@@ -372,7 +374,7 @@ bool RimeInputMethod::handleSelectionKey(fcitx::InputContext *inputContext,
     }
 
     const fcitx::Key key = event.key();
-    SUPERIOR_TRACE(diag::categories::Rime)
+    SUPERIOR_TRACE(diag::categories::Pinyin)
         .field("sym", static_cast<std::int64_t>(key.sym()))
         .field("rows", static_cast<std::int64_t>(list->size()))
         .field("cursor", static_cast<std::int64_t>(list->cursorIndex()))
@@ -400,7 +402,7 @@ bool RimeInputMethod::handleSelectionKey(fcitx::InputContext *inputContext,
     }
     const int slot = selectionSlot(key);
     if (slot >= 0 && slot < list->size()) {
-        SUPERIOR_TRACE(diag::categories::Rime)
+        SUPERIOR_TRACE(diag::categories::Pinyin)
             .field("slot", static_cast<std::int64_t>(slot))
             .field("text", list->candidate(slot).text().toString())
             << "selecting the visible row";
@@ -408,7 +410,7 @@ bool RimeInputMethod::handleSelectionKey(fcitx::InputContext *inputContext,
         return true;
     }
     if (slot >= 0) {
-        SUPERIOR_TRACE(diag::categories::Rime)
+        SUPERIOR_TRACE(diag::categories::Pinyin)
             .field("slot", static_cast<std::int64_t>(slot))
             .field("rows", static_cast<std::int64_t>(list->size()))
             << "selection slot is outside this page";
@@ -491,7 +493,7 @@ void RimeInputMethod::updatePanel(fcitx::InputContext *inputContext, Session &se
                     return;
                 }
                 Session &target = *it->second;
-                SUPERIOR_DEBUG(diag::categories::Rime)
+                SUPERIOR_DEBUG(diag::categories::Pinyin)
                     .field("rimeIndex", static_cast<std::int64_t>(rimeIndex))
                     .field("program", context->program())
                     << "candidate selected from the visible list";
@@ -547,13 +549,13 @@ void RimeInputMethod::refreshPunctuationAction() {
 }
 
 void RimeInputMethod::togglePunctuation(fcitx::InputContext *inputContext) {
-    SUPERIOR_DEBUG(diag::categories::Rime)
+    SUPERIOR_DEBUG(diag::categories::Pinyin)
         .field("program", inputContext != nullptr ? inputContext->program() : std::string{})
         .field("sessions", static_cast<std::int64_t>(sessions_.size()))
         << "punctuation action activated";
     const auto it = sessions_.find(inputContext);
     if (it == sessions_.end()) {
-        SUPERIOR_DEBUG(diag::categories::Rime)
+        SUPERIOR_DEBUG(diag::categories::Pinyin)
             .field("program", inputContext != nullptr ? inputContext->program() : std::string{})
             << "punctuation action ignored: no session for this context";
         return;
@@ -570,7 +572,7 @@ void RimeInputMethod::togglePunctuation(fcitx::InputContext *inputContext) {
     refreshPunctuationAction();
 
     inputContext->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
-    SUPERIOR_INFO(diag::categories::Rime)
+    SUPERIOR_INFO(diag::categories::Pinyin)
         .field("halfWidth", half)
         .field("program", inputContext->program())
         << "punctuation width changed";

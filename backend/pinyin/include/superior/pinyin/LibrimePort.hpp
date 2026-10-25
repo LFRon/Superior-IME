@@ -5,9 +5,9 @@
 #include <memory>
 #include <string>
 
-#include "superior/rime/RimePort.hpp"
+#include "superior/pinyin/RimePort.hpp"
 
-namespace superior::rime {
+namespace superior::pinyin {
 
 /// `RimePort` backed by the real librime shared library.
 ///
@@ -57,4 +57,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace superior::rime
+} // namespace superior::pinyin

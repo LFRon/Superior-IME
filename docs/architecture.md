@@ -15,7 +15,8 @@ Superior-IME 的第一原则：**前端与后端分开，UI 只能通过契约�
 ```
 backend/                 纯后端：无 Qt、无窗口、headless 可测
 ├─ api/                  契约：事件、场景帧、命令、端口、能力
-├─ core/                 纯逻辑：组合、候选、选中、翻页、可见性、语音状态
+├─ core/                 决策层：模式、按键归属、候选、场景折叠、语音状态
+├─ pinyin/               能力：拼音（librime + 万象）
 ├─ runtime/              串行泵、票据、代次隔离、确定性采样
 ├─ skin/                 皮肤模型、校验、内容哈希
 ├─ protocol/             IPC 帧编解码与能力协商
@@ -102,9 +103,9 @@ flowchart TB
   AGENT -- 提交文本 --> ENGINE
 ```
 
-- **文本输入由内置 librime 完成**（`backend/rime` + `libsuperiorrime.so`）。
+- **文本输入由内置 librime 完成**（`backend/pinyin` + `libsuperiorpinyin.so`）。
   Superior-IME 不自己实现拼音语言模型，只做引擎适配，见
-  [docs/rime-engine.md](rime-engine.md)。
+  [docs/pinyin-engine.md](pinyin-engine.md)。
 - **语义状态在 agent**：候选、选中、可见性、皮肤代次、语音状态。
 - **瞬时视觉状态在 UI**：hover、按下、动画进度。
 - UI 崩溃不影响输入；agent 继续提交文本，UI 重连后重建快照。
@@ -198,7 +199,7 @@ MovePanel         { session, deltaX, deltaY }
 | `skins/default` | 已提供 |
 | `backend/core` | 已实现：`Modes`（模式唯一 owner）、`KeyPolicy`（按键归属）、`CandidateModel`（代次稳定 id）、`SceneInput`（引擎/宿主事实折叠）、`ImeSession` |
 | `backend/protocol` | 已实现：帧、JSON 编解码、Unix socket 广播 |
-| `backend/rime` | 已实现：librime 端口、会话状态机、路径与部署检测 |
+| `backend/pinyin` | 已实现：librime 端口、会话状态机、数据布局与迁移、部署检测 |
 | `backend/platforms/fcitx5` | 已实现：Rime 引擎适配、观察者 agent、内联中英文、command 处理 |
 | `frontend/desktop` | 已实现：自绘候选窗（皮肤）+ 可点击状态栏 + 设置热重载 + 平台自动选择 |
 | `frontend/settings` | 已实现：原生 Qt 设置页（外观/输入/状态栏/语音/高级/关于） |

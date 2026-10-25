@@ -33,7 +33,7 @@ SUPERIOR_LOG_VIA_QT=1 QT_LOGGING_RULES="superior.*=true" ./superior_ui
 ## 2. 输出格式
 
 ```
-2026-10-24T17:54:31.859Z [I] superior.rime RimeEngine.cpp:36 rime engine ready schema=wanxiang_pure needsDeploy=false shared=… user=…
+2026-10-24T17:54:31.859Z [I] superior.pinyin RimeEngine.cpp:36 rime engine ready schema=wanxiang_pure needsDeploy=false shared=… user=…
 ```
 
 固定字段：UTC 时间、`[T|D|I|W|E]`、类别、`文件:行`、消息、`key=value`。
@@ -116,7 +116,7 @@ diag::setSink([](const diag::Record &record) { /* 写文件、转发、测试 */
 | `superior.protocol` | `Wire.cpp` | 帧解码（类型、字节数） |
 | `superior.protocol.socket` | `SceneServer.cpp` | 监听、连接/断开、队列丢弃、关闭 |
 | `superior.fcitx5` | `SuperiorAgent.cpp` | 启动/停止、焦点、光标矩形、IM 切换、事实摘要、广播、命令 |
-| `superior.rime` | `RimeEngine` / `LibrimePort` | 库加载、schema、部署、按键与候选（只记形状） |
+| `superior.pinyin` | `RimeEngine` / `LibrimePort` | 库加载、schema、部署、按键与候选（只记形状） |
 | `superior.ui` | `SceneClient.cpp` | 连接、断线重试、坏帧、收到场景 |
 
 ---

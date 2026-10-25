@@ -23,8 +23,10 @@
 #include <vector>
 
 #include "superior/core/Modes.hpp"
-#include "superior/rime/LibrimePort.hpp"
-#include "superior/rime/RimeEngine.hpp"
+#include "superior/pinyin/LibrimePort.hpp"
+#include "superior/pinyin/RimeEngine.hpp"
+
+namespace pinyin = superior::pinyin;
 
 namespace superior::fcitx5 {
 
@@ -72,9 +74,9 @@ private:
     /// belongs to exactly one port, so sharing a port across contexts would make
     /// every window type into the same composition.
     struct Session {
-        rime::LibrimePort port;
-        rime::RimeEngine engine{port};
-        rime::Snapshot lastSnapshot;
+        pinyin::LibrimePort port;
+        pinyin::RimeEngine engine{port};
+        pinyin::Snapshot lastSnapshot;
         /// Candidate texts the current panel list was built from. While they
         /// match, the list is left alone, so rows inserted by the agent (cloud
         /// pinyin, learned words) survive cursor movement.
@@ -121,7 +123,7 @@ private:
     /// agent owns the Chinese/English switch. Each `Modes` instance therefore
     /// owns exactly the fields its process can write.
     core::Modes modes_;
-    rime::Paths paths_;
+    pinyin::Paths paths_;
     bool libraryReady_ = false;
     std::string startError_;
 };

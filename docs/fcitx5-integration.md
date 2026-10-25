@@ -14,8 +14,8 @@ Superior-IME 同时提供两者：
 | 文件 | 类别 | 说明 |
 |---|---|---|
 | `superioragent.conf` + `libsuperioragent.so` | `Category=Module` | 观察者 + 浮层：把输入状态通过 socket 推给 UI |
-| `superiorrime.conf` + `libsuperiorrime.so` | `Category=InputMethod` | 拼音引擎：内置 librime，万象方案 |
-| `super-ime.conf` | `[InputMethod]` | 唯一出现在“添加输入法”里的条目，绑定 `superiorrime` |
+| `superiorpinyin.conf` + `libsuperiorpinyin.so` | `Category=InputMethod` | 拼音引擎：内置 librime，万象方案 |
+| `super-ime.conf` | `[InputMethod]` | 唯一出现在“添加输入法”里的条目，绑定 `superiorpinyin` |
 
 ---
 
@@ -33,7 +33,7 @@ Comment[zh_CN]=Rime 引擎（万象方案），由 Superior 提供皮肤与状�
 Icon=org.superior.ime
 Label=进
 LangCode=zh_CN
-Addon=superiorrime
+Addon=superiorpinyin
 Configurable=False
 ```
 
@@ -41,7 +41,7 @@ Configurable=False
 
 - **文件名即 uniqueName**：`super-ime.conf` → `super-ime`。所以
   `fcitx5-remote -s super-ime` 可用，且不会和已有的 `pinyin` 条目冲突。
-- `Addon=superiorrime`：引擎是本仓库的 `libsuperiorrime.so`。**只有这一个条目**，
+- `Addon=superiorpinyin`：引擎是本仓库的 `libsuperiorpinyin.so`。**只有这一个条目**，
   旧的 `Addon=pinyin` 条目已删除；唯一名仍是 `super-ime`，所以旧配置里的分组
   项不需要改名。
 - `Configurable=False`：还没有独立的引擎配置页。
@@ -65,9 +65,9 @@ sudo cmake --install build/linux-system
 /usr/bin/superior_ui
 /usr/bin/superior_settings
 /usr/lib/<multiarch>/fcitx5/libsuperioragent.so
-/usr/lib/<multiarch>/fcitx5/libsuperiorrime.so
+/usr/lib/<multiarch>/fcitx5/libsuperiorpinyin.so
 /usr/share/fcitx5/addon/superioragent.conf
-/usr/share/fcitx5/addon/superiorrime.conf
+/usr/share/fcitx5/addon/superiorpinyin.conf
 /usr/share/fcitx5/inputmethod/super-ime.conf
 /usr/share/icons/hicolor/scalable/apps/org.superior.ime.svg
 /usr/share/superior-ime/skins/
@@ -82,9 +82,9 @@ sudo cmake --install build/linux-system
 ~/.local/bin/superior_ui                              # 200 字节包装脚本
 ~/.local/bin/superior_settings
 ~/.local/lib/fcitx5/libsuperioragent.so
-~/.local/lib/fcitx5/libsuperiorrime.so
+~/.local/lib/fcitx5/libsuperiorpinyin.so
 ~/.local/share/fcitx5/addon/superioragent.conf
-~/.local/share/fcitx5/addon/superiorrime.conf
+~/.local/share/fcitx5/addon/superiorpinyin.conf
 ~/.local/share/fcitx5/inputmethod/super-ime.conf
 ~/.local/bin/superior-config                         # rime status/deploy/lookup
 ~/.local/share/icons/hicolor/scalable/apps/org.superior.ime.svg
@@ -145,7 +145,7 @@ if (const auto *entry = inputMethodManager().entry(imName)) {
 ## 5. 当前边界
 
 - 拼音引擎、词库、用户学习、候选生成全部由内置 librime 负责，方案数据在
-  `$XDG_DATA_HOME/superior-ime/rime`，与系统的 `fcitx5-rime` 隔离。
+  `$XDG_DATA_HOME/superior-ime/pinyin`，与系统的 `fcitx5-rime` 隔离。
 - agent 注册观察者、接管面板并处理 Shift 轻按；它不注册输入法条目。
 - 这个条目目前没有独立配置页（`Configurable=False`）。
 - 从旧版本升级时可能残留 `super-ime-rime.conf`；`uninstall-user.sh` 会清理它，

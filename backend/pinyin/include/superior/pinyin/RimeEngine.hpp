@@ -6,10 +6,10 @@
 #include <string_view>
 #include <vector>
 
-#include "superior/rime/RimePort.hpp"
-#include "superior/rime/Types.hpp"
+#include "superior/pinyin/RimePort.hpp"
+#include "superior/pinyin/Types.hpp"
 
-namespace superior::rime {
+namespace superior::pinyin {
 
 /// Input method state machine on top of a `RimePort`.
 ///
@@ -97,4 +97,4 @@ private:
     bool ascii_ = false;
 };
 
-} // namespace superior::rime
+} // namespace superior::pinyin

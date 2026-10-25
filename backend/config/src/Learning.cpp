@@ -20,15 +20,43 @@ constexpr std::string_view kSchema = "superior.learning/1";
 
 } // namespace
 
-fs::path defaultLearningPath() {
+namespace {
+
+fs::path configHomeFromEnvironment() {
     if (const char *configHome = std::getenv("XDG_CONFIG_HOME");
         configHome != nullptr && configHome[0] != '\0') {
-        return fs::path(configHome) / "superior-ime" / "learning.json";
+        return fs::path(configHome);
     }
     if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".config" / "superior-ime" / "learning.json";
+        return fs::path(home) / ".config";
     }
     return {};
+}
+
+} // namespace
+
+fs::path defaultLearningPath() {
+    const fs::path home = configHomeFromEnvironment();
+    if (home.empty()) {
+        return {};
+    }
+    // Capability-private state lives under `pinyin/`: product preferences stay
+    // in `settings.json`, but a learned pinyin/word pair is knowledge the
+    // pinyin capability owns.
+    const fs::path appDir = home / "superior-ime";
+    const fs::path path = appDir / "pinyin" / "learning.json";
+
+    // One-time migration from the flat layout. Same rule as the data directory:
+    // rename only when the new file does not exist yet, never merge.
+    std::error_code error;
+    const fs::path legacy = appDir / "learning.json";
+    if (!fs::exists(path, error) && fs::is_regular_file(legacy, error)) {
+        std::error_code createError;
+        fs::create_directories(path.parent_path(), createError);
+        std::error_code renameError;
+        fs::rename(legacy, path, renameError);
+    }
+    return path;
 }
 
 LearningLoad loadLearning(const fs::path &path) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "superior/rime/LibrimePort.hpp"
+#include "superior/pinyin/LibrimePort.hpp"
 
 #include <dlfcn.h>
 
@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "rime_api.h"
-#include "superior/rime/RimePaths.hpp"
+#include "superior/pinyin/Layout.hpp"
 
-namespace superior::rime {
+namespace superior::pinyin {
 
 namespace {
 
@@ -372,4 +372,4 @@ std::string LibrimePort::schemaId() {
     return id;
 }
 
-} // namespace superior::rime
+} // namespace superior::pinyin

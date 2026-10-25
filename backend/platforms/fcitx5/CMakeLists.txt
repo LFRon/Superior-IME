@@ -58,27 +58,27 @@ if(SUPERIOR_ENABLE_FCITX5)
     # librime engine. A separate addon library, so a machine without librime
     # still loads the agent and Fcitx5 reports what is missing instead of failing
     # the whole addon tree.
-    add_library(superior_fcitx5_rime MODULE
+    add_library(superior_fcitx5_pinyin MODULE
         src/RimeInputMethod.cpp)
 
-    target_include_directories(superior_fcitx5_rime PRIVATE
+    target_include_directories(superior_fcitx5_pinyin PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
-    target_link_libraries(superior_fcitx5_rime PRIVATE
+    target_link_libraries(superior_fcitx5_pinyin PRIVATE
         Fcitx5::Core
         Superior::Core
-        Superior::Rime
+        Superior::Pinyin
         Superior::Diagnostics)
 
-    set_target_properties(superior_fcitx5_rime PROPERTIES
-        OUTPUT_NAME superiorrime)
+    set_target_properties(superior_fcitx5_pinyin PROPERTIES
+        OUTPUT_NAME superiorpinyin)
 
-    target_compile_features(superior_fcitx5_rime PRIVATE cxx_std_20)
-    superior_set_warnings(superior_fcitx5_rime)
+    target_compile_features(superior_fcitx5_pinyin PRIVATE cxx_std_20)
+    superior_set_warnings(superior_fcitx5_pinyin)
 
     configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/data/superiorrime.conf.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/superiorrime.conf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/superiorpinyin.conf.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/superiorpinyin.conf"
         @ONLY)
 
     # The input method entry is a plain file: Fcitx5 derives the unique name
@@ -88,11 +88,11 @@ if(SUPERIOR_ENABLE_FCITX5)
         "${CMAKE_CURRENT_BINARY_DIR}/super-ime.conf"
         COPYONLY)
 
-    install(TARGETS superior_fcitx5_agent superior_fcitx5_rime
+    install(TARGETS superior_fcitx5_agent superior_fcitx5_pinyin
         LIBRARY DESTINATION "${SUPERIOR_FCITX5_ADDON_DIR}")
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/superioragent.conf"
-        "${CMAKE_CURRENT_BINARY_DIR}/superiorrime.conf"
+        "${CMAKE_CURRENT_BINARY_DIR}/superiorpinyin.conf"
         DESTINATION "${SUPERIOR_FCITX5_DATA_DIR}")
 
     # Exactly one entry: its Addon is superiorrime, so there is no second

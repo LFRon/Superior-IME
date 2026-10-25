@@ -8,9 +8,9 @@
 #include <string_view>
 #include <vector>
 
-namespace superior::rime {
+namespace superior::pinyin {
 
-/// Where librime keeps its data.
+/// Where the pinyin capability keeps its data.
 ///
 /// Deliberately **not** Fcitx5's Rime directory: this engine owns its own
 /// schemas and its own user dictionary, so installing 先！进！ never touches a
@@ -23,8 +23,10 @@ struct Paths {
     /// Short name reported to librime; shows up in its logs and file names.
     std::string appName = "superior-ime";
 
-    /// Resolves `$XDG_DATA_HOME/superior-ime/rime/{shared,user}`.
+    /// Resolves `$XDG_DATA_HOME/superior-ime/pinyin/{shared,user}`,
+    /// migrating the legacy `rime/` directory when needed.
     [[nodiscard]] static Paths fromEnvironment();
+    /// Derives the paths from a data home without touching the filesystem.
     [[nodiscard]] static Paths withRoot(const std::filesystem::path &dataHome,
                                         std::string appName = "superior-ime");
 };
@@ -98,4 +100,4 @@ struct DeployState {
     std::string detail;
 };
 
-} // namespace superior::rime
+} // namespace superior::pinyin

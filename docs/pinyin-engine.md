@@ -1,7 +1,7 @@
 # 内置 librime 拼音引擎
 
 拼音引擎是**自己内嵌的 librime**，不是 `fcitx5-rime`，也不是 Fcitx5 的 libime。
-Fcitx5 里只有一个条目 `super-ime`，绑定本仓库的 `libsuperiorrime.so`；旧的
+Fcitx5 里只有一个条目 `super-ime`，绑定本仓库的 `libsuperiorpinyin.so`；旧的
 libime 条目已经删除，不存在第二个“Rime 版”可选。
 
 皮肤、状态栏、云拼音、学习记录和 Shift 中英文切换都挂在 `super-ime` 上，
@@ -18,13 +18,13 @@ addon 里，Superior 只能旁观，无法把「云拼音插到第 2 位」「�
 - 数据目录独立，绝不碰用户已有的 `~/.config/fcitx5/rime`。
 
 `librime` 通过 `dlopen("librime.so.1")` 加载，没有链接期依赖：没装 librime 的
-机器上 `libsuperiorrime.so` 仍能加载，并在日志里说明原因，而不是让整个 addon
+机器上 `libsuperiorpinyin.so` 仍能加载，并在日志里说明原因，而不是让整个 addon
 加载失败。
 
 ## 分层
 
 ```
-backend/rime/                纯逻辑，不含 Qt / Fcitx5，可单测
+backend/pinyin/                纯逻辑，不含 Qt / Fcitx5，可单测
   Types.hpp                  按键、组合、菜单、快照、部署状态
   RimePort.hpp               引擎需要的全部 librime 能力（接口）
   RimeEngine.{hpp,cpp}       状态机：按键、提交、翻页、ASCII 模式
@@ -35,14 +35,14 @@ backend/platforms/fcitx5/
   RimeInputMethod.{h,cpp}    Fcitx5 适配层，一个 IC 一个 librime session
 ```
 
-`backend/rime` 的公共头禁止包含 `rime_api.h` / `dlfcn.h`，也禁止 Qt/Fcitx5，
+`backend/pinyin` 的公共头禁止包含 `rime_api.h` / `dlfcn.h`，也禁止 Qt/Fcitx5，
 由 `scripts/check-boundaries.sh` 强制。这样同一套状态机以后可以直接给
 Windows TSF 或 Android 用。
 
 ## 数据目录与部署
 
 ```
-$XDG_DATA_HOME/superior-ime/rime/
+$XDG_DATA_HOME/superior-ime/pinyin/
   shared/     方案、词库、opencc 数据（只读）
   user/       userdb、learning、编译产物 build/*.bin
 ```
@@ -51,14 +51,14 @@ librime **不会**自动编译方案：没有 `user/build/*.bin` 时 `create_ses
 但 `schema_id` 为空，输入没有候选。因此部署是显式的一步：
 
 ```bash
-scripts/fetch-rime-data.sh          # 下载万象 Pure 并部署
-scripts/fetch-rime-data.sh --no-deploy
-scripts/fetch-rime-data.sh --gram   # 额外下载 399 MB 语法模型
-scripts/fetch-rime-data.sh --force  # 强制重新下载/解压
+scripts/fetch-pinyin-data.sh          # 下载万象 Pure 并部署
+scripts/fetch-pinyin-data.sh --no-deploy
+scripts/fetch-pinyin-data.sh --gram   # 额外下载 399 MB 语法模型
+scripts/fetch-pinyin-data.sh --force  # 强制重新下载/解压
 
-superior-config rime status         # 库版本、目录、产物是否存在
-superior-config rime deploy
-superior-config rime lookup nihao
+superior-config pinyin status         # 库版本、目录、产物是否存在
+superior-config pinyin deploy
+superior-config pinyin lookup nihao
 ```
 
 `install-user.sh` 会把 CLI 装成 `~/.local/bin/superior-config`；没安装时用
@@ -69,7 +69,7 @@ superior-config rime lookup nihao
 - 首次部署约 10 秒（本机 SSD），产物在 `user/build/`，约 100 MB。
 - 部署放在 CLI 而不是 addon：首次编译会阻塞数秒到数分钟，放在 Fcitx5 进程里
   要么卡住所有按键，要么得开线程，而 Fcitx5 会 `dlclose` addon，线程不安全。
-- `rime lookup` 是最快的端到端自检：它真的开一个 session、按键、打印候选，
+- `pinyin lookup` 是最快的端到端自检：它真的开一个 session、按键、打印候选，
   能把「没候选」和「addon 没启用」区分开。
 
 ## 候选与按键：为什么选中要绕过引擎
@@ -111,7 +111,7 @@ patch:
     Control_R: noop
 ```
 
-- 文件由 `scripts/fetch-rime-data.sh` 写入，随后自动重新部署；升级代码后需要
+- 文件由 `scripts/fetch-pinyin-data.sh` 写入，随后自动重新部署；升级代码后需要
   再跑一次，否则旧部署里仍是 `commit_code`。
 - `default.custom.yaml` 属于内置引擎自己的数据目录，不要复制到
   `~/.config/fcitx5/rime`。
@@ -155,7 +155,7 @@ patch:
 需要语法模型时：
 
 ```bash
-scripts/fetch-rime-data.sh --gram
+scripts/fetch-pinyin-data.sh --gram
 ```
 
 它会把 `wanxiang-lts-zh-hans.gram` 放到 **`user/`**（librime 是按 user 目录找这个
@@ -174,17 +174,17 @@ scripts/fetch-rime-data.sh --gram
 
 - 引擎代码：GPL-3.0-or-later（本仓库）。
 - `third_party/rime/rime_api.h`：BSD-3-Clause，版权归 RIME Developers。
-- 万象拼音方案与词库（**不随仓库分发**，由 `fetch-rime-data.sh` 下载）：
+- 万象拼音方案与词库（**不随仓库分发**，由 `fetch-pinyin-data.sh` 下载）：
   CC-BY-4.0，作者 amzxyz，来源
   <https://github.com/amzxyz/rime-wanxiang>。
 
 ## 测试
 
 ```bash
-ctest --test-dir build/linux-ui -R 'rime-engine|rime-dict'
+ctest --test-dir build/linux-ui -R 'pinyin-engine|rime-dict'
 ```
 
-`tests/rime_engine_tests.cpp` 用假 port 覆盖：release 位、修饰键透传、提交只
+`tests/pinyin_engine_tests.cpp` 用假 port 覆盖：release 位、修饰键透传、提交只
 drain 一次、部署后重开会话、候选索引校验、路径隔离、产物检测。
-真实 librime 的行为用 `superior-config rime lookup` 验证，不在 ctest 里跑
+真实 librime 的行为用 `superior-config pinyin lookup` 验证，不在 ctest 里跑
 （它需要下载数据）。

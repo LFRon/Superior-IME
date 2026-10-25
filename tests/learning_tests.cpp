@@ -169,8 +169,10 @@ void testDefaultPathHonoursXdgConfigHome() {
     const char *previous = std::getenv("XDG_CONFIG_HOME");
     const std::string saved = previous != nullptr ? std::string(previous) : std::string{};
     setenv("XDG_CONFIG_HOME", "/tmp/xdg-learning-test", 1);
+    // Capability-private state lives under `pinyin/`; product preferences stay
+    // at the root of the app directory.
     CHECK(superior::config::defaultLearningPath() ==
-          fs::path("/tmp/xdg-learning-test/superior-ime/learning.json"));
+          fs::path("/tmp/xdg-learning-test/superior-ime/pinyin/learning.json"));
     if (saved.empty()) {
         unsetenv("XDG_CONFIG_HOME");
     } else {

@@ -1,16 +1,19 @@
-# librime-backed pinyin engine for Superior-IME.
+# Pinyin capability for Superior-IME.
+#
+# Named after the capability, not the engine: the library happens to be a
+# librime adapter today, but the addon contract is "provides pinyin".
 #
 # Separate from superioragent on purpose: a missing librime or missing schema
 # disables only the input method, never the UI agent.
 [Addon]
-Name=Superior Rime Engine
-Name[zh_CN]=Superior Rime 引擎
-Name[zh_TW]=Superior Rime 引擎
+Name=Superior Pinyin Engine
+Name[zh_CN]=先进拼音引擎
+Name[zh_TW]=先進拼音引擎
 Comment=Pinyin engine backed by the bundled librime, with the Wanxiang schema
 Comment[zh_CN]=由内置 librime 提供拼音，使用万象方案
 Comment[zh_TW]=由內建 librime 提供拼音，使用萬象方案
 Type=SharedLibrary
-Library=libsuperiorrime
+Library=libsuperiorpinyin
 Category=InputMethod
 OnDemand=True
 Version=@PROJECT_VERSION@

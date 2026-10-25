@@ -31,10 +31,10 @@ done
 so="$(find "$build" -name 'libsuperioragent.so' -print -quit 2>/dev/null || true)"
 addon_conf="$(find "$build" -name 'superioragent.conf' -print -quit 2>/dev/null || true)"
 entry_conf="$(find "$build" -name 'super-ime.conf' -print -quit 2>/dev/null || true)"
-# The librime engine is optional: a build with SUPERIOR_ENABLE_FCITX5 always
+# The pinyin engine is optional: a build with SUPERIOR_ENABLE_FCITX5 always
 # produces it, but an older build tree may not, and the agent must still install.
-rime_so="$(find "$build" -name 'libsuperiorrime.so' -print -quit 2>/dev/null || true)"
-rime_addon_conf="$(find "$build" -name 'superiorrime.conf' -print -quit 2>/dev/null || true)"
+pinyin_so="$(find "$build" -name 'libsuperiorpinyin.so' -print -quit 2>/dev/null || true)"
+pinyin_addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/dev/null || true)"
 ui="$build/frontend/desktop/superior_ui"
 settings="$build/frontend/settings/superior_settings"
 config_cli="$build/tools/superior-config/superior_config_cli"
@@ -73,8 +73,8 @@ echo "install-user:"
 echo "  $so            -> $lib_dir/libsuperioragent.so"
 echo "  $addon_conf    -> $addon_dir/superioragent.conf"
 echo "  $entry_conf    -> $im_dir/super-ime.conf"
-[[ -n "$rime_so" ]] && echo "  $rime_so -> $lib_dir/libsuperiorrime.so"
-[[ -n "$rime_addon_conf" ]] && echo "  $rime_addon_conf -> $addon_dir/superiorrime.conf"
+[[ -n "$pinyin_so" ]] && echo "  $pinyin_so -> $lib_dir/libsuperiorpinyin.so"
+[[ -n "$pinyin_addon_conf" ]] && echo "  $pinyin_addon_conf -> $addon_dir/superiorpinyin.conf"
 echo "  $ui            -> $bin_dir/superior_ui"
 [[ -x "$settings" ]] && echo "  $settings -> $bin_dir/superior_settings"
 [[ -x "$config_cli" ]] && echo "  $config_cli -> $bin_dir/superior-config"
@@ -90,9 +90,12 @@ fi
 install -Dm755 "$so" "$lib_dir/libsuperioragent.so"
 install -Dm644 "$addon_conf" "$addon_dir/superioragent.conf"
 install -Dm644 "$entry_conf" "$im_dir/super-ime.conf"
-if [[ -n "$rime_so" && -n "$rime_addon_conf" ]]; then
-    install -Dm755 "$rime_so" "$lib_dir/libsuperiorrime.so"
-    install -Dm644 "$rime_addon_conf" "$addon_dir/superiorrime.conf"
+if [[ -n "$pinyin_so" && -n "$pinyin_addon_conf" ]]; then
+    install -Dm755 "$pinyin_so" "$lib_dir/libsuperiorpinyin.so"
+    install -Dm644 "$pinyin_addon_conf" "$addon_dir/superiorpinyin.conf"
+    # The addon was renamed with the capability; a leftover copy would make
+    # Fcitx5 load two engines that provide the same input method.
+    rm -f "$lib_dir/libsuperiorrime.so" "$addon_dir/superiorrime.conf"
 else
     echo "install-user: no Rime engine in this build; text input will not work" >&2
 fi
@@ -167,7 +170,7 @@ The overlay starts itself when the agent loads; you can also run it by hand:
   ~/.local/bin/superior_ui            # wrapper -> ~/.local/share/superior-ime/bin/superior_ui
 
 The input method needs its schema data (26 MB download, compiled locally):
-  scripts/fetch-rime-data.sh
+  scripts/fetch-pinyin-data.sh
 Without it the entry still appears, but typing has no candidates and the log
 says why. There is only one entry: 「先！进！输入法」 (super-ime).
 

@@ -624,7 +624,7 @@ void SettingsWindow::syncWidgets() {
         statusBarToggle_->setChecked(settings_.showStatusBar);
     }
     if (voiceToggle_ != nullptr) {
-        voiceToggle_->setChecked(settings_.voiceEnabled);
+        voiceToggle_->setChecked(settings_.speechRecognitionEnabled);
     }
     if (placementCombo_ != nullptr) {
         placementCombo_->setCurrentText(placementLabel(settings_.statusPlacement));
@@ -730,7 +730,7 @@ config::Settings SettingsWindow::currentSettings() const {
         result.showStatusBar = statusBarToggle_->isChecked();
     }
     if (voiceToggle_ != nullptr) {
-        result.voiceEnabled = voiceToggle_->isChecked();
+        result.speechRecognitionEnabled = voiceToggle_->isChecked();
     }
     if (placementCombo_ != nullptr) {
         result.statusPlacement = placementValue(placementCombo_->currentText());

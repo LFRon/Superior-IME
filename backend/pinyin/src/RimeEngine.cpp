@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "superior/rime/RimeEngine.hpp"
+#include "superior/pinyin/RimeEngine.hpp"
 
 #include <utility>
 
 #include "superior/diagnostics/Log.hpp"
 
-namespace superior::rime {
+namespace superior::pinyin {
 
 namespace diag = ::superior::diagnostics;
 
@@ -16,7 +16,7 @@ bool RimeEngine::start(const Paths &paths, std::string &error) {
         return true;
     }
     if (!port_.initialize(paths, error)) {
-        SUPERIOR_ERROR(diag::categories::Rime)
+        SUPERIOR_ERROR(diag::categories::Pinyin)
             .field("shared", paths.sharedData.string())
             .field("user", paths.userData.string())
             .field("error", error)
@@ -25,7 +25,7 @@ bool RimeEngine::start(const Paths &paths, std::string &error) {
     }
 
     if (!port_.createSession(error)) {
-        SUPERIOR_ERROR(diag::categories::Rime).field("error", error) << "cannot open a session";
+        SUPERIOR_ERROR(diag::categories::Pinyin).field("error", error) << "cannot open a session";
         port_.finalize();
         return false;
     }
@@ -37,7 +37,7 @@ bool RimeEngine::start(const Paths &paths, std::string &error) {
     // broken with no visible cause.
     port_.setOption("ascii_mode", false);
     refreshAsciiMode();
-    SUPERIOR_INFO(diag::categories::Rime)
+    SUPERIOR_INFO(diag::categories::Pinyin)
         .field("schema", port_.schemaId())
         .field("needsDeploy", needsDeploy_)
         .field("shared", paths.sharedData.string())
@@ -53,7 +53,7 @@ void RimeEngine::stop() {
     port_.destroySession();
     port_.finalize();
     sessionOpen_ = false;
-    SUPERIOR_INFO(diag::categories::Rime) << "rime engine stopped";
+    SUPERIOR_INFO(diag::categories::Pinyin) << "rime engine stopped";
 }
 
 bool RimeEngine::deploy(std::string &error) {
@@ -192,4 +192,4 @@ void RimeEngine::refreshAsciiMode() {
     ascii_ = port_.asciiMode();
 }
 
-} // namespace superior::rime
+} // namespace superior::pinyin

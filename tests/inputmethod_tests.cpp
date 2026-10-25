@@ -50,7 +50,7 @@ void testEntryNameMatchesRequest() {
 void testEntryBindsToTheBundledEngine() {
     const std::string text = entry();
     CHECK(has(text, "[InputMethod]"));
-    CHECK(has(text, "Addon=superiorrime"));
+    CHECK(has(text, "Addon=superiorpinyin"));
     CHECK(has(text, "LangCode=zh_CN"));
     CHECK(has(text, "Configurable=False"));
     // The old entry was removed with the libime engine; a stray binding would

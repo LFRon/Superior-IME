@@ -94,7 +94,7 @@ backend/platforms/fcitx5  ──►  backend/runtime  ──►  backend/core  �
 
 ```
 Fcitx5
-  ├─ libsuperiorrime  (Category=InputMethod, 内置 librime, 唯一输入法条目)
+  ├─ libsuperiorpinyin  (Category=InputMethod, 内置 librime, 唯一输入法条目)
   └─ superior-agent  (Category=Module, 常驻, 无 Qt)
        ├─ 观察 InputContextUpdateUI / FocusIn / FocusOut / IM 切换
        ├─ 读取 InputPanel: preedit / candidates / cursorRect / capabilities

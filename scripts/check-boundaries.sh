@@ -63,9 +63,9 @@ scan "backend/cloudpinyin" '#include[[:space:]]*[<"]fcitx' "cloudpinyin -> fcitx
 # The Rime engine must stay free of any toolkit and of Fcitx5: it is the piece
 # that has to be reusable on Windows/Android later. librime itself is reached
 # only through a port, and only in a .cpp file.
-scan "backend/rime" '#include[[:space:]]*[<"](Q|Qt)' "rime -> Qt"
-scan "backend/rime" '#include[[:space:]]*[<"]fcitx' "rime -> fcitx5"
-scan "backend/rime/include" '#include[[:space:]]*[<"](rime_api|dlfcn)' "rime public header -> librime/dlfcn"
+scan "backend/pinyin" '#include[[:space:]]*[<"](Q|Qt)' "pinyin -> Qt"
+scan "backend/pinyin" '#include[[:space:]]*[<"]fcitx' "pinyin -> fcitx5"
+scan "backend/pinyin/include" '#include[[:space:]]*[<"](rime_api|dlfcn)' "pinyin public header -> librime/dlfcn"
 
 # Runtime may use core, but its public headers must not expose core types.
 scan "backend/runtime/include" '#include[[:space:]]*[<"]superior/core/' "runtime public header -> core"

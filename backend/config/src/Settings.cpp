@@ -74,7 +74,11 @@ SettingsLoad loadSettings(const fs::path &path) {
     settings.showStatusBar = document.value("showStatusBar", settings.showStatusBar);
     settings.statusPlacement = document.value("statusPlacement", settings.statusPlacement);
     settings.uiScale = document.value("uiScale", settings.uiScale);
-    settings.voiceEnabled = document.value("voiceEnabled", settings.voiceEnabled);
+    // `voiceEnabled` is the pre-rename key. Reading it keeps an existing
+    // settings file working; the next save writes the new name only.
+    settings.speechRecognitionEnabled =
+        document.value("speechRecognitionEnabled",
+                       document.value("voiceEnabled", settings.speechRecognitionEnabled));
     settings.logLevel = document.value("logLevel", settings.logLevel);
     settings.cloudPinyinEnabled = document.value("cloudPinyinEnabled", settings.cloudPinyinEnabled);
     settings.cloudPinyinBackend =
@@ -120,7 +124,7 @@ bool saveSettings(const fs::path &path, const Settings &settings, std::string &e
     document["showStatusBar"] = settings.showStatusBar;
     document["statusPlacement"] = settings.statusPlacement;
     document["uiScale"] = settings.uiScale;
-    document["voiceEnabled"] = settings.voiceEnabled;
+    document["speechRecognitionEnabled"] = settings.speechRecognitionEnabled;
     document["logLevel"] = settings.logLevel;
     document["cloudPinyinEnabled"] = settings.cloudPinyinEnabled;
     document["cloudPinyinBackend"] = settings.cloudPinyinBackend;

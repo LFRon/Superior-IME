@@ -7,13 +7,13 @@
 #include <vector>
 
 #include "support/TestSupport.hpp"
-#include "superior/rime/RimeEngine.hpp"
-#include "superior/rime/RimePaths.hpp"
+#include "superior/pinyin/RimeEngine.hpp"
+#include "superior/pinyin/Layout.hpp"
 
 namespace {
 
 namespace fs = std::filesystem;
-using namespace superior::rime;
+using namespace superior::pinyin;
 
 /// Records every call so the tests assert on behaviour, not on librime.
 class FakePort final : public RimePort {
@@ -427,11 +427,14 @@ void testPathsAreIsolatedFromFcitx() {
     // The whole point of owning the engine: our data never lands in the user's
     // existing Rime directory.
     const auto paths = Paths::withRoot("/home/user/.local/share");
-    CHECK(paths.sharedData == fs::path("/home/user/.local/share/superior-ime/rime/shared"));
-    CHECK(paths.userData == fs::path("/home/user/.local/share/superior-ime/rime/user"));
+    CHECK(paths.sharedData == fs::path("/home/user/.local/share/superior-ime/pinyin/shared"));
+    CHECK(paths.userData == fs::path("/home/user/.local/share/superior-ime/pinyin/user"));
     const std::string user = paths.userData.string();
     CHECK(user.find("fcitx5") == std::string::npos);
     CHECK(user.find("superior-ime") != std::string::npos);
+    // The directory names the capability, not the engine it currently uses.
+    CHECK(user.find("/pinyin/") != std::string::npos);
+    CHECK(user.find("/rime/") == std::string::npos);
 }
 
 void testMissingRootLeavesPathsEmpty() {

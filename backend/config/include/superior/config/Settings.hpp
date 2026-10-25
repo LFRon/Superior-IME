@@ -19,7 +19,9 @@ struct Settings {
     bool showStatusBar = true;
     std::string statusPlacement = "bottomRight";
     double uiScale = 1.0;
-    bool voiceEnabled = false;
+    /// Show the microphone button in the toolbar. The recogniser itself is a
+    /// separate capability: this is only the product-level entry point.
+    bool speechRecognitionEnabled = false;
     std::string logLevel = "info";
 
     /// Cloud pinyin. Off by default: enabling it sends what you type to a third
