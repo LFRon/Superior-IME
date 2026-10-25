@@ -82,6 +82,13 @@ constexpr auto kCloudDebounce = std::chrono::milliseconds(200);
 /// snappy without making an idle agent wake up at all.
 constexpr std::uint64_t kCloudTickUs = 40000;
 
+/// Monotonic milliseconds, for "how long has this been in this state".
+std::uint64_t steadyMs() {
+    using namespace std::chrono;
+    return static_cast<std::uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
 /// A candidate that belongs to us rather than to the engine.
 ///
 /// It carries its own commit path because the engine has no idea this word
@@ -256,6 +263,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 500000, 0,
         [this](fcitx::EventSourceTime *source, std::uint64_t) {
             reloadSettings();
+            pollSpeechProcess();
             source->setNextInterval(500000);
             source->setOneShot();
             return true;
@@ -1611,6 +1619,51 @@ void SuperiorAgent::configureSpeechProcess() {
     speechProcess_->send(encodeCommand(configure));
 }
 
+void SuperiorAgent::pollSpeechProcess() {
+    // Whatever the cause — a dead child, a phase event lost on the way — a session
+    // must not stay "busy" forever. This is the difference between "one utterance
+    // failed" and "the input method is dead until Fcitx5 restarts".
+    //
+    // The limits are per phase on purpose: flushing a finished utterance takes a
+    // second or two, so waiting a minute there would be a minute of nothing for
+    // no reason, while recording legitimately lasts until the 60 s cap.
+    const std::uint64_t stuckMs = [this] {
+        switch (speech_.phase()) {
+        case api::SpeechPhase::Recording:
+            return std::uint64_t{65000};
+        case api::SpeechPhase::Transcribing:
+            return std::uint64_t{20000};
+        case api::SpeechPhase::Cancelling:
+            return std::uint64_t{5000};
+        default:
+            return std::uint64_t{0};
+        }
+    }();
+    if (speech_.busy() && stuckMs != 0 && speechPhaseSinceMs_ != 0 &&
+        steadyMs() - speechPhaseSinceMs_ > stuckMs) {
+        SUPERIOR_WARN(diag::categories::SpeechRecognition)
+            .field("phase", api::speechPhaseName(speech_.phase()))
+            .field("idleMs", static_cast<std::int64_t>(steadyMs() - speechPhaseSinceMs_))
+            << "speech session appears stuck; resetting the panel";
+        speechPhaseSinceMs_ = steadyMs();
+        speech_.fail("语音识别超时，已停止。");
+        refresh(activeContext_);
+        return;
+    }
+    if (!speechProcess_ || speechProcess_->running()) {
+        return;
+    }
+    // A dead child is harmless while nothing is in flight: the next start simply
+    // spawns a new one. It is fatal exactly when the user is waiting for it.
+    if (!speech_.busy()) {
+        return;
+    }
+    SUPERIOR_WARN(diag::categories::SpeechRecognition)
+        << "speech capability exited mid-session; ending the session";
+    speech_.fail("语音识别组件意外退出，请重试。");
+    refresh(activeContext_);
+}
+
 void SuperiorAgent::refreshSpeechSetup() {
     using namespace superior::speech_recognition;
     const ModelEntry &entry = selectedModel(speechModelId_);
@@ -1644,7 +1697,12 @@ bool SuperiorAgent::startSpeech() {
     heldSpeech_.clear();
     speechHolding_ = false;
     if (speech_.beginRecording()) {
-        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start));
+        if (!speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start))) {
+            // The pipe is gone: the child died between the readiness check and the
+            // command. Saying so beats a panel that animates a microphone nobody is
+            // listening to.
+            speech_.fail("语音识别组件未响应，请重试。");
+        }
     }
     refresh(activeContext_);
     return speech_.recording();
@@ -1735,6 +1793,7 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
         return;
     }
     const std::string kind = parsed.value("ev", std::string{});
+    speechPhaseSinceMs_ = steadyMs();
 
     if (kind == "ready") {
         speech_.refreshSetup(true, true);

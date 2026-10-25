@@ -185,6 +185,13 @@ private:
     /// Right-Ctrl tap: start when idle, stop when recording, otherwise open the
     /// panel so its setup explanation is visible.
     void toggleSpeechByHotkey();
+    /// Notices a capability process that died mid-session.
+    ///
+    /// Without it the panel kept showing "recording" (or "finishing") forever: the
+    /// child is the only thing that sends phase events, so its death left the state
+    /// machine waiting for an event that could never arrive, and every later click
+    /// was refused because the phase was still busy.
+    void pollSpeechProcess();
     /// Applies one JSON line from the recogniser.
     void handleSpeechEvent(std::string_view line);
     /// Commits a finished transcript to the focused input context.
@@ -264,6 +271,11 @@ private:
     /// owns "what should the panel show and may this transcript be committed".
     core::SpeechState speech_;
     std::unique_ptr<SpeechProcess> speechProcess_;
+    /// When the speech state last changed. A session cannot outlive
+    /// `sessionCapMs` by much, so a phase that stays busy far longer means an
+    /// event was lost — and a lost event used to mean the panel refused every
+    /// later click because it still believed a session was running.
+    std::uint64_t speechPhaseSinceMs_ = 0;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = true;
     /// True once the overlay socket is bound, so the retry timer can stop.

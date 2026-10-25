@@ -417,6 +417,18 @@ bool SpeechRecognitionPanel::eventFilter(QObject *watched, QEvent *event) {
     if (mic_ != nullptr && watched == mic_) {
         if (event->type() == QEvent::MouseButtonRelease) {
             auto *mouse = static_cast<QMouseEvent *>(event);
+            // A refused click used to leave no trace anywhere, which is how "the
+            // second utterance did nothing" stayed unexplained: the panel knew the
+            // phase and quietly ignored the user.
+            if (mouse->button() == Qt::LeftButton &&
+                mic_->rect().contains(mouse->position().toPoint())) {
+                if (!micActionable()) {
+                    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+                        .field("phase", api::speechPhaseName(scene_.phase))
+                        .field("downloading", downloader_.running())
+                        << "microphone click ignored: the panel is not in a startable phase";
+                }
+            }
             if (mouse->button() == Qt::LeftButton && micActionable() &&
                 mic_->rect().contains(mouse->position().toPoint()) && command_) {
                 if (scene_.phase == api::SpeechPhase::Recording) {
