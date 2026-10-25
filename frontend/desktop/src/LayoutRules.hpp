@@ -14,6 +14,9 @@ enum class Placement { BottomRight, BottomLeft, TopRight, TopLeft };
 [[nodiscard]] Placement placementFromString(std::string_view value) noexcept;
 [[nodiscard]] std::string_view placementName(Placement placement) noexcept;
 
+/// Inset used when an overlay is anchored or clamped to a screen edge.
+inline constexpr int kOverlayMargin = 12;
+
 struct Rect {
     int left = 0;
     int top = 0;

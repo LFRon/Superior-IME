@@ -2,6 +2,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 add_executable(superior_ui
     src/CandidateWindow.cpp
+    src/DragHandle.cpp
     src/LayoutRules.cpp
     src/Logging.cpp
     src/Overlay.cpp

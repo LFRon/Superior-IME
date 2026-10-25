@@ -477,6 +477,10 @@ QWidget *SettingsWindow::buildStatusPage() {
         placementCombo_->addItem(QString::fromUtf8(placement.label));
     }
     card->addWidget(makeRow(tr("位置"), tr("相对屏幕可用区域"), placementCombo_));
+    card->addWidget(makeLabel(
+        tr("直接拖动状态栏左侧的圆点也能移动它，位置会立刻记住；"
+           "在这里重新选择位置会丢弃拖动过的坐标。"),
+        "rowHint"));
 
     layout->addStretch();
     return scrolled(page);

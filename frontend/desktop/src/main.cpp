@@ -17,6 +17,7 @@
 #include "superior/api/Commands.hpp"
 #include "superior/config/Fcitx5Config.hpp"
 #include "superior/config/Settings.hpp"
+#include "superior/config/StatusBarState.hpp"
 #include "superior/protocol/SceneServer.hpp"
 #include "superior/skin/Skin.hpp"
 
@@ -153,6 +154,41 @@ int main(int argc, char **argv) {
     status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
     status.setEnabled(settings.showStatusBar);
 
+    // Dragged position lives in its own file: the overlay writes it on every
+    // drag release, the settings page writes settings.json. Mixing them would
+    // make one overwrite the other.
+    const std::filesystem::path statusStatePath = config::defaultStatusBarStatePath();
+    config::StatusBarState statusState = config::loadStatusBarState(statusStatePath).state;
+    if (statusState.hasCustomPosition) {
+        if (statusState.placement == settings.statusPlacement) {
+            status.setSavedPosition(superior::ui::Point{statusState.x, statusState.y});
+        } else {
+            // The user picked another corner after dragging; the corner wins.
+            std::string ignored;
+            static_cast<void>(config::clearStatusBarState(statusStatePath, ignored));
+            statusState.hasCustomPosition = false;
+        }
+    }
+    status.setPositionChangeHandler([&](int x, int y) {
+        statusState.hasCustomPosition = true;
+        statusState.x = x;
+        statusState.y = y;
+        statusState.placement = settings.statusPlacement;
+        std::string error;
+        if (!config::saveStatusBarState(statusStatePath, statusState, error)) {
+            SUPERIOR_WARN(diag::categories::Ui)
+                .field("error", error)
+                .field("path", statusStatePath.string())
+                << "cannot persist the status bar position";
+            return;
+        }
+        SUPERIOR_INFO(diag::categories::Ui)
+            .field("x", static_cast<std::int64_t>(x))
+            .field("y", static_cast<std::int64_t>(y))
+            .field("path", statusStatePath.string())
+            << "status bar position saved";
+    });
+
     superior::ui::SceneClient client(socketPath);
 
     std::optional<api::UiSceneFrame> lastFrame;
@@ -221,7 +257,16 @@ int main(int argc, char **argv) {
         settingsStampValid = true;
 
         const auto loaded = config::loadSettings(settingsPath);
+        const std::string previousPlacement = settings.statusPlacement;
         settings = loaded.settings;
+        if (settings.statusPlacement != previousPlacement) {
+            // Choosing a corner in the settings page discards the dragged
+            // position, otherwise the choice would appear to do nothing.
+            status.setSavedPosition(std::nullopt);
+            std::string ignored;
+            static_cast<void>(config::clearStatusBarState(statusStatePath, ignored));
+            statusState.hasCustomPosition = false;
+        }
         if (settings.skinId != activeSkinId) {
             activeSkinId = settings.skinId;
             activeSkin = loadConfiguredSkin(paths, activeSkinId);

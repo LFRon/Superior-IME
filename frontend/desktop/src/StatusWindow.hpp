@@ -7,6 +7,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,15 @@ public:
     /// scene decision, so it survives the next scene frame.
     void setEnabled(bool enabled);
 
+    /// Restores a dragged position (`statusbar.json`). Empty means "use
+    /// `statusPlacement` again", which is what picking another corner in the
+    /// settings page does.
+    void setSavedPosition(std::optional<Point> position);
+    [[nodiscard]] std::optional<Point> savedPosition() const { return customPosition_; }
+
+    /// Called once per finished drag with the final top-left corner.
+    void setPositionChangeHandler(std::function<void(int, int)> handler);
+
     /// Emitted with the clicked item id (`inline-mode` for the 中/英 badge).
     void setItemClickHandler(std::function<void(const std::string &)> handler);
 
@@ -46,9 +56,16 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
     [[nodiscard]] int scaled(int value) const;
+    /// Applies either the dragged position or the configured corner.
+    void reposition();
+    /// Screen under `global` (falling back to the primary screen).
+    [[nodiscard]] Rect availableRectAt(const QPoint &global) const;
 
     SkinTheme theme_ = SkinTheme::fallback();
     std::vector<api::StatusItem> items_;
@@ -60,7 +77,12 @@ private:
     double scale_ = 1.0;
     bool enabled_ = true;
     bool visible_ = false;
+    bool dragging_ = false;
+    bool handleHover_ = false;
+    QPoint dragOffset_;
+    std::optional<Point> customPosition_;
     std::function<void(const std::string &)> itemClick_;
+    std::function<void(int, int)> positionChange_;
 };
 
 } // namespace superior::ui

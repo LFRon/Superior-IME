@@ -17,6 +17,12 @@ target_include_directories(superior_inline_text_tests PRIVATE "${CMAKE_CURRENT_S
 target_compile_features(superior_inline_text_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_inline_text_tests)
 
+add_executable(superior_candidate_actions_tests candidate_actions_tests.cpp)
+target_link_libraries(superior_candidate_actions_tests PRIVATE Superior::Fcitx5Mapping)
+target_include_directories(superior_candidate_actions_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_candidate_actions_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_candidate_actions_tests)
+
 add_executable(superior_shift_tap_tests shift_tap_tests.cpp)
 target_link_libraries(superior_shift_tap_tests PRIVATE Superior::Fcitx5Mapping)
 target_include_directories(superior_shift_tap_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -42,6 +48,34 @@ target_include_directories(superior_layout_rules_tests PRIVATE
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
 target_compile_features(superior_layout_rules_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_layout_rules_tests)
+
+add_executable(superior_candidate_label_tests
+    candidate_label_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/CandidateLabel.cpp")
+target_include_directories(superior_candidate_label_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_candidate_label_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_candidate_label_tests)
+
+add_executable(superior_preedit_layout_tests
+    preedit_layout_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/PreeditLayout.cpp")
+target_link_libraries(superior_preedit_layout_tests PRIVATE Superior::Fcitx5Mapping)
+target_include_directories(superior_preedit_layout_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_preedit_layout_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_preedit_layout_tests)
+
+add_executable(superior_wheel_step_tests
+    wheel_step_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/WheelStep.cpp")
+target_include_directories(superior_wheel_step_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_wheel_step_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_wheel_step_tests)
 
 add_executable(superior_config_tests config_tests.cpp)
 target_link_libraries(superior_config_tests PRIVATE Superior::Config)
@@ -103,9 +137,13 @@ superior_set_warnings(superior_runtime_tests)
 add_test(NAME diagnostics COMMAND superior_diagnostics_tests)
 add_test(NAME skin COMMAND superior_skin_tests)
 add_test(NAME inline-text COMMAND superior_inline_text_tests)
+add_test(NAME candidate-actions COMMAND superior_candidate_actions_tests)
 add_test(NAME shift-tap COMMAND superior_shift_tap_tests)
 add_test(NAME qt-platform COMMAND superior_qt_platform_tests)
 add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
+add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
+add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
+add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)
 add_test(NAME config COMMAND superior_config_tests)
 add_test(NAME inputmethod COMMAND superior_inputmethod_tests)
 add_test(NAME theme COMMAND superior_theme_tests)

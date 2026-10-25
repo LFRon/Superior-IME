@@ -9,10 +9,6 @@
 
 namespace superior::ui {
 
-namespace {
-constexpr int kMargin = 12;
-}
-
 void makeOverlay(QWidget &widget) {
     widget.setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint |
                           Qt::WindowStaysOnTopHint | Qt::BypassWindowManagerHint |
@@ -32,7 +28,7 @@ void placeOverlay(QWidget &widget, Placement placement, int extraBottom) {
         overlayPosition(Point{widget.width(), widget.height()}, placement,
                         Rect{available.left(), available.top(), available.width(),
                              available.height()},
-                        kMargin, extraBottom);
+                        kOverlayMargin, extraBottom);
     widget.move(position.x, position.y);
 }
 
