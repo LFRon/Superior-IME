@@ -144,6 +144,17 @@ int selectionSlot(const fcitx::Key &key) {
 RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
     : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr) {
     diag::configureFromEnvironment();
+
+    // Migrate before touching the data. This is the only place that renames the
+    // directory: library-level path resolution stays side-effect free, so a CLI
+    // or a unit test can never move the data out from under a running Fcitx5.
+    const pinyin::MigrationResult migration = pinyin::migrateLegacyLayoutFromEnvironment();
+    if (migration.migrated) {
+        SUPERIOR_INFO(diag::categories::Pinyin)
+            .field("root", migration.root.string())
+            << "pinyin data migrated at startup";
+    }
+
     paths_ = pinyin::Paths::fromEnvironment();
 
     // Probe without initializing: the addon must stay loadable on a machine
@@ -611,4 +622,4 @@ public:
 
 } // namespace
 
-FCITX_ADDON_FACTORY_V2(superiorrime, RimeInputMethodFactory);
+FCITX_ADDON_FACTORY_V2(superiorpinyin, RimeInputMethodFactory);

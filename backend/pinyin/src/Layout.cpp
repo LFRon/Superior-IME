@@ -47,6 +47,42 @@ fs::path defaultPinyinRoot() {
     return home / kAppDir / kCapabilityDir;
 }
 
+LayoutDecision decideLayout(bool newExists, bool legacyExists) noexcept {
+    if (newExists || !legacyExists) {
+        return LayoutDecision::UseNew;
+    }
+    return LayoutDecision::UseLegacy;
+}
+
+LayoutResolution locatePinyinRoot(const fs::path &dataHome) {
+    LayoutResolution resolution;
+    if (dataHome.empty()) {
+        return resolution;
+    }
+
+    // An explicit override wins over every heuristic.
+    if (const char *override = std::getenv("SUPERIOR_PINYIN_DIR");
+        override != nullptr && override[0] != '\0') {
+        resolution.root = override;
+        resolution.decision = LayoutDecision::UseNew;
+        return resolution;
+    }
+
+    const fs::path appDir = dataHome / kAppDir;
+    const fs::path newRoot = appDir / kCapabilityDir;
+    const fs::path legacyRoot = appDir / kLegacyDir;
+
+    const bool newExists = isDirectory(newRoot);
+    const bool legacyExists = isDirectory(legacyRoot);
+    resolution.decision = decideLayout(newExists, legacyExists);
+    resolution.root = resolution.decision == LayoutDecision::UseLegacy ? legacyRoot : newRoot;
+    return resolution;
+}
+
+LayoutResolution locatePinyinRootFromEnvironment() {
+    return locatePinyinRoot(dataHomeFromEnvironment());
+}
+
 namespace {
 
 /// True when a leveldb in `userDir` is held by a live process.
@@ -55,8 +91,7 @@ namespace {
 /// directory underneath the running process would leave two writers on the same
 /// files (the old process keeps its file descriptors, the new one opens the new
 /// path), which is exactly how a leveldb ends up recovering from a `lost/`
-/// directory. So a migration is skipped while the data is in use, and the caller
-/// keeps reading the legacy path.
+/// directory.
 bool databaseInUse(const fs::path &userDir) {
 #if defined(__unix__) || defined(__APPLE__)
     const fs::path lockPath = userDir / "LOCK";
@@ -86,100 +121,72 @@ bool databaseInUse(const fs::path &userDir) {
 
 } // namespace
 
-LayoutDecision decideLayout(bool newExists, bool legacyExists) noexcept {
-    if (newExists) {
-        // A half-finished migration leaves both behind; the new directory wins
-        // and the legacy one is reported, never merged.
-        return LayoutDecision::UseNew;
-    }
-    if (legacyExists) {
-        return LayoutDecision::RenameLegacy;
-    }
-    return LayoutDecision::UseNew;
-}
-
-LayoutResolution resolvePinyinRoot(const fs::path &dataHome) {
-    LayoutResolution resolution;
+MigrationResult migrateLegacyLayout(const fs::path &dataHome) {
+    MigrationResult result;
     if (dataHome.empty()) {
-        return resolution;
+        return result;
     }
 
     const fs::path appDir = dataHome / kAppDir;
     const fs::path newRoot = appDir / kCapabilityDir;
     const fs::path legacyRoot = appDir / kLegacyDir;
 
-    // An explicit override wins over every heuristic.
-    if (const char *override = std::getenv("SUPERIOR_PINYIN_DIR");
-        override != nullptr && override[0] != '\0') {
-        resolution.root = override;
-        resolution.decision = LayoutDecision::UseNew;
-        return resolution;
-    }
-
-    const bool newExists = isDirectory(newRoot);
-    const bool legacyExists = isDirectory(legacyRoot);
-    resolution.decision = decideLayout(newExists, legacyExists);
-
-    switch (resolution.decision) {
-    case LayoutDecision::UseNew:
-        resolution.root = newRoot;
-        if (newExists && legacyExists) {
+    if (isDirectory(newRoot)) {
+        result.root = newRoot;
+        if (isDirectory(legacyRoot)) {
             SUPERIOR_WARN(diag::categories::Pinyin)
                 .field("new", newRoot.string())
                 .field("legacy", legacyRoot.string())
                 << "both pinyin data directories exist; using the new one and "
                    "leaving the legacy directory untouched";
         }
-        return resolution;
-
-    case LayoutDecision::RenameLegacy:
-    case LayoutDecision::UseLegacyFallback:
-        break;
+        return result;
+    }
+    if (!isDirectory(legacyRoot)) {
+        result.root = newRoot;
+        return result;
     }
 
     if (databaseInUse(legacyRoot / "user")) {
-        resolution.root = legacyRoot;
-        resolution.decision = LayoutDecision::UseLegacyFallback;
-        resolution.detail = "the data directory is in use";
+        result.root = legacyRoot;
+        result.detail = "the data directory is in use";
         SUPERIOR_INFO(diag::categories::Pinyin)
             .field("root", legacyRoot.string())
             << "pinyin data migration deferred: the directory is in use; "
                "restart Fcitx5 to finish it";
-        return resolution;
+        return result;
     }
 
     std::error_code error;
     fs::rename(legacyRoot, newRoot, error);
-    if (!error) {
-        resolution.root = newRoot;
-        resolution.migrated = true;
-        SUPERIOR_INFO(diag::categories::Pinyin)
+    if (error) {
+        // Keep reading the old directory instead of starting with no data at all.
+        result.root = legacyRoot;
+        result.detail = error.message();
+        SUPERIOR_WARN(diag::categories::Pinyin)
             .field("from", legacyRoot.string())
             .field("to", newRoot.string())
-            << "migrated the pinyin data directory";
-        return resolution;
+            .field("error", error.message())
+            << "cannot migrate the pinyin data directory; keeping the legacy path";
+        return result;
     }
 
-    // Do not pretend the data is gone: keep reading the old directory so the
-    // user can still type, and say exactly why the rename failed.
-    resolution.root = legacyRoot;
-    resolution.decision = LayoutDecision::UseLegacyFallback;
-    resolution.detail = error.message();
-    SUPERIOR_WARN(diag::categories::Pinyin)
+    result.migrated = true;
+    result.root = newRoot;
+    SUPERIOR_INFO(diag::categories::Pinyin)
         .field("from", legacyRoot.string())
         .field("to", newRoot.string())
-        .field("error", error.message())
-        << "cannot migrate the pinyin data directory; using the legacy path";
-    return resolution;
+        << "migrated the pinyin data directory";
+    return result;
 }
 
-LayoutResolution resolvePinyinRootFromEnvironment() {
-    return resolvePinyinRoot(dataHomeFromEnvironment());
+MigrationResult migrateLegacyLayoutFromEnvironment() {
+    return migrateLegacyLayout(dataHomeFromEnvironment());
 }
 
 Paths Paths::fromEnvironment() {
     Paths paths;
-    const LayoutResolution resolution = resolvePinyinRootFromEnvironment();
+    const LayoutResolution resolution = locatePinyinRootFromEnvironment();
     if (resolution.root.empty()) {
         return paths;
     }

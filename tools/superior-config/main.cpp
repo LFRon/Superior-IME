@@ -296,14 +296,14 @@ int handleMigrate(bool dryRun) {
                 std::cout << "data      : nothing to migrate\n";
             }
         } else {
-            const pinyin::LayoutResolution resolution =
-                pinyin::resolvePinyinRootFromEnvironment();
+            const pinyin::MigrationResult resolution =
+                pinyin::migrateLegacyLayoutFromEnvironment();
             if (resolution.root.empty()) {
                 std::cout << "data      : cannot resolve the data directory\n";
                 status = 1;
             } else if (resolution.migrated) {
                 std::cout << "data      : migrated to " << resolution.root << "\n";
-            } else if (resolution.decision == pinyin::LayoutDecision::UseLegacyFallback) {
+            } else if (!resolution.detail.empty()) {
                 std::cout << "data      : kept " << resolution.root << " (" << resolution.detail
                           << ")\n";
                 status = 1;

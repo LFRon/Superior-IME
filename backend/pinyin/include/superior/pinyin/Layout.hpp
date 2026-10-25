@@ -17,39 +17,48 @@ namespace superior::pinyin {
 /// overwriting a user's existing setup.
 [[nodiscard]] std::filesystem::path defaultPinyinRoot();
 
-/// What to do about the pre-rename layout (`…/superior-ime/rime`).
+/// Which directory a read should use.
 ///
-/// Split out as a pure decision so it can be tested without a filesystem, and so
-/// the fallback is explicit: if the rename fails we must keep using the old
-/// directory rather than starting with no data at all.
+/// Resolution is **pure**: it only decides where the data is, and never moves
+/// anything. A library call that renames directories is a footgun — a CLI or a
+/// test binary would be able to pull the data out from under a running Fcitx5.
 enum class LayoutDecision {
-    /// Neither directory exists (fresh install) or the new one already does.
+    /// `.../superior-ime/pinyin` exists, or nothing exists yet (fresh install).
     UseNew,
-    /// Only the legacy directory exists; try to rename it.
-    RenameLegacy,
-    /// The rename failed; keep using the legacy directory so typing still works.
-    UseLegacyFallback,
+    /// Only the pre-rename `.../superior-ime/rime` exists; read it as-is until a
+    /// migration is requested.
+    UseLegacy,
 };
 
 [[nodiscard]] LayoutDecision decideLayout(bool newExists, bool legacyExists) noexcept;
 
-/// Result of actually resolving the data root, including a migration attempt.
 struct LayoutResolution {
     std::filesystem::path root;
     LayoutDecision decision = LayoutDecision::UseNew;
-    /// True when a rename actually happened, for logging.
-    bool migrated = false;
-    /// Non-empty when the rename was attempted and failed.
-    std::string detail;
 };
 
-/// Resolves the data root, renaming `rime/` to `pinyin/` when that is the only
-/// directory present. Idempotent; safe to call on every start.
-[[nodiscard]] LayoutResolution resolvePinyinRoot(const std::filesystem::path &dataHome);
+/// Locates the data root for reading. Never touches the filesystem.
+[[nodiscard]] LayoutResolution locatePinyinRoot(const std::filesystem::path &dataHome);
+[[nodiscard]] LayoutResolution locatePinyinRootFromEnvironment();
 
-/// Same as `resolvePinyinRoot(Paths::fromEnvironment())`, exposed for callers
-/// that only have a `Paths`.
-[[nodiscard]] LayoutResolution resolvePinyinRootFromEnvironment();
+/// Result of an explicit migration attempt.
+struct MigrationResult {
+    bool migrated = false;
+    /// Non-empty when a rename was attempted and failed, or was deferred.
+    std::string detail;
+    std::filesystem::path root;
+};
+
+/// Renames `rime/` to `pinyin/` when that is the only directory present.
+///
+/// Idempotent, and deliberately conservative:
+/// - never merges: when both exist, the new one wins and the legacy one is left
+///   untouched for the user to inspect;
+/// - never renames while a leveldb in `rime/user` is locked by a live process,
+///   because two writers on one database corrupt it (observed in practice);
+/// - never deletes anything.
+[[nodiscard]] MigrationResult migrateLegacyLayout(const std::filesystem::path &dataHome);
+[[nodiscard]] MigrationResult migrateLegacyLayoutFromEnvironment();
 
 /// True when the user data directory already contains compiled schema artifacts.
 ///
