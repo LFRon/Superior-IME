@@ -228,7 +228,8 @@ fcitx5-remote -e && fcitx5 -d
 标点项画成图形而不是「半角标点」四个字，原因有两个：字宽会随着切换变化，
 整条工具栏会跟着跳；而且这个状态本就适合用图形表达。形状由
 `StatusGlyph.cpp` 决定，`active`（全角）画实心圆，否则画月牙；月牙是「圆减去
-偏移的圆」，缺口用工具栏底色绘制而不是抠透明，否则会露出后面的窗口。
+偏移的圆」，缺口用工具栏底色绘制而不是抠透明，否则会露出后面的窗口。缺口方向
+从正右（0°）逆时针旋转 45°（`kMoonRotationDegrees`），所以月牙开口朝右上。
 
 状态来源要注意：`punctuation` 这个 action 的 `isChecked()` 永远是 false，真正
 的状态在它的图标名 `fcitx-punc-active` / `fcitx-punc-inactive` 里。所以

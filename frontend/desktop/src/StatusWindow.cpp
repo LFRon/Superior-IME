@@ -65,8 +65,14 @@ void paintGlyph(QPainter &painter, Glyph glyph, const QRect &cell, const QColor 
         // Crescent = circle minus an offset circle. The bite is painted in the
         // bar's own colour instead of clearing to transparent: clearing would
         // punch a hole through the skin background and show the window behind.
+        //
+        // Only the offset is rotated, not the painter: a circle minus a circle
+        // is rotationally symmetric, so rotating the direction is the same
+        // shape with less bookkeeping.
+        const MoonBite bite = moonBiteDirection(kMoonRotationDegrees);
+        const double distance = radius * 0.62;
         painter.setBrush(background);
-        painter.drawEllipse(outer.translated(radius * 0.62, 0.0));
+        painter.drawEllipse(outer.translated(bite.x * distance, bite.y * distance));
     }
 
     painter.restore();

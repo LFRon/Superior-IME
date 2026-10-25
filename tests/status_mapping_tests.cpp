@@ -65,6 +65,27 @@ void testTextItemsHaveNoGlyph() {
     CHECK(superior::ui::glyphFor(item("chttrans", StatusRole::Text, false)) == Glyph::None);
 }
 
+void testMoonBiteRotatesLeft() {
+    // 0° = bite on the right, so the crescent opens right.
+    const auto none = superior::ui::moonBiteDirection(0.0);
+    CHECK(superior::test::near(none.x, 1.0));
+    CHECK(superior::test::near(none.y, 0.0));
+
+    // 45° counter-clockwise on screen (y grows down) = up-right.
+    const auto rotated = superior::ui::moonBiteDirection(45.0);
+    CHECK(superior::test::near(rotated.x, 0.7071067811865476));
+    CHECK(superior::test::near(rotated.y, -0.7071067811865476));
+
+    // 90° would point straight up: the direction stays a unit vector.
+    const auto up = superior::ui::moonBiteDirection(90.0);
+    CHECK(superior::test::near(up.x, 0.0, 1e-9));
+    CHECK(superior::test::near(up.y, -1.0));
+}
+
+void testMoonRotationConstant() {
+    CHECK(superior::ui::kMoonRotationDegrees == 45.0);
+}
+
 void testRoleIsIndependentOfActive() {
     // The shape follows the role even when the state flips, so the cell width
     // never changes between half and full width.
@@ -85,6 +106,8 @@ int main() {
     testHalfWidthIsMoon();
     testFullWidthIsCircle();
     testTextItemsHaveNoGlyph();
+    testMoonRotationConstant();
+    testMoonBiteRotatesLeft();
     testRoleIsIndependentOfActive();
     return superior::test::finish("status mapping tests");
 }

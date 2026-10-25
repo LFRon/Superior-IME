@@ -15,6 +15,21 @@ enum class Glyph {
     Circle,
 };
 
+/// How far the crescent's "bite" sits from the moon centre, as a direction.
+///
+/// Screen coordinates: x grows right, y grows *down*. The bite starts on the
+/// right (0°) and is rotated counter-clockwise, so 45° points up-right — the
+/// crescent opens towards the upper right, which is how Sogou draws it.
+struct MoonBite {
+    double x = 1.0;
+    double y = 0.0;
+};
+
+/// Rotation of the crescent, in degrees counter-clockwise.
+inline constexpr double kMoonRotationDegrees = 45.0;
+
+[[nodiscard]] MoonBite moonBiteDirection(double degreesCounterClockwise) noexcept;
+
 /// Maps a status item to the glyph that represents it.
 ///
 /// Only the punctuation toggle is drawn: Sogou shows it as a moon/circle rather
