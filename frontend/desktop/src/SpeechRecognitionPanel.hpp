@@ -154,6 +154,9 @@ private:
     QString finalPath_;
     qint64 received_ = 0;
     qint64 total_ = 0;
+    /// `45% · 12 MiB / 123 MiB`, shown in the message line while a transfer runs.
+    /// The bar itself is 9 px tall and therefore cannot carry text.
+    QString downloadHint_;
     /// Rendered icons, keyed by resource + colour + size. Re-rasterising the SVG
     /// on every repaint would be wasteful while the level ring animates.
     std::map<std::string, QPixmap> iconCache_;

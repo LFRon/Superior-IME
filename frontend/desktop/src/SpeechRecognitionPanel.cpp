@@ -70,9 +70,10 @@ QString styleFor(const SkinTheme &theme) {
                // The palette is set in applyPopupPalette() instead, where it
                // actually takes effect.
                "QComboBox::drop-down { border: none; width: 18px; }"
+               // 9 px tall: a 6 px corner radius would round it into a pill.
                "QProgressBar { background: rgba(255,255,255,14); border: none;"
-               " border-radius: 6px; text-align: center; color: %1; font-size: 11px; }"
-               "QProgressBar::chunk { background: %3; border-radius: 5px; }"
+               " border-radius: 4px; }"
+               "QProgressBar::chunk { background: %3; border-radius: 3px; }"
                "QLabel { color: %1; background: transparent; }")
         .arg(theme.text.name(QColor::HexArgb), theme.comment.name(QColor::HexArgb),
              theme.selection.name(QColor::HexArgb), theme.selectionText.name(QColor::HexArgb));
@@ -262,9 +263,11 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     progress_ = new QProgressBar(this);
     progress_->setRange(0, 100);
     progress_->setValue(0);
-    progress_->setTextVisible(true);
-    // Tall enough for the caption ("45% · 285 MiB / 602 MiB") to sit inside it.
-    progress_->setFixedHeight(18);
+    // A hairline, not a block: the bar only answers "how far along is it", and
+    // the numbers moved into the message line above it (`downloadHint_`) because
+    // 9 px cannot hold a caption.
+    progress_->setTextVisible(false);
+    progress_->setFixedHeight(9);
     progress_->hide();
 
     root_ = new QVBoxLayout(this);
@@ -274,7 +277,8 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     root_->addWidget(mic_);
     root_->addWidget(message_);
     root_->addLayout(setupRow);
-    // Directly under the model choice: that is the row the progress belongs to.
+    // Directly under the model choice, spanning the panel: the bar reports on the
+    // row above it and nothing else.
     root_->addWidget(progress_);
     root_->addWidget(discard_, 0, Qt::AlignLeft);
 
@@ -597,6 +601,11 @@ bool SpeechRecognitionPanel::micActionable() const {
 }
 
 QString SpeechRecognitionPanel::hintText() const {
+    // While a model is downloading, this line is the progress read-out: the bar
+    // is deliberately a hairline with no room for text.
+    if (downloader_.running() && !downloadHint_.isEmpty()) {
+        return downloadHint_;
+    }
     // The state machine writes the setup and failure sentences; the rest is pure
     // presentation and stays here, so "which words does the panel use" has one
     // answer per state.
@@ -819,7 +828,7 @@ void SpeechRecognitionPanel::beginDownload() {
 
     progress_->setRange(0, 0); // indeterminate until the size is known
     progress_->setValue(0);
-    progress_->setFormat(QStringLiteral("%p%"));
+    downloadHint_ = QStringLiteral("正在下载…");
     progressTimer_->start();
     // The transfer runs on a worker thread. See ModelDownload.hpp: Qt's TLS
     // setup is synchronous inside `get()` and walks the CA directory, which took
@@ -843,17 +852,26 @@ void SpeechRecognitionPanel::updateDownloadProgress() {
         }
         const int percent = static_cast<int>(received_ * 100 / total_);
         progress_->setValue(percent);
-        progress_->setFormat(QStringLiteral("%1% · %2 / %3")
-                                 .arg(QString::number(percent),
-                                      QLocale().formattedDataSize(received_, 1),
-                                      QLocale().formattedDataSize(total_, 1)));
+        const QString caption = QStringLiteral("正在下载 %1% · %2 / %3")
+                                    .arg(QString::number(percent),
+                                         QLocale().formattedDataSize(received_, 1),
+                                         QLocale().formattedDataSize(total_, 1));
+        if (caption != downloadHint_) {
+            downloadHint_ = caption;
+            updateActions();
+        }
     } else {
         progress_->setRange(0, 0);
+        if (downloadHint_ != QStringLiteral("正在下载…")) {
+            downloadHint_ = QStringLiteral("正在下载…");
+            updateActions();
+        }
     }
 }
 
 void SpeechRecognitionPanel::stopProgressTimer() {
     progressTimer_->stop();
+    downloadHint_.clear();
     progress_->setRange(0, 100);
     progress_->setValue(0);
 }
