@@ -3,6 +3,7 @@ find_package(nlohmann_json 3.11 REQUIRED)
 add_library(superior_config STATIC
     src/Fcitx5Config.cpp
     src/IniFile.cpp
+    src/Learning.cpp
     src/Settings.cpp
     src/StatusBarState.cpp)
 

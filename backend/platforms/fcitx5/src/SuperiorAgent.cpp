@@ -110,6 +110,23 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         .field("epoch", static_cast<std::uint64_t>(epoch_))
         << "superior agent starting (observer only)";
 
+    // Our own record of cloud picks. The engine's learning lives in Fcitx5's
+    // data directory and is not ours to read; this file only covers the words we
+    // committed ourselves.
+    {
+        const auto loadedLearning = config::loadLearning(config::defaultLearningPath());
+        learned_ = std::move(loadedLearning.entries);
+        for (const auto &warning : loadedLearning.warnings) {
+            SUPERIOR_WARN(diag::categories::Cloud)
+                .field("warning", warning)
+                << "learning file rejected part of its content";
+        }
+        SUPERIOR_DEBUG(diag::categories::Cloud)
+            .field("entries", static_cast<std::int64_t>(learned_.size()))
+            .field("path", config::defaultLearningPath().string())
+            << "learning loaded";
+    }
+
     // Read-only probe: never parses or modifies the engine dictionaries, only
     // reports whether the data Fcitx5 needs is present.
     const PinyinAssets assets = detectPinyinAssets();
@@ -976,19 +993,15 @@ void SuperiorAgent::activateStatusItem(const std::string &itemId) {
 
 void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
     auto &state = cloudContexts_[inputContext];
-    if (!cloudEnabled_) {
-        state = CloudContext{};
-        return;
-    }
+
     // English mode commits letters directly; there is no pinyin to complete.
-    if (englishMode_) {
+    // Password fields are the one gate that also disables the *local* history:
+    // remembering that someone typed a password would be worse than losing a
+    // preference.
+    if (englishMode_ ||
+        inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
         state = CloudContext{};
-        return;
-    }
-    // Password and sensitive fields never reach the network, and never enter the
-    // cache either.
-    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
-        state = CloudContext{};
+        clearPendingCloud(inputContext);
         return;
     }
 
@@ -1009,11 +1022,6 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         return;
     }
 
-    // A different list object is one way a new composition starts, but libime
-    // also rebuilds the contents of the *same* list on every keystroke. Keying
-    // on the list pointer alone therefore left a stale index pointing at a real
-    // candidate, and the cloud row silently disappeared. The pinyin is the
-    // identity that actually changes, so that is what resets the state.
     const auto normalized =
         cloudpinyin::normalizePinyin(inputContext->inputPanel().preedit().toString());
     if (!normalized) {
@@ -1022,42 +1030,84 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
             .redacted("preedit", inputContext->inputPanel().preedit().toString())
             << "cloud candidate skipped";
         state = CloudContext{};
-        // Drop any queued query for this context: its pinyin no longer exists, so
-        // asking now would answer a question the user already moved past.
-        if (cloudPendingContext_ == inputContext) {
-            cloudPendingPinyin_.clear();
-            cloudPendingContext_ = nullptr;
-        }
+        clearPendingCloud(inputContext);
         return;
     }
 
-    const bool oursStillThere =
-        state.insertIndex >= 0 && state.insertIndex < modifiable->totalSize() &&
-        modifiable->candidateFromAll(state.insertIndex).text().toString() == state.text;
-
+    // libime rebuilds the *contents* of the same list object on every keystroke,
+    // so the pinyin — not the list pointer — is what identifies a composition.
     if (state.pinyin != *normalized || state.list != candidateList.get()) {
         state = CloudContext{};
         state.list = candidateList.get();
         state.pinyin = *normalized;
-    } else if (oursStillThere) {
-        return; // already spliced in and still where we put it
-    } else {
-        // Same composition, our entry is gone (the engine rebuilt the list):
-        // forget the stale index and splice again below.
-        state.insertIndex = -1;
-        state.pending = false;
     }
 
+    const auto containsText = [modifiable](const std::string &text) {
+        if (text.empty()) {
+            return false;
+        }
+        const int total = modifiable->totalSize();
+        for (int index = 0; index < total; ++index) {
+            if (modifiable->candidateFromAll(index).text().toString() == text) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto slotHolds = [modifiable](int index, const std::string &text) {
+        return index >= 0 && index < modifiable->totalSize() &&
+               modifiable->candidateFromAll(index).text().toString() == text;
+    };
+
+    // ---------------------------------------------------------------- local
+    //
+    // A word this user already picked for this pinyin goes to the very front:
+    // that is what "the second time 原神 comes first" means. This part runs even
+    // with cloud pinyin switched off — it is local history, not a network
+    // feature.
+    if (state.learnedIndex >= 0 && !slotHolds(state.learnedIndex, state.learnedText)) {
+        // The engine rebuilt the list and our row is gone.
+        state.learnedIndex = -1;
+        state.learnedText.clear();
+    }
+    if (state.learnedIndex < 0) {
+        if (const auto preferred = config::preferredWord(learned_, state.pinyin);
+            preferred && !containsText(*preferred)) {
+            modifiable->insert(
+                0, std::make_unique<CloudCandidateWord>(
+                       fcitx::Text(*preferred), *preferred,
+                       [this](fcitx::InputContext *context, std::string_view text) {
+                           commitCloudText(context, text);
+                       }));
+            state.learnedIndex = 0;
+            state.learnedText = *preferred;
+            SUPERIOR_TRACE(diag::categories::Cloud)
+                .field("index", static_cast<std::int64_t>(0))
+                .field("length", static_cast<std::int64_t>(preferred->size()))
+                << "learned word promoted to the front";
+        }
+    }
+
+    // ---------------------------------------------------------------- cloud
+    if (!cloudEnabled_) {
+        return;
+    }
+    if (state.insertIndex >= 0 && !slotHolds(state.insertIndex, state.text)) {
+        // Same rebuild case as above, for the placeholder.
+        state.insertIndex = -1;
+        state.text.clear();
+        state.pending = false;
+    }
+    if (state.insertIndex >= 0) {
+        return; // already spliced in and still where we put it
+    }
     if (!cloudpinyin::worthQuerying(state.pinyin, cloudMinLength_)) {
         SUPERIOR_TRACE(diag::categories::Cloud)
             .field("reason", "too-short")
             .field("length", static_cast<std::int64_t>(state.pinyin.size()))
             .field("minimum", static_cast<std::int64_t>(cloudMinLength_))
             << "cloud candidate skipped";
-        if (cloudPendingContext_ == inputContext) {
-            cloudPendingPinyin_.clear();
-            cloudPendingContext_ = nullptr;
-        }
+        clearPendingCloud(inputContext);
         return;
     }
 
@@ -1073,34 +1123,18 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         }
     }
 
-    // A candidate the engine already produced must not appear twice: the cloud
-    // answer is only worth a row when it adds something the user cannot already
-    // pick. Upstream does the same with its `customCandidateSet`.
-    const auto containsText = [modifiable, total](const std::string &text) {
-        if (text.empty()) {
-            return false;
-        }
-        for (int index = 0; index < total; ++index) {
-            if (modifiable->candidateFromAll(index).text().toString() == text) {
-                return true;
-            }
-        }
-        return false;
-    };
+    // The learned word (if any) already occupies index 0, so the configured
+    // position is measured from the engine's own list.
+    const int offset = state.learnedIndex >= 0 ? 1 : 0;
+    const int insertAt = std::clamp(cloudIndex_ - 1 + offset, 0, total);
 
-    const int insertAt = std::clamp(cloudIndex_ - 1, 0, total);
     if (const auto cached = cloudCache_.find(state.pinyin)) {
         if (containsText(*cached)) {
             // Already offered by the engine: do not add a duplicate row.
-            state = CloudContext{};
-            state.list = candidateList.get();
-            state.pinyin = *normalized;
             SUPERIOR_TRACE(diag::categories::Cloud)
                 << "cloud candidate skipped: engine already offers this word";
             return;
         }
-        // A cached answer needs no placeholder and no request: splice it in now,
-        // so the same word is instant the second time.
         modifiable->insert(
             insertAt, std::make_unique<CloudCandidateWord>(
                           fcitx::Text(*cached), *cached,
@@ -1130,6 +1164,13 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
     cloudPendingPinyin_ = state.pinyin;
     cloudPendingSince_ = std::chrono::steady_clock::now();
     updateCloudTimer();
+}
+
+void SuperiorAgent::clearPendingCloud(fcitx::InputContext *inputContext) {
+    if (cloudPendingContext_ == inputContext) {
+        cloudPendingContext_ = nullptr;
+        cloudPendingPinyin_.clear();
+    }
 }
 
 void SuperiorAgent::updateCloudTimer() {
@@ -1297,6 +1338,15 @@ void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::stri
     if (instance_ == nullptr || inputContext == nullptr || text.empty()) {
         return;
     }
+    // Read the pinyin *before* touching the composition. `updatePreedit()` and
+    // `commitString()` flush the UI, which re-enters `syncCloudCandidate()` with
+    // an empty preedit and clears our state — reading afterwards returned an
+    // empty string, so nothing was ever learned.
+    const std::string pinyin = [&]() -> std::string {
+        const auto it = cloudContexts_.find(inputContext);
+        return it != cloudContexts_.end() ? it->second.pinyin : std::string{};
+    }();
+
     // The engine still owns a composition for the pinyin we completed. Drop it
     // first, otherwise the committed word would be followed by the remaining
     // pinyin as soon as the user types again.
@@ -1304,6 +1354,26 @@ void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::stri
     inputContext->inputPanel().reset();
     inputContext->commitString(std::string(text));
     inputContext->updatePreedit();
+
+    // Remember the pick, so the next `yuanshen` offers 原神 first without a
+    // request. libime cannot learn this one: we committed it, not the engine.
+    if (!pinyin.empty()) {
+        const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+        config::recordLearnedWord(learned_, pinyin, std::string(text), nowMs);
+        std::string error;
+        if (!config::saveLearning(config::defaultLearningPath(), learned_, error)) {
+            SUPERIOR_WARN(diag::categories::Cloud)
+                .field("error", error)
+                << "cannot persist the learning file";
+        } else {
+            SUPERIOR_DEBUG(diag::categories::Cloud)
+                .field("entries", static_cast<std::int64_t>(learned_.size()))
+                .field("length", static_cast<std::int64_t>(text.size()))
+                << "learning updated";
+        }
+    }
 
     if (const auto it = cloudContexts_.find(inputContext); it != cloudContexts_.end()) {
         it->second = CloudContext{};

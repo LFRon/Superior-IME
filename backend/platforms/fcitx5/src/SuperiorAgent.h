@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "superior/api/Commands.hpp"
+#include "superior/config/Learning.hpp"
 #include "superior/cloudpinyin/Cloud.hpp"
 #include "superior/cloudpinyin/CloudState.hpp"
 #include "superior/cloudpinyin/Fetcher.hpp"
@@ -127,6 +128,10 @@ private:
         /// composition" and any stored index is stale.
         const fcitx::CandidateList *list = nullptr;
         std::string pinyin;
+        /// Slot holding the learned word (index 0) and its text.
+        int learnedIndex = -1;
+        std::string learnedText;
+        /// Slot holding the cloud candidate / placeholder.
         int insertIndex = -1;
         bool pending = false;
         /// Text currently sitting at `insertIndex` because we put it there. Used
@@ -141,6 +146,8 @@ private:
     void applyCloudResult(fcitx::InputContext *inputContext, const std::string &pinyin,
                           const std::string &text);
     void dropCloudCandidate(fcitx::InputContext *inputContext);
+    /// Forgets a queued (not yet sent) query for this context.
+    void clearPendingCloud(fcitx::InputContext *inputContext);
     void updateCloudTimer();
 
     /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
@@ -170,6 +177,13 @@ private:
     std::map<fcitx::InputContext *, ShiftTapDetector> shiftTaps_;
     std::map<fcitx::InputContext *, PreeditOwnership> preeditOwnership_;
     std::map<fcitx::InputContext *, CloudContext> cloudContexts_;
+    /// What this user picked from a cloud candidate, in `$XDG_CONFIG_HOME`.
+    ///
+    /// The engine already learns its own candidates (libime writes user.dict and
+    /// user.history), so the only gap is a word that did not exist locally: it
+    /// is committed by us, and libime never saw it. Recording it here is what
+    /// makes the second `yuanshen` offer 原神 without asking the network again.
+    std::vector<config::LearnedWord> learned_;
 
     cloudpinyin::Fetcher cloudFetcher_;
     cloudpinyin::AnswerCache cloudCache_{256};
