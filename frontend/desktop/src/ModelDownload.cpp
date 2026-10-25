@@ -161,7 +161,18 @@ void ModelDownloader::destroyWorker() {
     }
     cancel();
     thread_->quit();
-    thread_->wait();
+    // Bounded wait: `quit()` stops the loop the abort was posted to, so a transfer
+    // that is mid-body may need the abort to be processed before it can end. Waiting
+    // without a bound would hang the application on exit for as long as the mirror
+    // keeps sending.
+    if (!thread_->wait(5000)) {
+        // Still running. Detach instead of deleting: deleting a live QThread aborts
+        // the process, and this happens on the way out anyway.
+        thread_->setParent(nullptr);
+        context_ = nullptr;
+        thread_ = nullptr;
+        return;
+    }
     context_ = nullptr;
     delete thread_;
     thread_ = nullptr;
