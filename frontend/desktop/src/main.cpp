@@ -4,6 +4,7 @@
 #include <QCommandLineParser>
 #include <QGuiApplication>
 #include <QLockFile>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -26,7 +27,9 @@
 #include "Logging.hpp"
 #include "PlatformChoice.hpp"
 #include "SceneClient.hpp"
+#include "SpeechRecognitionPanel.hpp"
 #include "SkinTheme.hpp"
+#include "OverlayLayout.hpp"
 #include "StatusWindow.hpp"
 
 #include "superior/diagnostics/Log.hpp"
@@ -148,9 +151,11 @@ int main(int argc, char **argv) {
 
     superior::ui::StatusWindow status;
     superior::ui::CandidateWindow candidates;
+    superior::ui::SpeechRecognitionPanel speech;
 
     status.setScale(settings.uiScale);
     candidates.setScale(settings.uiScale);
+    speech.setScale(settings.uiScale);
     status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
     status.setEnabled(settings.showStatusBar);
 
@@ -206,6 +211,23 @@ int main(int argc, char **argv) {
             activeSkin ? superior::ui::SkinTheme::from(*activeSkin, frame.panel.styleId)
                        : superior::ui::SkinTheme::fallback();
         status.apply(frame.status, frame.panel.mode, {}, theme);
+
+        // The speech panel shares the process with the other two overlays, so a
+        // single geometry policy keeps them from ever stacking onto each other.
+        const QRect statusRect = status.geometry();
+        speech.setStatusBarRect(superior::ui::Rect{statusRect.left(), statusRect.top(),
+                                                   statusRect.width(), statusRect.height()});
+        if (const QScreen *screen = QGuiApplication::primaryScreen()) {
+            const QRect available = screen->availableGeometry();
+            speech.setScreen(superior::ui::Rect{available.left(), available.top(),
+                                                available.width(), available.height()});
+        }
+        speech.apply(frame.speech, frame.session, theme);
+        // Three overlays, one geometry policy: the candidate panel steps around
+        // the speech panel rather than covering it. `raise()` is not enough on a
+        // compositor that reorders override-redirect windows.
+        candidates.setAvoidRect(speech.occupiedRect());
+
         if (drawCandidates) {
             candidates.apply(frame.panel, theme);
         }
@@ -240,6 +262,10 @@ int main(int argc, char **argv) {
 
     // The status bar only sends intent; the agent owns the mode and answers
     // with a new scene.
+    speech.setCommandHandler([&client](const api::UiCommand &command) {
+        client.send(command);
+    });
+
     status.setItemClickHandler([&client](const std::string &itemId) {
         SUPERIOR_INFO(diag::categories::Ui)
             .field("item", itemId)
@@ -295,6 +321,7 @@ int main(int argc, char **argv) {
         }
         status.setScale(settings.uiScale);
         candidates.setScale(settings.uiScale);
+        speech.setScale(settings.uiScale);
         status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
         status.setEnabled(settings.showStatusBar);
         SUPERIOR_INFO(diag::categories::Ui)

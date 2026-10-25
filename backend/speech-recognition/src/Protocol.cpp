@@ -68,6 +68,17 @@ std::string encodeEvent(const Event &event) {
     return json.dump();
 }
 
+std::string encodeCommand(const Command &command) {
+    Json json{{"cmd", kindName(command.kind)}};
+    if (command.kind == Command::Kind::Configure) {
+        json["config"] = {{"engine", command.config.enginePath},
+                          {"model", command.config.modelPath},
+                          {"language", command.config.language},
+                          {"threads", command.config.threads}};
+    }
+    return json.dump();
+}
+
 std::optional<Command> decodeCommand(std::string_view line) {
     if (line.empty()) {
         return std::nullopt;

@@ -16,6 +16,9 @@ MoonBite moonBiteDirection(double degreesCounterClockwise) noexcept {
 }
 
 Glyph glyphFor(const api::StatusItem &item) noexcept {
+    if (item.role == api::StatusRole::Speech) {
+        return Glyph::Microphone;
+    }
     if (item.role != api::StatusRole::Punctuation) {
         return Glyph::None;
     }

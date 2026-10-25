@@ -13,6 +13,8 @@ enum class Glyph {
     Moon,
     /// Full-width punctuation: a filled circle.
     Circle,
+    /// Speech recognition: a microphone, the same shape as the panel's button.
+    Microphone,
 };
 
 /// How far the crescent's "bite" sits from the moon centre, as a direction.
@@ -32,9 +34,9 @@ inline constexpr double kMoonRotationDegrees = 45.0;
 
 /// Maps a status item to the glyph that represents it.
 ///
-/// Only the punctuation toggle is drawn: Sogou shows it as a moon/circle rather
-/// than the words 「半角标点」/「全角标点」, which are wide and change length as
-/// you toggle them (the bar would jump on every click).
+/// Only toggles are drawn: punctuation as a moon/circle and speech as a
+/// microphone, rather than the words 「半角标点」/「语音」, which are wide and
+/// change length as the state changes (the bar would jump on every click).
 [[nodiscard]] Glyph glyphFor(const api::StatusItem &item) noexcept;
 
 } // namespace superior::ui

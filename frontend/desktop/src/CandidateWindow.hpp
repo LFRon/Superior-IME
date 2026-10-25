@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "superior/api/Scene.hpp"
+#include "LayoutRules.hpp"
 #include "SkinTheme.hpp"
 
 namespace superior::ui {
@@ -34,6 +35,11 @@ public:
     /// Mouse wheel paging: +1 next page, -1 previous page.
     void setPageHandler(std::function<void(int)> handler);
 
+    /// Area another overlay currently occupies (the speech panel). The candidate
+    /// panel is lifted above it instead of covering it; an empty rect disables
+    /// the rule. Set by the host, because only the host sees all three windows.
+    void setAvoidRect(const Rect &rect);
+
     [[nodiscard]] QSize sizeHint() const override;
 
 protected:
@@ -55,6 +61,7 @@ private:
 
     SkinTheme theme_ = SkinTheme::fallback();
     api::Anchor lastAnchor_;
+    Rect avoid_{};
     double scale_ = 1.0;
     bool panelVisible_ = false;
     QString preedit_;

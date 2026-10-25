@@ -59,6 +59,28 @@ void paintGlyph(QPainter &painter, Glyph glyph, const QRect &cell, const QColor 
     const QPointF center(cell.center().x() + 0.5, cell.center().y() + 0.5);
     const QRectF outer(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0);
 
+    if (glyph == Glyph::Microphone) {
+        // Capsule + handle + stem, filled with the item colour so the toolbar
+        // matches the panel's own microphone.
+        const double scaleUnit = 0.9 * scale;
+        QRectF body(center.x() - 2.6 * scaleUnit, center.y() - 6.4 * scaleUnit,
+                    5.2 * scaleUnit, 8.6 * scaleUnit);
+        painter.setBrush(color);
+        painter.drawRoundedRect(body, 2.6 * scaleUnit, 2.6 * scaleUnit);
+        painter.setBrush(Qt::NoBrush);
+        QPen pen(color, 1.4 * scaleUnit, Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(pen);
+        painter.drawArc(QRectF(center.x() - 3.8 * scaleUnit, center.y() - 1.6 * scaleUnit,
+                               7.6 * scaleUnit, 6.0 * scaleUnit),
+                        200 * 16, 140 * 16);
+        painter.drawLine(QPointF(center.x(), center.y() + 4.4 * scaleUnit),
+                         QPointF(center.x(), center.y() + 6.0 * scaleUnit));
+        painter.drawLine(QPointF(center.x() - 1.8 * scaleUnit, center.y() + 6.0 * scaleUnit),
+                         QPointF(center.x() + 1.8 * scaleUnit, center.y() + 6.0 * scaleUnit));
+        painter.restore();
+        return;
+    }
+
     painter.setBrush(color);
     painter.drawEllipse(outer);
     if (glyph == Glyph::Moon) {

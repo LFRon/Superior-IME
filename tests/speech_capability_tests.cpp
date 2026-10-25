@@ -184,6 +184,26 @@ void testProtocolRoundTrip() {
     CHECK(!decodeCommand("not json").has_value());
     CHECK(!decodeCommand("[]").has_value());
     CHECK(decodeCommand(R"({"cmd":"quit"})")->kind == Command::Kind::Quit);
+
+    // Encode then decode must be lossless: that is the whole point of having a
+    // single spelling for the wire format.
+    Command outbound;
+    outbound.kind = Command::Kind::Configure;
+    outbound.config.enginePath = "/opt/asr";
+    outbound.config.modelPath = "/models/m.gguf";
+    outbound.config.threads = 6;
+    const auto echoed = decodeCommand(encodeCommand(outbound));
+    CHECK(echoed.has_value());
+    if (echoed) {
+        CHECK(echoed->kind == Command::Kind::Configure);
+        CHECK(echoed->config.enginePath == "/opt/asr");
+        CHECK(echoed->config.modelPath == "/models/m.gguf");
+        CHECK(echoed->config.threads == 6);
+    }
+
+    Command cancel;
+    cancel.kind = Command::Kind::Cancel;
+    CHECK(encodeCommand(cancel) == R"({"cmd":"cancel"})");
 }
 
 } // namespace

@@ -193,6 +193,8 @@ api::SpeechScene SpeechState::scene(std::string skinId,
     scene.modelPresent = modelPresent_;
     scene.enginePresent = enginePresent_;
     scene.message = message_;
+    scene.level = level_;
+    scene.partial = partial_;
     scene.skinId = std::move(skinId);
     scene.skinGeneration = generation;
     return scene;

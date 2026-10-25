@@ -79,6 +79,8 @@ SettingsLoad loadSettings(const fs::path &path) {
     settings.speechRecognitionEnabled =
         document.value("speechRecognitionEnabled",
                        document.value("voiceEnabled", settings.speechRecognitionEnabled));
+    settings.speechRecognitionModelId =
+        document.value("speechRecognitionModelId", settings.speechRecognitionModelId);
     settings.logLevel = document.value("logLevel", settings.logLevel);
     settings.cloudPinyinEnabled = document.value("cloudPinyinEnabled", settings.cloudPinyinEnabled);
     settings.cloudPinyinBackend =
@@ -125,6 +127,7 @@ bool saveSettings(const fs::path &path, const Settings &settings, std::string &e
     document["statusPlacement"] = settings.statusPlacement;
     document["uiScale"] = settings.uiScale;
     document["speechRecognitionEnabled"] = settings.speechRecognitionEnabled;
+    document["speechRecognitionModelId"] = settings.speechRecognitionModelId;
     document["logLevel"] = settings.logLevel;
     document["cloudPinyinEnabled"] = settings.cloudPinyinEnabled;
     document["cloudPinyinBackend"] = settings.cloudPinyinBackend;

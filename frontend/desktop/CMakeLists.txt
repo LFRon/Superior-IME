@@ -7,10 +7,12 @@ add_executable(superior_ui
     src/LayoutRules.cpp
     src/Logging.cpp
     src/Overlay.cpp
+    src/OverlayLayout.cpp
     src/PlatformChoice.cpp
     src/PreeditLayout.cpp
     src/SceneClient.cpp
     src/SkinTheme.cpp
+    src/SpeechRecognitionPanel.cpp
     src/StatusGlyph.cpp
     src/StatusWindow.cpp
     src/WheelStep.cpp
@@ -22,6 +24,7 @@ target_link_libraries(superior_ui PRIVATE
     Qt6::Widgets
     Qt6::Network
     Superior::Api
+    Superior::SpeechRecognition
     Superior::Protocol
     Superior::Skin
     Superior::Config

@@ -55,6 +55,10 @@ struct Event {
 
 [[nodiscard]] std::string encodeEvent(const Event &event);
 
+/// Encodes a command. The agent must use this instead of hand-written JSON: the
+/// wire spelling lives in exactly one place, so the two halves cannot drift.
+[[nodiscard]] std::string encodeCommand(const Command &command);
+
 /// Decodes one line. Returns `nullopt` for malformed input so a bad line can be
 /// reported and skipped instead of killing the session.
 [[nodiscard]] std::optional<Command> decodeCommand(std::string_view line);

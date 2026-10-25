@@ -29,6 +29,13 @@ struct Point {
     int y = 0;
 };
 
+struct Size {
+    int width = 0;
+    int height = 0;
+
+    friend constexpr bool operator==(const Size &, const Size &) = default;
+};
+
 /// Position of an overlay of `windowSize` anchored inside `available`.
 ///
 /// `extraBottom` lifts the window above another overlay (the candidate panel

@@ -236,6 +236,8 @@ private:
     std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = false;
+    /// Catalogue id selected in settings; the panel can change it.
+    std::string speechModelId_ = "qwen3-asr-0.6b";
     bool inlineEnglishEnabled_ = true;
     /// The single owner of Chinese/English. Nothing else may keep its own copy:
     /// two booleans flipping on the same Shift release is exactly the bug this

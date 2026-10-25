@@ -124,6 +124,14 @@ struct SpeechScene {
     /// the producer because the UI has no access to the capability's error codes.
     std::string message;
 
+    /// Live input level in `[0, 1]`, already clamped by the decision layer. The
+    /// UI must not read the microphone itself, so this is the only pulse it gets.
+    double level = 0.0;
+
+    /// Text recognised so far while the user is still speaking. Empty when the
+    /// engine reports only final transcripts.
+    std::string partial;
+
     std::string skinId;
     SkinGeneration skinGeneration = 0;
     std::optional<TransitionSpec> transition;

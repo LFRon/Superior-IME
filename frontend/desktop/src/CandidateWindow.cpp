@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "CandidateWindow.hpp"
 
+#include "OverlayLayout.hpp"
+
 #include <QEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -74,6 +76,29 @@ void placeAtCaret(QWidget &widget, const api::Anchor &anchor) {
     widget.move(x, y);
 }
 
+/// Keeps `widget` off `avoid` without changing any other part of its position.
+void stepAround(QWidget &widget, const Rect &avoid) {
+    if (avoid.width <= 0 || avoid.height <= 0) {
+        return;
+    }
+    const QRect geometry = widget.geometry();
+    const Rect current{geometry.left(), geometry.top(), geometry.width(), geometry.height()};
+    const QScreen *screen = QGuiApplication::screenAt(geometry.center());
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (screen == nullptr) {
+        return;
+    }
+    const QRect available = screen->availableGeometry();
+    const Rect placed =
+        liftAbove(current, avoid, Rect{available.left(), available.top(), available.width(),
+                                       available.height()});
+    if (placed.left != current.left || placed.top != current.top) {
+        widget.move(placed.left, placed.top);
+    }
+}
+
 } // namespace
 
 CandidateWindow::CandidateWindow(QWidget *parent) : QWidget(parent) {
@@ -98,7 +123,18 @@ void CandidateWindow::setScale(double scale) {
     if (panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty())) {
         resize(sizeHint());
         placeAtCaret(*this, lastAnchor_);
+        stepAround(*this, avoid_);
         update();
+    }
+}
+
+void CandidateWindow::setAvoidRect(const Rect &rect) {
+    avoid_ = rect;
+    // The speech panel can appear while a composition is already on screen, so
+    // the rule has to apply immediately rather than on the next keystroke.
+    if (panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty())) {
+        placeAtCaret(*this, lastAnchor_);
+        stepAround(*this, avoid_);
     }
 }
 
@@ -132,6 +168,7 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
 
     resize(sizeHint());
     placeAtCaret(*this, panel.anchor);
+    stepAround(*this, avoid_);
     show();
     update();
 }

@@ -447,6 +447,8 @@ std::string encodeScene(const api::UiSceneFrame &frame) {
                 {"modelPresent", frame.speech.modelPresent},
                 {"enginePresent", frame.speech.enginePresent},
                 {"message", frame.speech.message},
+                {"level", frame.speech.level},
+                {"partial", frame.speech.partial},
                 {"skinId", frame.speech.skinId},
                 {"skinGeneration", frame.speech.skinGeneration}};
 
@@ -518,6 +520,8 @@ std::optional<api::UiSceneFrame> decodeScene(std::string_view payload, DecodeErr
                 frame.speech.modelPresent = speech.value("modelPresent", false);
                 frame.speech.enginePresent = speech.value("enginePresent", false);
                 frame.speech.message = speech.value("message", std::string{});
+                frame.speech.level = speech.value("level", 0.0);
+                frame.speech.partial = speech.value("partial", std::string{});
                 frame.speech.skinId = speech.value("skinId", std::string{});
                 frame.speech.skinGeneration =
                     speech.value("skinGeneration", api::SkinGeneration{0});

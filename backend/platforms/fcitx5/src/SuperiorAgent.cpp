@@ -49,6 +49,14 @@ namespace diag = ::superior::diagnostics;
 
 namespace {
 
+/// Commands without a payload are one-liners; going through `encodeCommand`
+/// keeps their spelling in the protocol header rather than in this file.
+std::string encodeSpeechCommand(superior::speech_recognition::Command::Kind kind) {
+    superior::speech_recognition::Command command;
+    command.kind = kind;
+    return superior::speech_recognition::encodeCommand(command);
+}
+
 std::size_t byteCursor(const fcitx::Text &text) {
     const int cursor = text.cursor();
     if (cursor < 0) {
@@ -476,6 +484,9 @@ void SuperiorAgent::reloadSettings() {
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
     const bool previousSpeech = speechRecognitionEnabled_;
     speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
+    speechModelId_ = loaded.settings.speechRecognitionModelId.empty()
+                         ? std::string{"qwen3-asr-0.6b"}
+                         : loaded.settings.speechRecognitionModelId;
     if (previousSpeech != speechRecognitionEnabled_) {
         SUPERIOR_INFO(diag::categories::SpeechRecognition)
             .field("enabled", speechRecognitionEnabled_)
@@ -1020,7 +1031,7 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                 activeContext_->inputPanel().reset();
             }
             if (speech_.beginRecording()) {
-                speechProcess_->send(R"({"cmd":"start"})");
+                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start));
             }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechStop>) {
@@ -1029,13 +1040,13 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
             }
             speech_.beginTranscribing();
             if (speechProcess_) {
-                speechProcess_->send(R"({"cmd":"stop"})");
+                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Stop));
             }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechCancel>) {
             speech_.cancel();
             if (speechProcess_) {
-                speechProcess_->send(R"({"cmd":"cancel"})");
+                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
             }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
@@ -1428,6 +1439,19 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
     state = CloudContext{};
 }
 
+namespace {
+
+/// The catalogue entry the user selected, falling back to the recommended one so
+/// a hand-edited settings file cannot leave voice permanently unusable.
+const superior::speech_recognition::ModelEntry &selectedModel(const std::string &id) {
+    if (const auto *entry = superior::speech_recognition::findModel(id)) {
+        return *entry;
+    }
+    return superior::speech_recognition::defaultModel();
+}
+
+} // namespace
+
 bool SuperiorAgent::ensureSpeechProcess() {
     if (speechProcess_ && speechProcess_->running()) {
         return true;
@@ -1447,14 +1471,30 @@ bool SuperiorAgent::ensureSpeechProcess() {
             << "speech recognition process is unavailable";
         return false;
     }
+
+    // Tell the child which model to load. Sending it after every (re)start keeps
+    // the two in sync without the child reading our settings file.
+    using namespace superior::speech_recognition;
+    const ModelEntry &model = selectedModel(speechModelId_);
+    const std::string resolvedModel = speech_recognition::modelPath(model.id).string();
+    if (!resolvedModel.empty()) {
+        Command configure;
+        configure.kind = Command::Kind::Configure;
+        configure.config.enginePath = resolveEngine();
+        configure.config.modelPath = resolvedModel;
+        configure.config.language = "zh";
+        configure.config.threads = 4;
+        speechProcess_->send(encodeCommand(configure));
+    }
     return true;
 }
 
 void SuperiorAgent::refreshSpeechSetup() {
     using namespace superior::speech_recognition;
+    const ModelEntry &entry = selectedModel(speechModelId_);
     const bool engine = enginePresent();
-    const bool model = modelPresent(defaultModel().id);
-    speech_.setModel(defaultModel().id, defaultModel().displayName, defaultModel().bytes);
+    const bool model = modelPresent(entry.id);
+    speech_.setModel(entry.id, entry.displayName, entry.bytes);
     speech_.refreshSetup(engine, model);
 }
 
@@ -1464,7 +1504,7 @@ void SuperiorAgent::toggleSpeechPanel() {
         // into the document after the user closed the panel.
         speech_.cancel();
         if (speechProcess_) {
-            speechProcess_->send(R"({"cmd":"cancel"})");
+            speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
         }
         speech_.hide();
         if (activeContext_ != nullptr) {
@@ -1474,9 +1514,10 @@ void SuperiorAgent::toggleSpeechPanel() {
     }
 
     using namespace superior::speech_recognition;
+    const ModelEntry &entry = selectedModel(speechModelId_);
     const bool engine = enginePresent();
-    const bool model = modelPresent(defaultModel().id);
-    speech_.setModel(defaultModel().id, defaultModel().displayName, defaultModel().bytes);
+    const bool model = modelPresent(entry.id);
+    speech_.setModel(entry.id, entry.displayName, entry.bytes);
     speech_.show(engine, model);
     if (engine && model) {
         ensureSpeechProcess();
