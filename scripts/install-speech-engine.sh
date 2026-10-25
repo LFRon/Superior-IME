@@ -52,12 +52,29 @@ if [[ "$version" == "v0.8.44" && "$arch" == "x86_64" ]]; then
 fi
 
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-target="${SUPERIOR_SPEECH_DIR:-$data_home/superior-ime/speech-recognition}/engine"
+speech_dir="${SUPERIOR_SPEECH_DIR:-$data_home/superior-ime/speech-recognition}"
+target="${speech_dir}/engine"
+
+# Speech gating (`--vad`) needs Silero weights next to the engine. The engine can
+# fetch them itself on first use, but it does so from huggingface.co and its
+# failure mode is not "no gating": every recording then comes back as silence, so
+# dictation types nothing at all. Installing them here — once, with a pinned
+# digest, from a URL we chose — keeps that decision out of the recording path.
+vad_asset="ggml-silero-v6.2.0.bin"
+vad_url="https://huggingface.co/ggml-org/whisper-vad/resolve/main/${vad_asset}"
+vad_sha256="2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+vad_target="${speech_dir}/models/vad/${vad_asset}"
 
 echo "engine   : ${target}"
 echo "asset    : ${asset} (${version})"
+echo "vad      : ${vad_target}"
 
 if (( dry_run )); then
+    if [[ -f "$vad_target" ]]; then
+        echo "vad      : present, will be kept"
+    else
+        echo "vad src  : ${vad_url}"
+    fi
     echo "dry run  : nothing written"
     exit 0
 fi
@@ -101,6 +118,33 @@ cp -a "$source_dir"/. "$target"/
 
 "$target/crispasr" --version 2>/dev/null | sed -n '1,3p' || true
 echo "installed: ${target}/crispasr"
+
+# The weights are the one piece of this install that may legitimately be missing:
+# a network that cannot reach huggingface.co must not fail an engine install that
+# already succeeded, so this warns instead. Speech still works without them, it
+# just types nonsense when handed silence.
+if [[ -f "$vad_target" ]]; then
+    echo "vad      : already present"
+else
+    mkdir -p "$(dirname "$vad_target")"
+    if curl -fSL --retry 3 --connect-timeout 20 -o "${vad_target}.part" "$vad_url"; then
+        actual="$(sha256sum "${vad_target}.part" | cut -d' ' -f1)"
+        if [[ "$actual" != "$vad_sha256" ]]; then
+            echo "install-speech-engine: VAD checksum mismatch" >&2
+            echo "  expected $vad_sha256" >&2
+            echo "  actual   $actual" >&2
+            rm -f "${vad_target}.part"
+            echo "install-speech-engine: speech gating stays off" >&2
+        else
+            mv "${vad_target}.part" "$vad_target"
+            echo "vad      : installed ${vad_target}"
+        fi
+    else
+        rm -f "${vad_target}.part"
+        echo "install-speech-engine: could not fetch the VAD weights" >&2
+        echo "  speech gating stays off; dictation may type nonsense on silence" >&2
+    fi
+fi
 echo
 echo "Install the model from the input method's speech panel (it is downloaded"
 echo "there, into \"$data_home/superior-ime/speech-recognition/models\")."

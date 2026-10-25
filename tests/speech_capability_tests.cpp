@@ -557,9 +557,120 @@ void testContinuousModeNeverEndsOnSilence() {
     CHECK(idleWatch.finished(9000));
 }
 
+/// Speech gating: the engine must be told to run VAD.
+///
+/// Without it the model never stays quiet on silence — it re-decodes its whole
+/// window every step and answers with invented text ("没有没有没有…", then a
+/// stream of "eeee零零零…" in the document) instead of nothing. The flag is only
+/// passed to an engine whose help advertises it, because an unknown option makes
+/// the engine exit before it loads a model, and that would break every session on
+/// an older binary.
+void testSpeechGatingArgv() {
+    ::setenv("SUPERIOR_ASR_CMD", "", 1);
+    ::setenv("SUPERIOR_ASR_STREAM_CMD", "", 1);
+    const fs::path dir = fs::temp_directory_path() / "superior-vad-argv";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    const auto writeScript = [&](const std::string &name, const std::string &body) {
+        const fs::path path = dir / name;
+        {
+            std::ofstream out(path);
+            out << "#!/bin/sh\n" << body;
+        }
+        fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace);
+        return path.string();
+    };
+    const std::string withVad = writeScript(
+        "engine-vad", "echo '  --vad            [false  ] enable Voice Activity Detection (VAD)'\n");
+    // A build that only knows the tunables must not be handed `--vad`: matching
+    // the prefix would pass the flag and the engine would refuse to start.
+    const std::string withoutVad = writeScript(
+        "engine-plain",
+        "echo '  -vm FNAME, --vad-model FNAME   [ ] VAD model'\n");
+
+    // The weights have to be on disk as well: `--vad` alone makes the engine
+    // fetch them from huggingface.co, and a failed fetch reports every recording
+    // as silence instead of falling back to no gating.
+    const fs::path weights = dir / "ggml-silero.bin";
+    {
+        std::ofstream out(weights);
+        out << "not really weights";
+    }
+    ::setenv("SUPERIOR_ASR_VAD_MODEL", weights.c_str(), 1);
+
+    EngineConfig config;
+    config.modelPath = "/models/paraformer-zh/paraformer-zh-q4_k.gguf";
+    config.backend = "paraformer";
+    std::string error;
+
+    config.enginePath = withVad;
+    const auto streamed = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(streamed.has_value());
+    if (streamed) {
+        CHECK(contains(streamed->args, "--vad"));
+        CHECK(contains(streamed->args, "--vad-model"));
+        CHECK(contains(streamed->args, weights.string()));
+    }
+    const auto batch = buildEngineCommand(config, "/tmp/a.wav", error);
+    CHECK(batch.has_value());
+    if (batch) {
+        CHECK(contains(batch->args, "--vad"));
+        CHECK(contains(batch->args, weights.string()));
+    }
+
+    // Same engine, no weights: gating stays off rather than risking a silent
+    // engine that downloads and, failing that, hears nothing.
+    const std::string absentWeights = (dir / "absent.bin").string();
+    ::setenv("SUPERIOR_ASR_VAD_MODEL", absentWeights.c_str(), 1);
+    const auto unweighted = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(unweighted.has_value());
+    if (unweighted) {
+        CHECK(!contains(unweighted->args, "--vad"));
+        CHECK(!contains(unweighted->args, "--vad-model"));
+    }
+    ::setenv("SUPERIOR_ASR_VAD_MODEL", weights.c_str(), 1);
+
+    config.enginePath = withoutVad;
+    const auto plainStream = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(plainStream.has_value());
+    if (plainStream) {
+        CHECK(!contains(plainStream->args, "--vad"));
+    }
+    const auto plainBatch = buildEngineCommand(config, "/tmp/a.wav", error);
+    CHECK(plainBatch.has_value());
+    if (plainBatch) {
+        CHECK(!contains(plainBatch->args, "--vad"));
+    }
+
+    // A missing binary must not hang, and must not be given an option it may not
+    // understand.
+    config.enginePath = (dir / "absent").string();
+    const auto absent = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(absent.has_value());
+    if (absent) {
+        CHECK(!contains(absent->args, "--vad"));
+    }
+
+    // A fully custom command line is the user's own shell; we never edit it.
+    ::setenv("SUPERIOR_ASR_STREAM_CMD", "fake-asr --stream --json", 1);
+    config.enginePath = withVad;
+    const auto custom = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(custom.has_value());
+    if (custom) {
+        CHECK(!contains(custom->args, "--vad"));
+        CHECK(custom->program == "fake-asr");
+    }
+    ::unsetenv("SUPERIOR_ASR_STREAM_CMD");
+    ::unsetenv("SUPERIOR_ASR_VAD_MODEL");
+
+    fs::remove_all(dir);
+}
+
 int main() {
     testCaptureArgv();
     testContinuousModeNeverEndsOnSilence();
+    testSpeechGatingArgv();
     testTranscriptCleaning();
     testBackendAndPunctuationArgs();
     testCatalogDefault();

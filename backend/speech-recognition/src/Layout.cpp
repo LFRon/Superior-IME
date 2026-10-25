@@ -32,6 +32,19 @@ fs::path runtimeHome() {
     return fs::temp_directory_path();
 }
 
+fs::path cacheHome() {
+    if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && xdg[0] != '\0') {
+        return fs::path(xdg);
+    }
+    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+        return fs::path(home) / ".cache";
+    }
+    return {};
+}
+
+/// The file name the engine itself uses for its Silero weights.
+constexpr std::string_view kVadModelFile = "ggml-silero-v6.2.0.bin";
+
 bool isExecutableFile(const fs::path &path) {
     std::error_code error;
     if (path.empty() || !fs::is_regular_file(path, error)) {
@@ -113,6 +126,34 @@ fs::path punctuationModelPath() {
         return {};
     }
     return candidate;
+}
+
+fs::path vadModelPath() {
+    std::error_code error;
+    if (const char *override = std::getenv("SUPERIOR_ASR_VAD_MODEL");
+        override != nullptr && override[0] != '\0') {
+        const fs::path path(override);
+        return fs::is_regular_file(path, error) ? path : fs::path{};
+    }
+    // The managed copy first: this is where `install-speech-engine.sh` puts it.
+    const fs::path root = modelsRoot();
+    if (!root.empty()) {
+        const fs::path managed = root / "vad" / kVadModelFile;
+        if (fs::is_regular_file(managed, error)) {
+            return managed;
+        }
+    }
+    // Second chance: an engine that ran with `--vad` before keeps the weights in
+    // its own cache. Reusing that copy gives an existing install gating without a
+    // second download, and — unlike passing `--vad` alone — never starts one.
+    const fs::path cache = cacheHome();
+    if (!cache.empty()) {
+        const fs::path cached = cache / "crispasr" / kVadModelFile;
+        if (fs::is_regular_file(cached, error)) {
+            return cached;
+        }
+    }
+    return {};
 }
 
 bool customEngineConfigured() {

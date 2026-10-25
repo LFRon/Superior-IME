@@ -29,6 +29,17 @@ namespace superior::speech_recognition {
 /// than a missing comma.
 [[nodiscard]] std::filesystem::path punctuationModelPath();
 
+/// Silero VAD weights, when a local copy exists (`models/vad/…`), empty otherwise.
+///
+/// Passing `--vad` without a model path makes the engine fetch these weights from
+/// `huggingface.co` into its own cache, and a failed fetch does *not* fall back to
+/// "no gating": every recording is then reported as silence, which looks like a
+/// dictation that types nothing at all. Our model downloads go through a mirror
+/// precisely because huggingface.co is not reachable from everywhere we ship to,
+/// so speech gating is only switched on when the weights are already on disk.
+/// `SUPERIOR_ASR_VAD_MODEL` overrides the lookup (tests, custom setups).
+[[nodiscard]] std::filesystem::path vadModelPath();
+
 /// True when `SUPERIOR_ASR_CMD` replaces the whole engine invocation.
 [[nodiscard]] bool customEngineConfigured();
 

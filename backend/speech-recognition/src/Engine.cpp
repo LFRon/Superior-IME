@@ -3,14 +3,21 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string_view>
 
+#include <poll.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "superior/speech_recognition/Layout.hpp"
 #include "superior/speech_recognition/Models.hpp"
 
 namespace superior::speech_recognition {
@@ -34,6 +41,131 @@ std::string trimmed(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
     value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
     return value;
+}
+
+/// Exact flag match in an option list, so `--vad` does not match `--vad-model`.
+bool mentionsFlag(std::string_view text, std::string_view flag) {
+    const auto isSpace = [](char ch) { return std::isspace(static_cast<unsigned char>(ch)) != 0; };
+    for (std::size_t pos = text.find(flag); pos != std::string_view::npos;
+         pos = text.find(flag, pos + 1)) {
+        const std::size_t end = pos + flag.size();
+        const bool leftOk = pos == 0 || isSpace(text[pos - 1]);
+        const bool rightOk = end >= text.size() || isSpace(text[end]);
+        if (leftOk && rightOk) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Runs `program --help` and reports whether its output mentions `flag`.
+///
+/// A help run loads no model and exits in milliseconds, and the child is killed
+/// after a deadline so a wedged binary cannot hang a dictation session.
+bool probeEngineHelp(const std::string &program, std::string_view flag) {
+    int fds[2] = {-1, -1};
+    if (::pipe(fds) != 0) {
+        return false;
+    }
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return false;
+    }
+    if (pid == 0) {
+        ::dup2(fds[1], STDOUT_FILENO);
+        ::dup2(fds[1], STDERR_FILENO);
+        ::close(fds[0]);
+        ::close(fds[1]);
+        ::execl(program.c_str(), program.c_str(), "--help", static_cast<char *>(nullptr));
+        ::_exit(127);
+    }
+    ::close(fds[1]);
+
+    constexpr std::size_t kMaxHelpBytes = 1 << 16;
+    std::string output;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    bool timedOut = false;
+    for (;;) {
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              deadline - std::chrono::steady_clock::now())
+                              .count();
+        if (left <= 0) {
+            timedOut = true;
+            break;
+        }
+        pollfd ready{fds[0], POLLIN, 0};
+        const int result = ::poll(&ready, 1, static_cast<int>(left));
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (result == 0) {
+            timedOut = true;
+            break;
+        }
+        char buffer[4096];
+        const ssize_t bytes = ::read(fds[0], buffer, sizeof(buffer));
+        if (bytes <= 0) {
+            break;
+        }
+        // Keep draining past the cap instead of leaving the child blocked on a
+        // full pipe: the flag we are looking for is in the first few KB anyway.
+        if (output.size() < kMaxHelpBytes) {
+            output.append(buffer, static_cast<std::size_t>(bytes));
+        }
+    }
+    ::close(fds[0]);
+    if (timedOut) {
+        ::kill(pid, SIGKILL);
+    }
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    return mentionsFlag(output, flag);
+}
+
+/// Does this engine understand `--vad`?
+///
+/// Asked once per engine path: the answer cannot change while we run, and the
+/// probe costs one short-lived process instead of every session.
+bool engineSupportsVad(const std::string &program) {
+    static std::mutex mutex;
+    static std::map<std::string, bool> cache;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (const auto found = cache.find(program); found != cache.end()) {
+            return found->second;
+        }
+    }
+    const bool supported = probeEngineHelp(program, "--vad");
+    std::lock_guard<std::mutex> lock(mutex);
+    cache[program] = supported;
+    return supported;
+}
+
+/// Adds the arguments that switch speech gating on, or nothing at all.
+///
+/// Both halves are required, and neither is a given: the engine has to know the
+/// flag (an unknown option makes it exit before it loads a model), and the
+/// weights have to be on disk. `--vad` on its own makes the engine download them
+/// from huggingface.co, which is exactly what a user behind a mirror cannot do —
+/// and the failure mode is not "no gating" but "every recording is silence", i.e.
+/// dictation that types nothing. See `vadModelPath()`.
+void appendVadArgs(EngineCommand &command) {
+    if (!engineSupportsVad(command.program)) {
+        return;
+    }
+    const std::filesystem::path weights = vadModelPath();
+    if (weights.empty()) {
+        return;
+    }
+    command.args.push_back("--vad");
+    command.args.push_back("--vad-model");
+    command.args.push_back(weights.string());
 }
 
 } // namespace
@@ -103,6 +235,9 @@ std::optional<EngineCommand> buildEngineCommand(const EngineConfig &config,
     command.program = config.enginePath;
     command.args = {"--backend", backend, "-m", config.modelPath, "-f", wav.string(),
                     "-t", threads, "--no-timestamps"};
+    // Same speech gating as the streaming form: a recording that is mostly
+    // silence is exactly what makes the model invent a transcript.
+    appendVadArgs(command);
     // Same `off` rule as the streaming form: never let the engine fetch a second
     // model on its own.
     command.args.push_back("--punc-model");
@@ -222,6 +357,14 @@ std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &con
     command.args.push_back(std::to_string(windowSeconds));
     command.args.push_back("--punc-model");
     command.args.push_back(config.puncPath.empty() ? "off" : config.puncPath);
+    // Silence is not neutral audio for this model. Every step re-decodes the whole
+    // window, and with only room tone in it Paraformer still emits a fluent
+    // transcript ("没有没有没有…", "eeee零零零…") that we would then type into the
+    // user's document. VAD trims each utterance to the speech it contains and
+    // reports `silence` instead, which is the difference between dictation and a
+    // stream of nonsense. Skipped when the engine predates the flag, or when the
+    // weights are not on disk yet.
+    appendVadArgs(command);
     if (!config.language.empty() && config.language != "auto") {
         command.args.push_back("-l");
         command.args.push_back(config.language);
