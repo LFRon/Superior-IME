@@ -28,6 +28,13 @@ struct Settings {
     bool speechRecognitionEnabled = true;
     /// Which catalogue model the capability should load and the panel offers.
     std::string speechRecognitionModelId = "qwen3-asr-0.6b";
+    /// A bare tap of the right Ctrl key starts and stops dictation.
+    ///
+    /// On by default, like `shiftToggle`: a tap with no other key held has no
+    /// other meaning, and a shortcut nobody can find in a settings page that does
+    /// not exist yet is a shortcut nobody uses. Presses are never filtered, so
+    /// Ctrl+C still works.
+    bool speechRecognitionHotkey = true;
     std::string logLevel = "info";
 
     /// Cloud pinyin. Off by default: enabling it sends what you type to a third

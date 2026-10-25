@@ -6,6 +6,7 @@
 
 namespace {
 
+using superior::fcitx5::ModifierTap;
 using superior::fcitx5::ShiftTapDetector;
 using Key = ShiftTapDetector::ShiftKey;
 using Result = ShiftTapDetector::Result;
@@ -129,6 +130,43 @@ void testResetClearsHeldState() {
     CHECK(detector.shiftReleased(Key::Left, at(60)) == Result::Toggle);
 }
 
+/// Right Ctrl: a bare quick tap is the gesture, everything else is a shortcut.
+void testModifierTap() {
+    ModifierTap tap;
+    tap.pressed(at(0));
+    CHECK(tap.down());
+    CHECK(tap.released(at(90)));
+    CHECK(!tap.down());
+
+    // Too slow: a held key is not a tap.
+    tap.pressed(at(1000));
+    CHECK(!tap.released(at(2400)));
+
+    // Another key in between makes it a shortcut (Ctrl+C), never a tap.
+    tap.pressed(at(3000));
+    tap.otherKeyPressed();
+    CHECK(!tap.released(at(3050)));
+
+    // Auto-repeat must not restart the window: measured from the first press,
+    // this release is outside it (had the repeat re-timed, 200 ms would pass).
+    tap.pressed(at(4000));
+    tap.pressed(at(4300));
+    CHECK(!tap.released(at(4500)));
+
+    // A stray release, or a release after reset, does nothing.
+    CHECK(!tap.released(at(5000)));
+    tap.pressed(at(6000));
+    tap.reset();
+    CHECK(!tap.down());
+    CHECK(!tap.released(at(6050)));
+
+    // Two taps in a row both work: the second one is not swallowed.
+    tap.pressed(at(7000));
+    CHECK(tap.released(at(7050)));
+    tap.pressed(at(7100));
+    CHECK(tap.released(at(7150)));
+}
+
 } // namespace
 
 int main() {
@@ -145,5 +183,6 @@ int main() {
     testAlternatingShiftKeys();
     testCancelAfterTypingThenTapAgain();
     testResetClearsHeldState();
+    testModifierTap();
     return superior::test::finish("shift tap tests");
 }

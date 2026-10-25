@@ -168,6 +168,17 @@ private:
     void refreshSpeechSetup();
     /// Opens or closes the panel, cancelling a live session on close.
     void toggleSpeechPanel();
+    /// Drops the current utterance without committing it. Used by close, Escape
+    /// and focus loss; the reason is only for the log.
+    void cancelSpeech(std::string_view reason);
+    /// Starts dictation if the capability is ready. Shared by the panel button
+    /// and the right-Ctrl tap, so both paths cannot drift apart.
+    bool startSpeech();
+    /// Ends the utterance and lets the recogniser produce a transcript.
+    void stopSpeech();
+    /// Right-Ctrl tap: start when idle, stop when recording, otherwise open the
+    /// panel so its setup explanation is visible.
+    void toggleSpeechByHotkey();
     /// Applies one JSON line from the recogniser.
     void handleSpeechEvent(std::string_view line);
     /// Commits a finished transcript to the focused input context.
@@ -203,6 +214,8 @@ private:
     protocol::SceneServer server_;
     std::map<fcitx::InputContext *, std::unique_ptr<core::ImeSession>> sessions_;
     std::map<fcitx::InputContext *, ShiftTapDetector> shiftTaps_;
+    /// Right-Ctrl tap per context: the gesture is local to the focused client.
+    std::map<fcitx::InputContext *, ModifierTap> ctrlTaps_;
     std::map<fcitx::InputContext *, PreeditOwnership> preeditOwnership_;
     std::map<fcitx::InputContext *, CloudContext> cloudContexts_;
     /// What this user picked from a cloud candidate, in `$XDG_CONFIG_HOME`.
@@ -240,6 +253,8 @@ private:
     std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = true;
+    /// Right-Ctrl tap toggles dictation (`settings.json: speechRecognitionHotkey`).
+    bool speechRecognitionHotkey_ = true;
     /// Catalogue id selected in settings; the panel can change it.
     std::string speechModelId_ = "qwen3-asr-0.6b";
     bool inlineEnglishEnabled_ = true;

@@ -59,4 +59,35 @@ void ShiftTapDetector::reset() noexcept {
     timing_ = false;
 }
 
+void ModifierTap::pressed(TimePoint at) noexcept {
+    if (down_) {
+        return;
+    }
+    down_ = true;
+    otherKey_ = false;
+    pressedAt_ = at;
+}
+
+bool ModifierTap::released(TimePoint at) noexcept {
+    if (!down_) {
+        return false;
+    }
+    down_ = false;
+    const bool quick = at >= pressedAt_ && (at - pressedAt_) < ShiftTapDetector::kTapWindow;
+    const bool tap = quick && !otherKey_;
+    otherKey_ = false;
+    return tap;
+}
+
+void ModifierTap::otherKeyPressed() noexcept {
+    if (down_) {
+        otherKey_ = true;
+    }
+}
+
+void ModifierTap::reset() noexcept {
+    down_ = false;
+    otherKey_ = false;
+}
+
 } // namespace superior::fcitx5

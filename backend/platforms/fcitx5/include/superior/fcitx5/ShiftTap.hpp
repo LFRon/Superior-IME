@@ -54,4 +54,29 @@ private:
     TimePoint pressedAt_{};
 };
 
+/// Detects a bare tap of a *single* modifier key.
+///
+/// Shift needs two-key coordination, so it has its own detector above. Right
+/// Ctrl is one key, and its rule is simply: press and release inside the window,
+/// with no other key in between. The press itself is never consumed — only the
+/// bare tap is interpreted, so Ctrl+C and friends keep working.
+class ModifierTap {
+public:
+    using TimePoint = std::chrono::steady_clock::time_point;
+
+    /// Records a press. Auto-repeat is harmless: the first timestamp is kept.
+    void pressed(TimePoint at) noexcept;
+    /// True when this release completes a bare tap.
+    [[nodiscard]] bool released(TimePoint at) noexcept;
+    /// Any other key press while the modifier is held rules out a tap.
+    void otherKeyPressed() noexcept;
+    void reset() noexcept;
+    [[nodiscard]] bool down() const noexcept { return down_; }
+
+private:
+    bool down_ = false;
+    bool otherKey_ = false;
+    TimePoint pressedAt_{};
+};
+
 } // namespace superior::fcitx5

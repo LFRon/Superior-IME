@@ -188,6 +188,9 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             if (!isOurs(inputContext)) {
                 return;
             }
+            // The transcript has no destination once the client is gone, and
+            // typing it into whatever gets focus next would be a surprise.
+            cancelSpeech("focus lost");
             if (auto *session = findSession(inputContext)) {
                 session->hide();
                 broadcast(inputContext);
@@ -195,6 +198,9 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             // Drop physical key state: a Shift held while focus moves must not
             // make the next tap look like a modifier use.
             if (auto it = shiftTaps_.find(inputContext); it != shiftTaps_.end()) {
+                it->second.reset();
+            }
+            if (auto it = ctrlTaps_.find(inputContext); it != ctrlTaps_.end()) {
                 it->second.reset();
             }
         }));
@@ -289,6 +295,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             // capability flags die with it.
             preeditOwnership_.erase(inputContext);
             shiftTaps_.erase(inputContext);
+            ctrlTaps_.erase(inputContext);
             cloudContexts_.erase(inputContext);
             if (cloudPendingContext_ == inputContext) {
                 cloudPendingContext_ = nullptr;
@@ -484,6 +491,7 @@ void SuperiorAgent::reloadSettings() {
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
     const bool previousSpeech = speechRecognitionEnabled_;
     speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
+    speechRecognitionHotkey_ = loaded.settings.speechRecognitionHotkey;
     speechModelId_ = loaded.settings.speechRecognitionModelId.empty()
                          ? std::string{"qwen3-asr-0.6b"}
                          : loaded.settings.speechRecognitionModelId;
@@ -786,9 +794,34 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
         return false;
     }
 
+    // Right Ctrl is a second gesture key: a bare tap toggles dictation. The
+    // press is never consumed, so every Ctrl shortcut keeps working.
+    if (sym == FcitxKey_Control_R) {
+        ModifierTap &ctrlTap = ctrlTaps_[inputContext];
+        if (release) {
+            if (ctrlTap.released(now)) {
+                toggleSpeechByHotkey();
+            }
+        } else {
+            ctrlTap.pressed(now);
+        }
+        return false;
+    }
+
     if (!release) {
         // Any real key while Shift is held means "modifier", not "tap".
         shiftTap.otherKeyPressed();
+        ctrlTaps_[inputContext].otherKeyPressed();
+    }
+
+    // While the microphone is live, Escape belongs to the utterance: cancel it
+    // and keep the key away from the engine, which would clear a composition the
+    // user cannot even see behind the panel. The panel stays open — cancelling
+    // is not closing, and re-starting is one click.
+    if (!release && sym == FcitxKey_Escape && speech_.busy()) {
+        cancelSpeech("escape");
+        event.filterAndAccept();
+        return true;
     }
 
     // Who owns this key is a product decision, so it lives in the decision
@@ -1012,43 +1045,14 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                     << "speech start ignored: the capability is not ready";
                 return;
             }
-            if (activeContext_ != nullptr &&
-                activeContext_->capabilityFlags().testAny(
-                    fcitx::CapabilityFlag::PasswordOrSensitive)) {
-                speech_.fail("密码输入框不允许语音输入。");
-                refresh(activeContext_);
-                return;
-            }
-            if (!ensureSpeechProcess()) {
-                speech_.fail("语音识别组件未安装。");
-                refresh(activeContext_);
-                return;
-            }
-            // Starting speech abandons a half-typed pinyin composition: two
-            // input modes must never own the same commit.
-            if (activeContext_ != nullptr) {
-                activeContext_->reset();
-                activeContext_->inputPanel().reset();
-            }
-            if (speech_.beginRecording()) {
-                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start));
-            }
-            refresh(activeContext_);
+            startSpeech();
         } else if constexpr (std::is_same_v<T, api::SpeechStop>) {
             if (contextFor(value.session) == nullptr) {
                 return;
             }
-            speech_.beginTranscribing();
-            if (speechProcess_) {
-                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Stop));
-            }
-            refresh(activeContext_);
+            stopSpeech();
         } else if constexpr (std::is_same_v<T, api::SpeechCancel>) {
-            speech_.cancel();
-            if (speechProcess_) {
-                speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
-            }
-            refresh(activeContext_);
+            cancelSpeech("discard button");
         } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
             // The panel sends this right after it writes `settings.json` (model
             // choice) or finishes a download. Re-reading the file first is not
@@ -1512,14 +1516,86 @@ void SuperiorAgent::refreshSpeechSetup() {
     speech_.refreshSetup(engine, model);
 }
 
+bool SuperiorAgent::startSpeech() {
+    if (!speech_.canStart()) {
+        return false;
+    }
+    if (activeContext_ != nullptr &&
+        activeContext_->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        speech_.fail("密码输入框不允许语音输入。");
+        refresh(activeContext_);
+        return false;
+    }
+    if (!ensureSpeechProcess()) {
+        speech_.fail("语音识别组件未安装。");
+        refresh(activeContext_);
+        return false;
+    }
+    // Starting speech abandons a half-typed pinyin composition: two input modes
+    // must never own the same commit.
+    if (activeContext_ != nullptr) {
+        activeContext_->reset();
+        activeContext_->inputPanel().reset();
+    }
+    if (speech_.beginRecording()) {
+        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start));
+    }
+    refresh(activeContext_);
+    return speech_.recording();
+}
+
+void SuperiorAgent::stopSpeech() {
+    speech_.beginTranscribing();
+    if (speechProcess_) {
+        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Stop));
+    }
+    refresh(activeContext_);
+}
+
+void SuperiorAgent::toggleSpeechByHotkey() {
+    if (!speechRecognitionEnabled_ || !speechRecognitionHotkey_) {
+        return;
+    }
+    if (speech_.recording()) {
+        stopSpeech();
+        return;
+    }
+    if (!speech_.visible()) {
+        // Open *before* asking whether it can start: `canStart()` is false while
+        // the panel is hidden, and a recording with no visible state would be a
+        // hidden microphone. Opening also computes the setup state, so a missing
+        // engine or model turns into an explanation instead of a dead hotkey.
+        toggleSpeechPanel();
+    }
+    if (speech_.canStart()) {
+        startSpeech();
+    }
+}
+
+void SuperiorAgent::cancelSpeech(std::string_view reason) {
+    if (!speech_.busy() || speech_.phase() == api::SpeechPhase::Cancelling) {
+        return;
+    }
+    // The decision layer revokes the commit *first*: a `final` that is already
+    // on the wire must not be typed after this point.
+    speech_.cancel();
+    if (speechProcess_) {
+        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
+    }
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("reason", std::string(reason))
+        .field("phase", api::speechPhaseName(speech_.phase()))
+        << "speech cancelled";
+    if (activeContext_ != nullptr) {
+        refresh(activeContext_);
+    }
+}
+
 void SuperiorAgent::toggleSpeechPanel() {
     if (speech_.visible()) {
         // Closing is a cancel: a transcript still in flight must not be typed
         // into the document after the user closed the panel.
-        speech_.cancel();
-        if (speechProcess_) {
-            speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
-        }
+        cancelSpeech("panel closed");
         speech_.hide();
         if (activeContext_ != nullptr) {
             refresh(activeContext_);
