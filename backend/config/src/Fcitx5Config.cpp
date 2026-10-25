@@ -253,6 +253,52 @@ ApplyOutcome setInnerSegmentation(const Paths &paths, bool enabled) {
     return outcome;
 }
 
+bool readCommonFuzzy(const Paths &paths) {
+    const IniFile ini = IniFile::parse(readText(paths.pinyinConf()));
+    for (const auto key : kCommonFuzzyKeys) {
+        const auto value = ini.get("Fuzzy", key);
+        if (!value || (*value != "True" && *value != "true" && *value != "1")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ApplyOutcome setCommonFuzzy(const Paths &paths, bool enabled) {
+    ApplyOutcome outcome;
+    const fs::path file = paths.pinyinConf();
+
+    std::string error;
+    if (!backupOnce(file, outcome.backup, error)) {
+        outcome.detail = error;
+        return outcome;
+    }
+
+    IniFile ini = IniFile::parse(readText(file));
+    bool changed = false;
+    for (const auto key : kCommonFuzzyKeys) {
+        changed = ini.set("Fuzzy", key, enabled ? "True" : "False") || changed;
+    }
+    if (!changed) {
+        outcome.ok = true;
+        outcome.detail = "fuzzy pinyin already set";
+        return outcome;
+    }
+    if (!writeTextAtomic(file, ini.serialize(), error)) {
+        outcome.detail = error;
+        return outcome;
+    }
+
+    outcome.ok = true;
+    outcome.changed = true;
+    outcome.detail = enabled ? "fuzzy pinyin enabled" : "fuzzy pinyin disabled";
+    SUPERIOR_INFO(diag::categories::Pinyin)
+        .field("fuzzy", enabled)
+        .field("file", file.string())
+        << "fuzzy pinyin updated";
+    return outcome;
+}
+
 ApplyOutcome setClassicUiTheme(const Paths &paths, std::string_view themeName) {
     ApplyOutcome outcome;
     const fs::path file = paths.classicUiConf();

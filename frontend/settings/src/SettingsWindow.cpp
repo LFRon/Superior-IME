@@ -480,6 +480,15 @@ QWidget *SettingsWindow::buildInputPage() {
            "改完需要重启 Fcitx5。"),
         "rowHint"));
 
+    // libime's own typo tolerance. This is the only form that works: a dictionary
+    // row whose pinyin is not a legal syllable is rejected by libime_pinyindict,
+    // so Rime-style derived spellings cannot be imported as data.
+    fuzzyToggle_ = new ToggleSwitch(false);
+    segmentCard->addWidget(makeRow(
+        tr("常用模糊音"),
+        tr("z/zh、c/ch、s/sh、n/l、an/ang、en/eng、in/ing；打错也能出对的词"),
+        fuzzyToggle_));
+
     addCard(layout, tr("候选窗口"),
             tr("候选窗由 Superior 自己的浮层绘制，不受 Fcitx5 全局主题影响；"
                "其他输入法仍使用它们原来的外观。Wayland 会话下浮层自动走 XWayland，"
@@ -608,6 +617,7 @@ QWidget *SettingsWindow::buildAboutPage() {
 void SettingsWindow::loadFromDisk() {
     // Engine setting, separate from our own settings file.
     innerSegmentation_ = config::readInnerSegmentation(paths_).value_or(true);
+    commonFuzzy_ = config::readCommonFuzzy(paths_);
     const auto loaded = config::loadSettings(config::defaultSettingsPath());
     settings_ = loaded.settings;
     for (const auto &warning : loaded.warnings) {
@@ -619,6 +629,9 @@ void SettingsWindow::loadFromDisk() {
 void SettingsWindow::syncWidgets() {
     if (innerToggle_ != nullptr) {
         innerToggle_->setChecked(innerSegmentation_);
+    }
+    if (fuzzyToggle_ != nullptr) {
+        fuzzyToggle_->setChecked(commonFuzzy_);
     }
     if (shiftToggle_ != nullptr) {
         shiftToggle_->setChecked(settings_.shiftToggle);
@@ -778,6 +791,18 @@ void SettingsWindow::applyChanges() {
         }
         if (outcome.changed) {
             innerSegmentation_ = requested;
+        }
+    }
+
+    if (fuzzyToggle_ != nullptr && fuzzyToggle_->isChecked() != commonFuzzy_) {
+        const bool requested = fuzzyToggle_->isChecked();
+        const auto outcome = config::setCommonFuzzy(paths_, requested);
+        if (!outcome.ok) {
+            setStatus(QString::fromStdString(outcome.detail), true);
+            return;
+        }
+        if (outcome.changed) {
+            commonFuzzy_ = requested;
         }
     }
 

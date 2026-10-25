@@ -138,6 +138,11 @@ if [[ ! -f "$dict_dir/rime-ice.dict" ]]; then
                 --minimal; then
             echo "install-user: word list not installed; run scripts/fetch-dictionary.sh rime-ice later" >&2
         fi
+        # 205 entries of "words people write under the reading they actually use".
+        # Cheap, and it is the only typo tolerance libime cannot derive itself.
+        if ! SUPERIOR_PRESET="$preset" "$root/scripts/fetch-dictionary.sh" wanxiang-cuoyin; then
+            echo "install-user: 错音词表 not installed; run scripts/fetch-dictionary.sh wanxiang-cuoyin later" >&2
+        fi
     else
         echo "install-user: skipping the word list (needs curl and libime_pinyindict)"
         echo "  install them, then run: scripts/fetch-dictionary.sh rime-ice"

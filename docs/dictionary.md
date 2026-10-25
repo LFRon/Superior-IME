@@ -178,7 +178,78 @@ xian     →  1. 先  2. 县  3. 现  …            ← 不再有「西安」
 
 ---
 
-## 6. 代码位置
+## 6. 为什么万象不会出现「御笔安逸」，还能容忍错字
+
+看了 `amzxyz/rime-wanxiang` 的两个关键文件后，原因是结构性的，不是词库更好。
+
+### 6.1 分词：Rime 的 algebra 无法拆音节
+
+`wanxiang.schema.yaml` 的 `speller.algebra` 引用 `wanxiang_algebra.yaml:/base/全拼`，
+后者全是这几类规则：
+
+| 规则 | 作用 | 例子 |
+|---|---|---|
+| `xform` / `xlit` | 去声调、归一字符 | `ā` → `a`，`ü` → `v` |
+| `abbrev` | 简拼 | `zh`/`ch`/`sh` 作整体、首字母派生出 `z`/`c`/`s` |
+| `derive` | 派生**近音拼写**（错字容忍） | `hzi → zhi`、`wia → wai`、`zih → zhi` |
+| `erase` | 删除临时标记 | — |
+
+**没有一条规则能把一个音节拆成两个**：`derive` 的输出永远还是单个音节（不含
+`'`）。所以 Rime 的分词器根本不可能把 `bian` 拆成 `bi'an`，也就不会出现
+`yu bi an yi` = 御笔安逸。这是 Rime 与 libime 的**架构差异**，不是数据差异。
+
+libime 对应的是 `[Fuzzy] Inner`（默认开），我们在设置页给了开关，关掉后行为与
+Rime 一致。
+
+### 6.2 错字容忍：89 条 `derive` 规则 + 错音词表，但只有一半可移植
+
+`wanxiang_algebra.yaml` 的全拼块里有 **89 条 `derive`**，例如：
+
+```
+derive/([zcs])h(a|e|i|u|ai|…)$/h$1$2/   # hzi → zhi
+derive/^([wghk])ai$/$1ia/               # wia → wai
+derive/([qjx])ia$/$1ai/                 # qai → qia
+```
+
+我试过把同样的思路用在词典上：给每个词条额外写一行「错拼 → 正词」。**libime 直接
+拒绝**：
+
+```
+E pinyindictionary.cpp:234] Failed to parse line: 味噌  wie'zeng  7521, skipping.
+```
+
+`libime_pinyindict` 会校验拼音列里的每个音节必须是合法音节，`wie`、`hzi`、`boa`
+都不是，整份导入失败。所以**这条路走不通**——Rime 可以接受任意拼写串，libime 不行。
+
+那"打错还能纠正"怎么实现？两件事都可行：
+
+1. **libime 自带的模糊音**（`[Fuzzy] Z_ZH / C_CH / S_SH / L_N / AN_ANG / EN_ENG /
+   IN_ING`）。默认全关。打开后：
+   ```
+   zi → 1. 字  2. zit  3. 之  4. 只  5. 至  6. 自  7. 指
+   ```
+   `之/只/至/自/指` 都是 `zhi` 的字——打 `zi` 也能出。设置页「输入 → 拼音切分 →
+   常用模糊音」一键开关（只动这 7 个键，`V_U` 等其它项不碰）。
+
+2. **万象的 `cuoyin.dict.yaml`**（205 条，错音错字对照）。它的"错"读音**本身是合法
+   音节**，所以能导入：
+   ```
+   籼米  shan mǐ     ← 正确读音 xiān，常见误读 shān
+   腈纶  qíng lún    ← 正确读音 jīng
+   剽悍  biāo hàn    ← 正确读音 piāo
+   ```
+   一条命令安装：
+   ```bash
+   ./scripts/fetch-dictionary.sh wanxiang-cuoyin
+   ```
+   实测 `shanmi` 从「1. 山米」变成「**1. 籼米** 2. 山米 …」。
+
+一句话：**分词差异靠配置（`Inner`），错字容忍靠模糊音 + 合法错音词表**；Rime
+的 `derive` 魔法无法用数据复制。
+
+---
+
+## 7. 代码位置
 
 | 文件 | 内容 |
 |---|---|
@@ -190,7 +261,7 @@ xian     →  1. 先  2. 县  3. 现  …            ← 不再有「西安」
 
 ---
 
-## 7. 测试
+## 8. 测试
 
 `tests/dictionary_tests.cpp`：
 

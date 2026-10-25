@@ -31,6 +31,7 @@ files=(
     # different name and is left alone.
     "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice.dict"
     "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice-lite.dict"
+    "$HOME/.local/share/fcitx5/pinyin/dictionaries/wanxiang-cuoyin.dict"
 )
 trees=(
     # Binaries + skins.

@@ -69,6 +69,22 @@ struct ApplyOutcome {
 /// affected too — both entries are backed by `Addon=pinyin`.
 [[nodiscard]] ApplyOutcome setInnerSegmentation(const Paths &paths, bool enabled);
 
+/// The fuzzy-pinyin pairs that correspond to real typing mistakes:
+/// `z/zh`, `c/ch`, `s/sh`, `n/l`, `an/ang`, `en/eng`, `in/ing`.
+///
+/// This is libime's own typo tolerance. It is the only mechanism that actually
+/// works: a dictionary row whose pinyin is not a legal syllable is rejected by
+/// `libime_pinyindict`, so Rime-style `derive` spellings (`hzi` for `zhi`)
+/// cannot be imported.
+inline constexpr std::string_view kCommonFuzzyKeys[] = {"Z_ZH", "C_CH",   "S_SH",  "L_N",
+                                                       "AN_ANG", "EN_ENG", "IN_ING"};
+
+/// True when **all** of `kCommonFuzzyKeys` are enabled in `[Fuzzy]`.
+[[nodiscard]] bool readCommonFuzzy(const Paths &paths);
+
+/// Enables or disables the whole `kCommonFuzzyKeys` set.
+[[nodiscard]] ApplyOutcome setCommonFuzzy(const Paths &paths, bool enabled);
+
 /// Copies an exported theme directory into the user theme directory.
 [[nodiscard]] ApplyOutcome installThemeDir(const Paths &paths,
                                            const std::filesystem::path &sourceDirectory,

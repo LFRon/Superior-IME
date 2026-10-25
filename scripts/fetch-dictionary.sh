@@ -10,6 +10,7 @@
 # Usage:
 #   scripts/fetch-dictionary.sh rime-ice            # base + ext
 #   scripts/fetch-dictionary.sh rime-ice --minimal  # base only (smaller, faster)
+#   scripts/fetch-dictionary.sh wanxiang-cuoyin     # 异读/错音词表 (205 条)
 #   scripts/fetch-dictionary.sh rime-ice --force    # rebuild even if present
 #   scripts/fetch-dictionary.sh rime-ice --out DIR  # install somewhere else
 #
@@ -74,6 +75,15 @@ for tool in libime_pinyindict curl; do
 done
 
 case "$preset" in
+    wanxiang-cuoyin)
+        # 万象's 错音错字对照表. Small on purpose: it lists words under the
+        # reading people actually use (粳米 as gengmi, 籼米 as shanmi), which
+        # libime cannot learn on its own. These readings are legal syllables, so
+        # they survive the pinyin validator — unlike Rime's `derive` spellings.
+        repo="https://raw.githubusercontent.com/amzxyz/rime-wanxiang/wanxiang/dicts"
+        sources=(cuoyin)
+        name="wanxiang-cuoyin"
+        ;;
     rime-ice)
         repo="https://raw.githubusercontent.com/iDvel/rime-ice/main/cn_dicts"
         sources=(base ext)

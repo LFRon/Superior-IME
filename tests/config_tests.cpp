@@ -205,6 +205,42 @@ void testInnerSegmentation() {
     CHECK(!again.changed);
 }
 
+/// libime's fuzzy pairs are the only typo tolerance that survives the pinyin
+/// validator; the settings page drives them as one switch.
+void testCommonFuzzy() {
+    TempTree tree;
+    tree.write("config/fcitx5/conf/pinyin.conf",
+               "# 拼音\n[Fuzzy]\nZ_ZH=False\nC_CH=False\nS_SH=False\nL_N=False\n"
+               "AN_ANG=False\nEN_ENG=False\nIN_ING=False\nV_U=False\n");
+
+    CHECK(!superior::config::readCommonFuzzy(tree.paths()));
+
+    const ApplyOutcome on = superior::config::setCommonFuzzy(tree.paths(), true);
+    CHECK(on.ok);
+    CHECK(on.changed);
+    CHECK(superior::config::readCommonFuzzy(tree.paths()));
+
+    const std::string text = tree.read("config/fcitx5/conf/pinyin.conf");
+    CHECK(text.find("Z_ZH=True") != std::string::npos);
+    CHECK(text.find("IN_ING=True") != std::string::npos);
+    // A pair we do not drive must be left alone.
+    CHECK(text.find("V_U=False") != std::string::npos);
+
+    // Enabling twice is a no-op, not a rewrite.
+    const ApplyOutcome again = superior::config::setCommonFuzzy(tree.paths(), true);
+    CHECK(again.ok);
+    CHECK(!again.changed);
+
+    const ApplyOutcome off = superior::config::setCommonFuzzy(tree.paths(), false);
+    CHECK(off.ok);
+    CHECK(!superior::config::readCommonFuzzy(tree.paths()));
+
+    // A file without [Fuzzy] reads as "off" rather than crashing.
+    TempTree empty;
+    empty.write("config/fcitx5/conf/pinyin.conf", "PageSize=7\n");
+    CHECK(!superior::config::readCommonFuzzy(empty.paths()));
+}
+
 } // namespace
 
 int main() {
@@ -217,5 +253,6 @@ int main() {
     testSettingsRejectsBadValues();
     testSkinRootsPriority();
     testInnerSegmentation();
+    testCommonFuzzy();
     return superior::test::finish("config tests");
 }
