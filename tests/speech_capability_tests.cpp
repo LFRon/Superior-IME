@@ -287,6 +287,9 @@ void testProtocolRoundTrip() {
         CHECK(configure->config.enginePath == "/e");
         CHECK(configure->config.modelPath == "/m");
         CHECK(configure->config.threads == 8);
+        // Absent in an older agent's payload: the capability picks its default
+        // instead of being handed a step of 0 ms.
+        CHECK(configure->config.stepMs == 0);
     }
 
     CHECK(!decodeCommand("not json").has_value());
@@ -300,6 +303,7 @@ void testProtocolRoundTrip() {
     outbound.config.enginePath = "/opt/asr";
     outbound.config.modelPath = "/models/m.gguf";
     outbound.config.threads = 6;
+    outbound.config.stepMs = 1000;
     const auto echoed = decodeCommand(encodeCommand(outbound));
     CHECK(echoed.has_value());
     if (echoed) {
@@ -307,6 +311,7 @@ void testProtocolRoundTrip() {
         CHECK(echoed->config.enginePath == "/opt/asr");
         CHECK(echoed->config.modelPath == "/models/m.gguf");
         CHECK(echoed->config.threads == 6);
+        CHECK(echoed->config.stepMs == 1000);
     }
 
     Command cancel;

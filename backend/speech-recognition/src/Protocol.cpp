@@ -82,7 +82,8 @@ std::string encodeCommand(const Command &command) {
                           {"backend", command.config.backend},
                           {"punc", command.config.puncPath},
                           {"language", command.config.language},
-                          {"threads", command.config.threads}};
+                          {"threads", command.config.threads},
+                          {"step", command.config.stepMs}};
     }
     return json.dump();
 }
@@ -111,6 +112,7 @@ std::optional<Command> decodeCommand(std::string_view line) {
         command.config.puncPath = config.value("punc", std::string{});
         command.config.language = config.value("language", std::string{"zh"});
         command.config.threads = config.value("threads", 4);
+        command.config.stepMs = config.value("step", 0);
     }
     return command;
 }

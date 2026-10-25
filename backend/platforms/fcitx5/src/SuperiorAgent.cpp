@@ -1648,6 +1648,10 @@ void SuperiorAgent::configureSpeechProcess() {
     configure.config.puncPath = punctuationModelPath();
     configure.config.language = "zh";
     configure.config.threads = 0; // 0 = let the capability size it to the machine
+    // The model, not the user, decides how much audio one re-decode covers: a
+    // light non-autoregressive model stays ahead of the microphone at half the
+    // delay, while an autoregressive one only does it at the coarser step.
+    configure.config.stepMs = model.stepMs;
     speechProcess_->send(encodeCommand(configure));
 }
 

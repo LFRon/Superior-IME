@@ -35,6 +35,17 @@ struct ModelEntry {
     std::string sha256;      // empty = not pinned yet
     std::string backend;     // crispasr backend name
     std::string languages;
+    /// Baseline streaming step in ms: how much audio one re-decode covers, i.e.
+    /// how long a word can take to show up. Smaller is snappier and costs CPU
+    /// *quadratically* with the length of the open utterance (every step
+    /// re-decodes all of it), so only a light model may ask for less.
+    ///
+    /// 1000 ms for Paraformer-zh: measured on a Ryzen 7 8845HS, 55 s of speech
+    /// with the VAD on, 0.38x realtime in CPU core-seconds against 0.31x at
+    /// 2000 ms — a 23 % rise for half the delay. The autoregressive models stay
+    /// at 2000 ms: FireRed at 1000 ms measured 2.96x realtime over the same
+    /// 55 s, which is more than a laptop can give.
+    int stepMs = 2000;
 };
 
 /// Ordered: the recommended model first.
@@ -49,7 +60,7 @@ struct ModelEntry {
         // crispasr `paraformer` backend, which is what we can actually load; that
         // conversion carries the FunASR model licence (not Apache-2.0).
         {"paraformer-zh", "Paraformer-zh（推荐·中文·轻量）", "cstr/paraformer-zh-GGUF",
-         "paraformer-zh-q4_k.gguf", 128687104, "", "paraformer", "zh,en"},
+         "paraformer-zh-q4_k.gguf", 128687104, "", "paraformer", "zh,en", 1000},
         {"firered-asr2-aed", "FireRedASR2-AED（高精度·中文）", "cstr/firered-asr2-aed-GGUF",
          "firered-asr2-aed-q4_k.gguf", 963000000, "", "firered-asr", "zh,en,粤语等"},
         {"qwen3-asr-1.7b", "Qwen3-ASR-1.7B（推荐·英语）", "cstr/qwen3-asr-1.7b-GGUF",

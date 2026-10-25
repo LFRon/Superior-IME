@@ -21,6 +21,10 @@ struct EngineConfig {
     std::string puncPath;
     std::string language = "zh";
     int threads = 4;
+    /// Streaming step the *model* asks for, in ms (see `ModelEntry::stepMs`);
+    /// 0 lets the capability pick its own default. The machine's own history
+    /// and the current load are applied on top, never instead.
+    int stepMs = 0;
 };
 
 /// agent -> recogniser, one JSON object per line.
