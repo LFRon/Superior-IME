@@ -227,8 +227,23 @@ bool SpeechProcess::handleReadable() {
     char chunk[1024];
     const ssize_t count = ::read(fd_, chunk, sizeof(chunk));
     if (count <= 0) {
-        // EOF: the child died. Stop watching and let the agent report it.
+        // EOF: the child died. `pid_` has to go with it, otherwise `running()` keeps
+        // answering true and `ensureSpeechProcess()` never restarts anything: every
+        // later `Start` was written into a closed pipe and silently dropped, so the
+        // input method stayed mute until Fcitx5 was restarted. Reaping here also
+        // keeps a zombie from hanging around.
         io_.reset();
+        if (stdinFd_ >= 0) {
+            ::close(stdinFd_);
+            stdinFd_ = -1;
+        }
+        if (pid_ > 0) {
+            int status = 0;
+            ::waitpid(pid_, &status, WNOHANG);
+            pid_ = -1;
+        }
+        fd_ = -1;
+        buffer_.clear();
         return false;
     }
     buffer_.append(chunk, static_cast<std::size_t>(count));
