@@ -534,6 +534,10 @@ Log &Log::field(std::string_view key, std::string_view value) {
     return *this;
 }
 
+Log &Log::field(std::string_view key, const char *value) {
+    return field(key, value != nullptr ? std::string_view(value) : std::string_view{});
+}
+
 Log &Log::field(std::string_view key, std::int64_t value) {
     return field(key, std::string_view(std::to_string(value)));
 }

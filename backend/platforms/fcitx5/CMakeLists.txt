@@ -45,6 +45,7 @@ if(SUPERIOR_ENABLE_FCITX5)
         Superior::Fcitx5Mapping
         Superior::Protocol
         Superior::Config
+        Superior::CloudPinyin
         Superior::Diagnostics)
 
     set_target_properties(superior_fcitx5_agent PROPERTIES

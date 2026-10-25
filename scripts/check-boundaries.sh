@@ -55,6 +55,11 @@ scan "backend/skin" '#include[[:space:]]*[<"](Q|Qt)' "skin -> Qt"
 scan "backend/skin" '#include[[:space:]]*[<"]fcitx' "skin -> fcitx5"
 scan "backend/skin" '\bQImage\b|\bQPixmap\b|\bQPainter\b' "skin -> pixel decoding"
 
+# Cloud pinyin is transport + parsing only: it must not know about the framework
+# or the UI toolkit, otherwise it cannot be unit tested or reused on Windows.
+scan "backend/cloudpinyin" '#include[[:space:]]*[<"](Q|Qt)' "cloudpinyin -> Qt"
+scan "backend/cloudpinyin" '#include[[:space:]]*[<"]fcitx' "cloudpinyin -> fcitx5"
+
 # Runtime may use core, but its public headers must not expose core types.
 scan "backend/runtime/include" '#include[[:space:]]*[<"]superior/core/' "runtime public header -> core"
 scan "backend/runtime/include" 'superior::core' "runtime public header -> core"

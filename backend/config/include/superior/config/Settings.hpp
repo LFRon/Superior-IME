@@ -21,6 +21,17 @@ struct Settings {
     double uiScale = 1.0;
     bool voiceEnabled = false;
     std::string logLevel = "info";
+
+    /// Cloud pinyin. Off by default: enabling it sends what you type to a third
+    /// party, so it is an explicit choice, never a surprise.
+    bool cloudPinyinEnabled = false;
+    /// `googlecn` / `baidu` / `sogou`; see `superior/cloudpinyin/Cloud.hpp`.
+    std::string cloudPinyinBackend = "googlecn";
+    /// Two characters is the floor: one letter matches far too much to be a
+    /// useful candidate. Longer strings are debounced, not skipped.
+    int cloudPinyinMinLength = 2;
+    /// 1-based position of the cloud candidate; 2 = right after the first.
+    int cloudPinyinIndex = 2;
 };
 
 struct SettingsLoad {

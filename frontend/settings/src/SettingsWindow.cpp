@@ -150,6 +150,20 @@ struct Placement {
     const char *label;
 };
 
+struct CloudBackendChoice {
+    const char *value;
+    const char *label;
+};
+
+/// Mirrors `superior/cloudpinyin/Cloud.hpp`. The settings window only reads
+/// `Settings`, so the list is restated here rather than pulling the networking
+/// module into the UI process.
+constexpr CloudBackendChoice kCloudBackends[] = {
+    {"googlecn", "Google (google.cn)"},
+    {"baidu", "百度（接口失效）"},
+    {"sogou", "搜狗（暂不可用）"},
+};
+
 constexpr Placement kPlacements[] = {
     {"bottomRight", "右下角"},
     {"bottomLeft", "左下角"},
@@ -457,6 +471,26 @@ QWidget *SettingsWindow::buildInputPage() {
                "其他输入法仍使用它们原来的外观。Wayland 会话下浮层自动走 XWayland，"
                "保持永久置顶且不抢焦点。"));
 
+    QVBoxLayout *cloudCard = addCard(
+        layout, tr("云拼音"),
+        tr("把当前拼音发送到在线服务，用返回的词补一个候选。拼音本身会离开本机，"
+           "所以默认关闭；密码框与英文模式永远不会发送。"));
+    cloudToggle_ = new ToggleSwitch(false);
+    cloudCard->addWidget(makeRow(tr("启用云拼音"), tr("输入两个字母以上才会上网查询"),
+                                 cloudToggle_));
+    cloudBackendCombo_ = new QComboBox;
+    for (const auto &backend : kCloudBackends) {
+        cloudBackendCombo_->addItem(QString::fromUtf8(backend.label),
+                                    QString::fromUtf8(backend.value));
+    }
+    cloudCard->addWidget(
+        makeRow(tr("服务"), tr("百度接口目前失效，选择它会一直查不到结果"),
+                cloudBackendCombo_));
+    cloudCard->addWidget(makeLabel(
+        tr("连续失败三次后会自动暂停一分钟，避免每次打字都去撞一个连不上的服务。"
+           "查到的结果会缓存，同一个词再打一次不再联网。"),
+        "rowHint"));
+
     layout->addStretch();
     return scrolled(page);
 }
@@ -570,6 +604,16 @@ void SettingsWindow::syncWidgets() {
     if (shiftToggle_ != nullptr) {
         shiftToggle_->setChecked(settings_.shiftToggle);
     }
+    if (cloudToggle_ != nullptr) {
+        cloudToggle_->setChecked(settings_.cloudPinyinEnabled);
+    }
+    if (cloudBackendCombo_ != nullptr) {
+        const QString value = QString::fromStdString(settings_.cloudPinyinBackend);
+        const int index = cloudBackendCombo_->findData(value);
+        if (index >= 0) {
+            cloudBackendCombo_->setCurrentIndex(index);
+        }
+    }
     if (statusBarToggle_ != nullptr) {
         statusBarToggle_->setChecked(settings_.showStatusBar);
     }
@@ -666,6 +710,15 @@ config::Settings SettingsWindow::currentSettings() const {
     }
     if (shiftToggle_ != nullptr) {
         result.shiftToggle = shiftToggle_->isChecked();
+    }
+    if (cloudToggle_ != nullptr) {
+        result.cloudPinyinEnabled = cloudToggle_->isChecked();
+    }
+    if (cloudBackendCombo_ != nullptr) {
+        const QString value = cloudBackendCombo_->currentData().toString();
+        if (!value.isEmpty()) {
+            result.cloudPinyinBackend = value.toStdString();
+        }
     }
     if (statusBarToggle_ != nullptr) {
         result.showStatusBar = statusBarToggle_->isChecked();

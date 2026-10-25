@@ -1,5 +1,6 @@
 add_executable(superior_config_cli main.cpp)
 target_link_libraries(superior_config_cli PRIVATE
+    Superior::CloudPinyin
     Superior::Config
     Superior::Skin
     Superior::Theme

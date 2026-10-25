@@ -58,6 +58,7 @@ inline constexpr std::string_view Protocol = "superior.protocol";
 inline constexpr std::string_view Socket = "superior.protocol.socket";
 inline constexpr std::string_view Fcitx5 = "superior.fcitx5";
 inline constexpr std::string_view Pinyin = "superior.pinyin";
+inline constexpr std::string_view Cloud = "superior.cloud";
 inline constexpr std::string_view Ui = "superior.ui";
 inline constexpr std::string_view Tool = "superior.tool";
 
@@ -131,6 +132,10 @@ public:
 
     std::ostream &stream();
     Log &field(std::string_view key, std::string_view value);
+    /// Without this overload a string literal picks the `bool` one (a literal is
+    /// an array decaying to a pointer, which converts to bool far too eagerly),
+    /// so `.field("reason", "too-short")` logged `reason=true`.
+    Log &field(std::string_view key, const char *value);
     Log &field(std::string_view key, std::int64_t value);
     Log &field(std::string_view key, std::uint64_t value);
     Log &field(std::string_view key, double value, int precision = 3);

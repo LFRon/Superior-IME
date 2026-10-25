@@ -76,12 +76,27 @@ SettingsLoad loadSettings(const fs::path &path) {
     settings.uiScale = document.value("uiScale", settings.uiScale);
     settings.voiceEnabled = document.value("voiceEnabled", settings.voiceEnabled);
     settings.logLevel = document.value("logLevel", settings.logLevel);
+    settings.cloudPinyinEnabled = document.value("cloudPinyinEnabled", settings.cloudPinyinEnabled);
+    settings.cloudPinyinBackend =
+        document.value("cloudPinyinBackend", settings.cloudPinyinBackend);
+    settings.cloudPinyinMinLength =
+        document.value("cloudPinyinMinLength", settings.cloudPinyinMinLength);
+    settings.cloudPinyinIndex = document.value("cloudPinyinIndex", settings.cloudPinyinIndex);
 
     if (!validPlacement(settings.statusPlacement)) {
         result.warnings.push_back("invalid statusPlacement, falling back to bottomRight");
         settings.statusPlacement = "bottomRight";
     }
     settings.uiScale = std::clamp(settings.uiScale, 0.75, 3.0);
+    // Clamp instead of rejecting: a bad number here is a nuisance, not a reason
+    // to throw away the rest of the file.
+    settings.cloudPinyinMinLength = std::clamp(settings.cloudPinyinMinLength, 1, 32);
+    settings.cloudPinyinIndex = std::clamp(settings.cloudPinyinIndex, 1, 9);
+    if (settings.cloudPinyinBackend != "googlecn" && settings.cloudPinyinBackend != "baidu" &&
+        settings.cloudPinyinBackend != "sogou") {
+        result.warnings.push_back("invalid cloudPinyinBackend, falling back to googlecn");
+        settings.cloudPinyinBackend = "googlecn";
+    }
     static const std::vector<std::string> kLevels{"trace", "debug", "info", "warning", "error",
                                                   "off"};
     if (std::find(kLevels.begin(), kLevels.end(), settings.logLevel) == kLevels.end()) {
@@ -107,6 +122,10 @@ bool saveSettings(const fs::path &path, const Settings &settings, std::string &e
     document["uiScale"] = settings.uiScale;
     document["voiceEnabled"] = settings.voiceEnabled;
     document["logLevel"] = settings.logLevel;
+    document["cloudPinyinEnabled"] = settings.cloudPinyinEnabled;
+    document["cloudPinyinBackend"] = settings.cloudPinyinBackend;
+    document["cloudPinyinMinLength"] = settings.cloudPinyinMinLength;
+    document["cloudPinyinIndex"] = settings.cloudPinyinIndex;
 
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);

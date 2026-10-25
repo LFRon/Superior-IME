@@ -142,6 +142,28 @@ void testPublishRawIgnoresCategoryFilter() {
     CHECK(records.front().category == "qt.default");
 }
 
+/// A string literal must log as text. Before the `const char*` overload existed
+/// it matched the `bool` overload, so `.field("reason", "too-short")` printed
+/// `reason=true` and every diagnostic using a literal was useless.
+void testFieldStringLiteral() {
+    std::vector<diag::Record> records;
+    diag::setSink([&records](const diag::Record &record) { records.push_back(record); });
+    // Earlier tests lowered the level; reset so an INFO record is not filtered.
+    diag::clearCategoryLevels();
+    diag::setMinLevel(diag::Level::Trace);
+
+    SUPERIOR_INFO("test.literal").field("reason", "too-short").field("count", static_cast<std::int64_t>(3)) << "msg";
+
+    CHECK(records.size() == 1);
+    if (records.empty()) {
+        return;
+    }
+    const std::string &message = records.front().message;
+    CHECK(message.find("reason=too-short") != std::string::npos);
+    CHECK(message.find("reason=true") == std::string::npos);
+    CHECK(message.find("count=3") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -157,5 +179,6 @@ int main() {
 
     diag::setSink(nullptr);
     diag::setFallbackSink(nullptr);
+    testFieldStringLiteral();
     return superior::test::finish("diagnostics tests");
 }

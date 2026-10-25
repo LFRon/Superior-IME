@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "superior/config/Fcitx5Config.hpp"
+#include "superior/cloudpinyin/Cloud.hpp"
+#include "superior/cloudpinyin/CloudState.hpp"
+#include "superior/cloudpinyin/Fetcher.hpp"
 #include "superior/config/Settings.hpp"
 #include "superior/diagnostics/Log.hpp"
 #include "superior/theme/ClassicUiTheme.hpp"
@@ -23,6 +28,8 @@ void usage(std::ostream &out) {
            "  status                       show the Fcitx5 theme state\n"
            "  theme install [SKIN]         export SKIN as a classicui theme and select it\n"
            "  theme select NAME            select an already installed theme\n"
+           "  cloud probe [--backend NAME] [PINYIN]\n"
+           "                               ask the cloud provider once and report\n"
            "\n"
            "Inline Chinese/English switching is handled inside the input method and\n"
            "is not a global Fcitx5 hotkey; see docs/input-panel.md.\n"
@@ -190,6 +197,57 @@ int handleThemeSelect(const config::Paths &paths, const std::string &name) {
     return report(paths, loaded.settings);
 }
 
+/// One synchronous probe: build the URL, run one transfer, report what came
+/// back. Used to answer "is cloud pinyin usable on this network right now?"
+/// without having to type into an application and guess.
+int handleCloudProbe(const std::string &backendName, const std::string &pinyin) {
+    const auto backend = cloudpinyin::backendFromString(backendName);
+    if (!backend) {
+        std::cerr << "superior-config: unknown cloud backend '" << backendName << "'\n";
+        return 2;
+    }
+    const auto normalized = cloudpinyin::normalizePinyin(pinyin);
+    if (!normalized) {
+        std::cerr << "superior-config: '" << pinyin << "' is not pinyin (a-z only)\n";
+        return 2;
+    }
+
+    std::cout << "backend   : " << cloudpinyin::backendName(*backend) << '\n';
+    std::cout << "query     : " << *normalized << '\n';
+    const std::string url = cloudpinyin::requestUrl(*backend, *normalized);
+    if (url.empty()) {
+        std::cout << "endpoint  : (none) — this backend has no public endpoint\n";
+        return 1;
+    }
+    std::cout << "endpoint  : " << url << '\n';
+
+    cloudpinyin::Fetcher fetcher(5000);
+    if (!fetcher.submit(*normalized, *backend)) {
+        std::cout << "result    : cannot start the request\n";
+        return 1;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto results = fetcher.poll();
+        if (results.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+        const auto &result = results.front();
+        std::cout << "http      : " << result.httpCode << '\n';
+        std::cout << "network   : " << (result.networkError ? "unreachable" : "ok") << '\n';
+        if (result.ok && !result.text.empty()) {
+            std::cout << "candidate : " << result.text << '\n';
+            std::cout << "verdict   : available\n";
+            return 0;
+        }
+        std::cout << "verdict   : no candidate (provider has no answer for this input)\n";
+        return 1;
+    }
+    std::cout << "verdict   : timed out\n";
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -227,6 +285,18 @@ int main(int argc, char **argv) {
     }
     if (command == "apply") {
         return handleApply(paths);
+    }
+    if (command == "cloud") {
+        std::string backend = "googlecn";
+        std::string pinyin = "nihao";
+        for (std::size_t i = 1; i < positional.size(); ++i) {
+            if (positional[i] == "--backend" && i + 1 < positional.size()) {
+                backend = positional[++i];
+            } else {
+                pinyin = positional[i];
+            }
+        }
+        return handleCloudProbe(backend, pinyin);
     }
     if (command == "theme") {
         if (positional.size() < 2) {

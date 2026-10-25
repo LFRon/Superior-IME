@@ -6,6 +6,7 @@
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
+#include <fcitx/candidatelist.h>
 #include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/instance.h>
@@ -22,6 +23,9 @@
 #include <vector>
 
 #include "superior/api/Commands.hpp"
+#include "superior/cloudpinyin/Cloud.hpp"
+#include "superior/cloudpinyin/CloudState.hpp"
+#include "superior/cloudpinyin/Fetcher.hpp"
 #include "superior/core/ImeSession.hpp"
 #include "superior/fcitx5/PanelFacts.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
@@ -112,6 +116,37 @@ private:
     /// what that means, exactly like a click in classicui's tray.
     void activateStatusItem(const std::string &itemId);
 
+    /// Cloud pinyin, sitting next to the engine's own candidates.
+    ///
+    /// Everything here is additive: we never remove or reorder what the engine
+    /// produced, we only splice in one extra candidate. If the provider has
+    /// nothing, the list is left exactly as the engine built it.
+    struct CloudContext {
+        /// The candidate list we injected into. The engine rebuilds the list on
+        /// every keystroke, so a different pointer means "this is a new
+        /// composition" and any stored index is stale.
+        const fcitx::CandidateList *list = nullptr;
+        std::string pinyin;
+        int insertIndex = -1;
+        bool pending = false;
+        /// Text currently sitting at `insertIndex` because we put it there. Used
+        /// to tell "our row is still there" from "the engine rebuilt the list and
+        /// that position now holds a real candidate".
+        std::string text;
+    };
+    void syncCloudCandidate(fcitx::InputContext *inputContext);
+    /// Runs on a short timer: drains finished transfers, then fires the debounced
+    /// request once the composition has settled.
+    void pumpCloud();
+    void applyCloudResult(fcitx::InputContext *inputContext, const std::string &pinyin,
+                          const std::string &text);
+    void dropCloudCandidate(fcitx::InputContext *inputContext);
+    void updateCloudTimer();
+
+    /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
+    /// text. Kept in one place so the policy cannot drift between call sites.
+    void commitCloudText(fcitx::InputContext *inputContext, std::string_view text);
+
     /// Commits the candidate the user clicked. The id is re-validated against
     /// the live list, never trusted as an index.
     void activateCandidate(const api::ActivateCandidate &command);
@@ -134,6 +169,24 @@ private:
     std::map<fcitx::InputContext *, std::unique_ptr<core::ImeSession>> sessions_;
     std::map<fcitx::InputContext *, ShiftTapDetector> shiftTaps_;
     std::map<fcitx::InputContext *, PreeditOwnership> preeditOwnership_;
+    std::map<fcitx::InputContext *, CloudContext> cloudContexts_;
+
+    cloudpinyin::Fetcher cloudFetcher_;
+    cloudpinyin::AnswerCache cloudCache_{256};
+    /// Park the provider after three fruitless attempts. Upstream waits ten,
+    /// which is long enough for a user to notice "cloud is on but nothing
+    /// arrives" — and then wait five more minutes for the cooldown.
+    cloudpinyin::ErrorBudget cloudBudget_{3, 60000};
+    cloudpinyin::Backend cloudBackend_ = cloudpinyin::Backend::GoogleCn;
+    bool cloudEnabled_ = false;
+    int cloudMinLength_ = 2;
+    int cloudIndex_ = 2;
+    std::unique_ptr<fcitx::EventSourceTime> cloudTimer_;
+    /// Debounce: only the settled composition is sent, because typing `nihao`
+    /// would otherwise fire four requests (`ni`, `nih`, `niha`, `nihao`).
+    fcitx::InputContext *cloudPendingContext_ = nullptr;
+    std::string cloudPendingPinyin_;
+    std::chrono::steady_clock::time_point cloudPendingSince_{};
     bool overlaySpawned_ = false;
     bool settingsLoaded_ = false;
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;

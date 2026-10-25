@@ -214,6 +214,7 @@ fcitx5-remote -e && fcitx5 -d
 | `showStatusBar` | 状态栏显隐（是设置项，不会被下一帧场景覆盖） |
 | `statusPlacement` | `bottomRight` / `bottomLeft` / `topRight` / `topLeft` |
 | `shiftToggle` | 内联中英文切换总开关 |
+| `cloudPinyinEnabled` / `cloudPinyinBackend` | 云拼音开关与服务商，见 [docs/cloud-pinyin.md](docs/cloud-pinyin.md) |
 
 状态栏是可点击的。点击只发语义命令 `ToggleStatusItem{id}`，agent 找到 Fcitx5
 里同名的 action 并调用它——引擎状态仍由引擎决定，浮层永远不持输入状态，也不抢焦点。
@@ -292,6 +293,27 @@ client preedit（用它的字体和颜色），我们的皮肤只能覆盖候选
 
 窗口位置与缩放的纯计算在 `frontend/desktop/src/LayoutRules.{hpp,cpp}`，
 单测见 `tests/layout_rules_tests.cpp`。
+
+---
+
+## 云拼音
+
+默认关闭。开启后输入两个字母以上、停顿 200 ms，就会把**纯拼音**发给服务商，
+用返回的词补一个候选；密码框与英文模式永不发送。
+
+```bash
+# 先确认当前网络能不能用（不改任何配置）
+./build/linux-ui/tools/superior-config/superior_config_cli cloud probe --backend googlecn nihao
+```
+
+| 服务商 | 状态 |
+|---|---|
+| `googlecn`（默认） | 可用，直连约 0.2 s |
+| `baidu` | 接口失效（固定返回 `errno 19`） |
+| `sogou` | 无公开端点，暂不可用 |
+
+实现与取舍（为什么不用线程、为什么状态以拼音为身份、为什么去重）见
+[docs/cloud-pinyin.md](docs/cloud-pinyin.md)。
 
 ---
 

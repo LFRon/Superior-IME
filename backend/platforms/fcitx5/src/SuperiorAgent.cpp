@@ -55,7 +55,45 @@ std::size_t byteCursor(const fcitx::Text &text) {
     }
     return static_cast<std::size_t>(cursor);
 }
-} // namespace
+
+/// Marker shown while a cloud answer is still on its way. Matches upstream's
+/// glyph so a user who knows fcitx5-cloudpinyin recognises it immediately.
+constexpr std::string_view kCloudPlaceholder = "☁";
+
+/// Waits this long for the composition to settle before asking the provider.
+///
+/// Two reasons, and the second one is why 120 ms was not enough:
+/// - typing `nihao` would otherwise fire four requests (`ni`, `nih`, `niha`,
+///   `nihao`), and with a two-character minimum that is the common case;
+/// - a debounce shorter than a keystroke interval still fires mid-word, so the
+///   answer arrives for a prefix the user has already finished typing.
+constexpr auto kCloudDebounce = std::chrono::milliseconds(200);
+/// Tick while a request or a debounce is outstanding. 40 ms keeps the answer
+/// snappy without making an idle agent wake up at all.
+constexpr std::uint64_t kCloudTickUs = 40000;
+
+/// A candidate that belongs to us rather than to the engine.
+///
+/// It carries its own commit path because the engine has no idea this word
+/// exists: the pinyin is ours to drop, and the text is ours to insert.
+class CloudCandidateWord : public fcitx::CandidateWord {
+public:
+    using CommitHandler = std::function<void(fcitx::InputContext *, std::string_view)>;
+
+    CloudCandidateWord(fcitx::Text text, std::string commit, CommitHandler handler)
+        : fcitx::CandidateWord(std::move(text)), commit_(std::move(commit)),
+          handler_(std::move(handler)) {}
+
+    void select(fcitx::InputContext *inputContext) const override {
+        if (handler_) {
+            handler_(inputContext, commit_);
+        }
+    }
+
+private:
+    std::string commit_;
+    CommitHandler handler_;
+};} // namespace
 
 SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
     : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr) {
@@ -234,6 +272,11 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             // capability flags die with it.
             preeditOwnership_.erase(inputContext);
             shiftTaps_.erase(inputContext);
+            cloudContexts_.erase(inputContext);
+            if (cloudPendingContext_ == inputContext) {
+                cloudPendingContext_ = nullptr;
+                cloudPendingPinyin_.clear();
+            }
             if (activeContext_ == inputContext) {
                 activeContext_ = nullptr;
             }
@@ -244,6 +287,10 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
 SuperiorAgent::~SuperiorAgent() {
     settingsTimer_.reset();
     startupTimer_.reset();
+    cloudTimer_.reset();
+    // Drop sockets before libcurl's handles go away: a transfer outliving the
+    // event loop would be polled by nobody and leak its socket.
+    cloudFetcher_.cancelAll();
     reaperStop_.store(true, std::memory_order_relaxed);
     for (auto &reaper : reapers_) {
         if (reaper.joinable()) {
@@ -405,6 +452,42 @@ void SuperiorAgent::reloadSettings() {
     if (!loaded.settings.skinId.empty()) {
         skinId_ = loaded.settings.skinId;
     }
+
+    // Cloud pinyin. A provider switch invalidates every cached answer: a Baidu
+    // reply must not be served while the user selected Google.
+    const bool previousCloudEnabled = cloudEnabled_;
+    const std::string previousBackend(cloudpinyin::backendName(cloudBackend_));
+    cloudEnabled_ = loaded.settings.cloudPinyinEnabled;
+    cloudMinLength_ = loaded.settings.cloudPinyinMinLength;
+    cloudIndex_ = loaded.settings.cloudPinyinIndex;
+    if (const auto backend = cloudpinyin::backendFromString(loaded.settings.cloudPinyinBackend)) {
+        cloudBackend_ = *backend;
+    }
+    const std::string currentBackend(cloudpinyin::backendName(cloudBackend_));
+    if (previousBackend != currentBackend) {
+        cloudCache_.clear();
+        cloudBudget_.recordSuccess();
+        SUPERIOR_INFO(diag::categories::Cloud)
+            .field("backend", currentBackend)
+            << "cloud pinyin backend changed; cache cleared";
+    }
+    if (previousCloudEnabled != cloudEnabled_) {
+        SUPERIOR_INFO(diag::categories::Cloud)
+            .field("enabled", cloudEnabled_)
+            .field("backend", currentBackend)
+            .field("minLength", static_cast<std::int64_t>(cloudMinLength_))
+            << "cloud pinyin setting changed";
+    }
+    if (!cloudEnabled_) {
+        // Turning it off must also tear down anything in flight, otherwise a
+        // late answer could still splice a candidate into the list.
+        cloudFetcher_.cancelAll();
+        cloudPendingPinyin_.clear();
+        cloudPendingContext_ = nullptr;
+        cloudContexts_.clear();
+    }
+    updateCloudTimer();
+
     SUPERIOR_DEBUG(diag::categories::Fcitx5)
         .field("inlineEnglish", inlineEnglishEnabled_)
         .field("settings", path.string())
@@ -715,6 +798,9 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     syncPanelOwnership(inputContext);
 
     core::ImeSession &session = sessionFor(inputContext);
+    // Cloud candidates are spliced into the engine's list *before* it is read,
+    // so the frame we are about to build already contains them.
+    syncCloudCandidate(inputContext);
     PanelMapper::apply(collect(inputContext), session, skinId_);
 
     if (server_.clientCount() > 0) {
@@ -886,6 +972,346 @@ void SuperiorAgent::activateStatusItem(const std::string &itemId) {
     SUPERIOR_DEBUG(diag::categories::Fcitx5)
         .field("item", itemId)
         << "status item click ignored: no such action in this context";
+}
+
+void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
+    auto &state = cloudContexts_[inputContext];
+    if (!cloudEnabled_) {
+        state = CloudContext{};
+        return;
+    }
+    // English mode commits letters directly; there is no pinyin to complete.
+    if (englishMode_) {
+        state = CloudContext{};
+        return;
+    }
+    // Password and sensitive fields never reach the network, and never enter the
+    // cache either.
+    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        state = CloudContext{};
+        return;
+    }
+
+    const auto candidateList = inputContext->inputPanel().candidateList();
+    if (!candidateList) {
+        state = CloudContext{};
+        return;
+    }
+    auto *modifiable = candidateList->toModifiable();
+    if (modifiable == nullptr) {
+        // An engine with a read-only list simply does not get cloud candidates.
+        SUPERIOR_TRACE(diag::categories::Cloud)
+            .field("reason", "list-not-modifiable")
+            .field("im", instance_ != nullptr ? instance_->inputMethod(inputContext)
+                                              : std::string{})
+            << "cloud candidate skipped";
+        state = CloudContext{};
+        return;
+    }
+
+    // A different list object is one way a new composition starts, but libime
+    // also rebuilds the contents of the *same* list on every keystroke. Keying
+    // on the list pointer alone therefore left a stale index pointing at a real
+    // candidate, and the cloud row silently disappeared. The pinyin is the
+    // identity that actually changes, so that is what resets the state.
+    const auto normalized =
+        cloudpinyin::normalizePinyin(inputContext->inputPanel().preedit().toString());
+    if (!normalized) {
+        SUPERIOR_TRACE(diag::categories::Cloud)
+            .field("reason", "not-pinyin")
+            .redacted("preedit", inputContext->inputPanel().preedit().toString())
+            << "cloud candidate skipped";
+        state = CloudContext{};
+        // Drop any queued query for this context: its pinyin no longer exists, so
+        // asking now would answer a question the user already moved past.
+        if (cloudPendingContext_ == inputContext) {
+            cloudPendingPinyin_.clear();
+            cloudPendingContext_ = nullptr;
+        }
+        return;
+    }
+
+    const bool oursStillThere =
+        state.insertIndex >= 0 && state.insertIndex < modifiable->totalSize() &&
+        modifiable->candidateFromAll(state.insertIndex).text().toString() == state.text;
+
+    if (state.pinyin != *normalized || state.list != candidateList.get()) {
+        state = CloudContext{};
+        state.list = candidateList.get();
+        state.pinyin = *normalized;
+    } else if (oursStillThere) {
+        return; // already spliced in and still where we put it
+    } else {
+        // Same composition, our entry is gone (the engine rebuilt the list):
+        // forget the stale index and splice again below.
+        state.insertIndex = -1;
+        state.pending = false;
+    }
+
+    if (!cloudpinyin::worthQuerying(state.pinyin, cloudMinLength_)) {
+        SUPERIOR_TRACE(diag::categories::Cloud)
+            .field("reason", "too-short")
+            .field("length", static_cast<std::int64_t>(state.pinyin.size()))
+            .field("minimum", static_cast<std::int64_t>(cloudMinLength_))
+            << "cloud candidate skipped";
+        if (cloudPendingContext_ == inputContext) {
+            cloudPendingPinyin_.clear();
+            cloudPendingContext_ = nullptr;
+        }
+        return;
+    }
+
+    // If the upstream cloudpinyin addon is installed, it already owns a
+    // placeholder. Adding a second one would show two cloud rows.
+    const int total = modifiable->totalSize();
+    for (int index = 0; index < total; ++index) {
+        if (modifiable->candidateFromAll(index).text().toString() == kCloudPlaceholder) {
+            SUPERIOR_TRACE(diag::categories::Cloud)
+                .field("reason", "upstream-placeholder")
+                << "cloud candidate skipped";
+            return;
+        }
+    }
+
+    // A candidate the engine already produced must not appear twice: the cloud
+    // answer is only worth a row when it adds something the user cannot already
+    // pick. Upstream does the same with its `customCandidateSet`.
+    const auto containsText = [modifiable, total](const std::string &text) {
+        if (text.empty()) {
+            return false;
+        }
+        for (int index = 0; index < total; ++index) {
+            if (modifiable->candidateFromAll(index).text().toString() == text) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const int insertAt = std::clamp(cloudIndex_ - 1, 0, total);
+    if (const auto cached = cloudCache_.find(state.pinyin)) {
+        if (containsText(*cached)) {
+            // Already offered by the engine: do not add a duplicate row.
+            state = CloudContext{};
+            state.list = candidateList.get();
+            state.pinyin = *normalized;
+            SUPERIOR_TRACE(diag::categories::Cloud)
+                << "cloud candidate skipped: engine already offers this word";
+            return;
+        }
+        // A cached answer needs no placeholder and no request: splice it in now,
+        // so the same word is instant the second time.
+        modifiable->insert(
+            insertAt, std::make_unique<CloudCandidateWord>(
+                          fcitx::Text(*cached), *cached,
+                          [this](fcitx::InputContext *context, std::string_view text) {
+                              commitCloudText(context, text);
+                          }));
+        state.insertIndex = insertAt;
+        state.pending = false;
+        state.text = *cached;
+        SUPERIOR_TRACE(diag::categories::Cloud)
+            .field("index", static_cast<std::int64_t>(insertAt))
+            .field("length", static_cast<std::int64_t>(state.pinyin.size()))
+            << "cloud candidate served from cache";
+        return;
+    }
+
+    modifiable->insert(insertAt, std::make_unique<fcitx::DisplayOnlyCandidateWord>(
+                                     fcitx::Text(std::string(kCloudPlaceholder))));
+    state.insertIndex = insertAt;
+    state.pending = true;
+    state.text = std::string(kCloudPlaceholder);
+
+    // Hand the query to the debounce; `pumpCloud` decides when it is safe to ask.
+    // Restarting it on every keystroke is the point: only a settled composition
+    // is worth sending.
+    cloudPendingContext_ = inputContext;
+    cloudPendingPinyin_ = state.pinyin;
+    cloudPendingSince_ = std::chrono::steady_clock::now();
+    updateCloudTimer();
+}
+
+void SuperiorAgent::updateCloudTimer() {
+    if (instance_ == nullptr) {
+        return;
+    }
+    const bool needed = !cloudPendingPinyin_.empty() || cloudFetcher_.inFlight();
+    if (!needed) {
+        if (cloudTimer_) {
+            cloudTimer_->setEnabled(false);
+        }
+        return;
+    }
+    if (cloudTimer_) {
+        cloudTimer_->setEnabled(true);
+        return;
+    }
+    cloudTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kCloudTickUs, kCloudTickUs,
+        [this](fcitx::EventSourceTime *, std::uint64_t) {
+            pumpCloud();
+            return true;
+        });
+}
+
+void SuperiorAgent::pumpCloud() {
+    const auto now = std::chrono::steady_clock::now();
+    const auto nowMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    for (const auto &result : cloudFetcher_.poll()) {
+        if (result.ok && !result.text.empty()) {
+            cloudBudget_.recordSuccess();
+            cloudCache_.insert(result.pinyin, result.text);
+        } else if (result.ok) {
+            // Reached the provider, it simply had nothing: not a failure, so do
+            // not count it against the budget.
+            cloudBudget_.recordSuccess();
+        } else {
+            // A dead network will not recover on the next keystroke, so it counts
+            // three times and parks the provider with one try.
+            cloudBudget_.recordFailure(nowMs, result.networkError ? 3 : 1);
+        }
+
+        for (auto &[context, state] : cloudContexts_) {
+            if (!state.pending || state.pinyin != result.pinyin) {
+                continue;
+            }
+            if (result.ok && !result.text.empty()) {
+                applyCloudResult(context, result.pinyin, result.text);
+            } else {
+                dropCloudCandidate(context);
+            }
+        }
+    }
+
+    if (!cloudPendingPinyin_.empty() && now - cloudPendingSince_ >= kCloudDebounce) {
+        if (!cloudBudget_.allowed(nowMs)) {
+            // Parked: drop the request instead of retrying every tick. The
+            // budget re-opens after its cooldown.
+            cloudPendingPinyin_.clear();
+            cloudPendingContext_ = nullptr;
+            SUPERIOR_DEBUG(diag::categories::Cloud)
+                .field("errors", static_cast<std::int64_t>(cloudBudget_.consecutiveErrors()))
+                << "cloud pinyin parked after repeated failures";
+        } else if (!cloudFetcher_.inFlight()) {
+            const std::string pinyin = cloudPendingPinyin_;
+            cloudPendingPinyin_.clear();
+            cloudPendingContext_ = nullptr;
+            cloudFetcher_.submit(pinyin, cloudBackend_);
+        }
+        // Otherwise a transfer is still running. Keep the request: clearing it
+        // here lost the query entirely, so the newest composition never reached
+        // the provider and its placeholder stayed empty forever.
+    }
+
+    updateCloudTimer();
+}
+
+void SuperiorAgent::applyCloudResult(fcitx::InputContext *inputContext,
+                                     const std::string &pinyin, const std::string &text) {
+    const auto it = cloudContexts_.find(inputContext);
+    if (it == cloudContexts_.end()) {
+        return;
+    }
+    CloudContext &state = it->second;
+    if (!state.pending || state.pinyin != pinyin) {
+        return;
+    }
+
+    const auto candidateList = inputContext->inputPanel().candidateList();
+    if (!candidateList || state.list != candidateList.get()) {
+        // The user typed on; the placeholder is part of a list nobody shows any
+        // more. The answer is already cached, so the next frame picks it up.
+        state = CloudContext{};
+        return;
+    }
+    auto *modifiable = candidateList->toModifiable();
+    if (modifiable == nullptr || state.insertIndex < 0 ||
+        state.insertIndex >= modifiable->totalSize()) {
+        state = CloudContext{};
+        return;
+    }
+
+    // Only fill the slot if our placeholder is still the one sitting there: if
+    // the engine rebuilt the list, replacing by index would overwrite a real
+    // candidate with the cloud answer.
+    if (modifiable->candidateFromAll(state.insertIndex).text().toString() != state.text) {
+        state = CloudContext{};
+        return;
+    }
+
+    // The engine may have produced the same word in a later frame. Filling the
+    // placeholder then would show the same entry twice, so drop our row instead.
+    const int total = modifiable->totalSize();
+    for (int index = 0; index < total; ++index) {
+        if (index == state.insertIndex) {
+            continue;
+        }
+        if (modifiable->candidateFromAll(index).text().toString() == text) {
+            SUPERIOR_DEBUG(diag::categories::Cloud)
+                << "cloud candidate dropped: engine already offers this word";
+            dropCloudCandidate(inputContext);
+            return;
+        }
+    }
+
+    modifiable->replace(
+        state.insertIndex,
+        std::make_unique<CloudCandidateWord>(
+            fcitx::Text(text), text,
+            [this](fcitx::InputContext *context, std::string_view value) {
+                commitCloudText(context, value);
+            }));
+    state.pending = false;
+    state.text = text;
+    SUPERIOR_DEBUG(diag::categories::Cloud)
+        .field("index", static_cast<std::int64_t>(state.insertIndex))
+        .field("length", static_cast<std::int64_t>(text.size()))
+        << "cloud candidate filled";
+    inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
+    const auto it = cloudContexts_.find(inputContext);
+    if (it == cloudContexts_.end()) {
+        return;
+    }
+    CloudContext &state = it->second;
+    const auto candidateList = inputContext->inputPanel().candidateList();
+    if (candidateList && state.list == candidateList.get() && state.insertIndex >= 0) {
+        if (auto *modifiable = candidateList->toModifiable();
+            modifiable != nullptr && state.insertIndex < modifiable->totalSize() &&
+            modifiable->candidateFromAll(state.insertIndex).text().toString() == state.text) {
+            // Remove the placeholder: leaving a cloud that never fills up looks
+            // like a bug to the user.
+            modifiable->remove(state.insertIndex);
+        }
+    }
+    state = CloudContext{};
+    inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::string_view text) {
+    if (instance_ == nullptr || inputContext == nullptr || text.empty()) {
+        return;
+    }
+    // The engine still owns a composition for the pinyin we completed. Drop it
+    // first, otherwise the committed word would be followed by the remaining
+    // pinyin as soon as the user types again.
+    instance_->resetCompose(inputContext);
+    inputContext->inputPanel().reset();
+    inputContext->commitString(std::string(text));
+    inputContext->updatePreedit();
+
+    if (const auto it = cloudContexts_.find(inputContext); it != cloudContexts_.end()) {
+        it->second = CloudContext{};
+    }
+    SUPERIOR_INFO(diag::categories::Cloud)
+        .field("length", static_cast<std::int64_t>(text.size()))
+        << "cloud candidate committed";
+    refresh(inputContext);
 }
 
 void SuperiorAgent::activateCandidate(const api::ActivateCandidate &command) {

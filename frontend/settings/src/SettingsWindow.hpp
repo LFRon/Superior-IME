@@ -97,6 +97,8 @@ private:
     ToggleSwitch *shiftToggle_ = nullptr;
     ToggleSwitch *statusBarToggle_ = nullptr;
     ToggleSwitch *voiceToggle_ = nullptr;
+    ToggleSwitch *cloudToggle_ = nullptr;
+    QComboBox *cloudBackendCombo_ = nullptr;
     QComboBox *skinCombo_ = nullptr;
     QComboBox *placementCombo_ = nullptr;
     QComboBox *logLevelCombo_ = nullptr;
