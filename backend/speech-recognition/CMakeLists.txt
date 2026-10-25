@@ -8,7 +8,8 @@ add_library(superior_speech_recognition STATIC
     src/Layout.cpp
     src/Models.cpp
     src/Protocol.cpp
-    src/Service.cpp)
+    src/Service.cpp
+    src/StepTuning.cpp)
 
 add_library(Superior::SpeechRecognition ALIAS superior_speech_recognition)
 

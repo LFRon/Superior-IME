@@ -58,6 +58,10 @@ private:
     void beginStreamingClose();
     /// Joins and reaps the recogniser once its reader thread has finished.
     void reapStreamingRecogniser();
+    /// Folds this session's measured back-pressure into the persisted step
+    /// tuning. Called from `reapStreamingRecogniser`, the single place every
+    /// streaming session ends.
+    void learnStreamingPace();
     /// True while we are waiting for the recogniser to flush.
     [[nodiscard]] bool streamingClosing() const noexcept { return awaitingStreamingExit_; }
     /// Reads JSON events from the recogniser until it exits.
@@ -128,6 +132,15 @@ private:
     /// streaming mode no audio is retained, so the buffer cannot answer "did we
     /// capture anything".
     std::atomic<std::uint64_t> capturedBytes_{0};
+    /// Milliseconds the capture thread spent waiting for room in the recogniser's
+    /// pipe. Non-zero means the recogniser was still decoding audio that arrived
+    /// seconds ago: the one measurement that says "this step is too fine for this
+    /// machine" without guessing from the CPU model. See `StepTuning`.
+    std::atomic<std::uint64_t> teeStallMs_{0};
+    /// Start of the current utterance, so a session shorter than a few seconds is
+    /// not judged (the model is still loading, and nothing about the pace is
+    /// known yet).
+    std::uint64_t sessionStartMs_ = 0;
     /// Set by the reader thread when the recogniser's stdout reached EOF.
     std::atomic<bool> asrReaderDone_{false};
     /// Asked by `reapStreamingRecogniser` so the reader thread can leave a

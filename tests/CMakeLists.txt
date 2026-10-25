@@ -188,6 +188,12 @@ target_include_directories(superior_speech_capability_tests PRIVATE "${CMAKE_CUR
 target_compile_features(superior_speech_capability_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_speech_capability_tests)
 
+add_executable(superior_speech_step_tests speech_step_tests.cpp)
+target_link_libraries(superior_speech_step_tests PRIVATE Superior::SpeechRecognition)
+target_include_directories(superior_speech_step_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_speech_step_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_speech_step_tests)
+
 add_executable(superior_speech_state_tests speech_state_tests.cpp)
 target_link_libraries(superior_speech_state_tests PRIVATE Superior::Core)
 target_include_directories(superior_speech_state_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -234,6 +240,7 @@ add_test(NAME golden-pinyin
     COMMAND superior_golden_pinyin_tests "${PROJECT_SOURCE_DIR}/tests/golden/pinyin.txt")
 add_test(NAME speech-capability COMMAND superior_speech_capability_tests)
 add_test(NAME speech-state COMMAND superior_speech_state_tests)
+add_test(NAME speech-step COMMAND superior_speech_step_tests)
 
 if(TARGET superior_speech_recognition_process)
     add_test(NAME speech-process

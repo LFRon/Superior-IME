@@ -23,6 +23,7 @@
 #include "superior/speech_recognition/Capture.hpp"
 #include "superior/speech_recognition/Engine.hpp"
 #include "superior/speech_recognition/Layout.hpp"
+#include "superior/speech_recognition/StepTuning.hpp"
 
 namespace superior::speech_recognition {
 
@@ -45,7 +46,9 @@ constexpr std::uint64_t kLevelIntervalMs = 50;
 /// level meter, or the panel's ring would freeze while the model is busy.
 void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
                  double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended,
-                 int teeFd, bool keepAudio, std::atomic<std::uint64_t> &capturedBytes) {
+                 int teeFd, bool keepAudio, std::atomic<std::uint64_t> &capturedBytes,
+                 std::atomic<std::uint64_t> &teeStallMs,
+                 const std::atomic<bool> &recogniserProduced) {
     std::vector<std::int16_t> chunk(1600); // 100 ms at 16 kHz
     while (!stopping.load(std::memory_order_relaxed)) {
         const ssize_t bytes = ::read(fd, chunk.data(), chunk.size() * sizeof(std::int16_t));
@@ -67,6 +70,7 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
             const auto *pcm = reinterpret_cast<const char *>(chunk.data());
             const std::size_t total = samples * sizeof(std::int16_t);
             std::size_t written = 0;
+            const auto writeStart = std::chrono::steady_clock::now();
             while (written < total) {
                 const ssize_t result = ::write(teeFd, pcm + written, total - written);
                 if (result > 0) {
@@ -88,6 +92,20 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
                 // report the failure.
                 teeFd = -1;
                 break;
+            }
+            // 100 ms of audio needed more than a second of waiting, so the
+            // recogniser is not just busy with one decode: its queue is growing
+            // and the sound server will start dropping audio. This is the only
+            // honest "this machine cannot keep up" signal there is, and
+            // `StepTuning` uses it to pick a coarser step next time. Ignored
+            // until the engine has produced something, because loading a 130 MB
+            // model legitimately fills the pipe for a second or two.
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - writeStart)
+                                    .count();
+            if (waited > 1000 && recogniserProduced.load(std::memory_order_relaxed)) {
+                teeStallMs.fetch_add(static_cast<std::uint64_t>(waited),
+                                     std::memory_order_relaxed);
             }
         }
     }
@@ -212,31 +230,35 @@ constexpr std::uint64_t kDraftDwellMs = 250;
 /// How much audio each streaming re-decode sees.
 ///
 /// This is the knob that trades latency against CPU, and it is not a free knob:
-/// the streaming mode re-encodes the *whole* utterance on every step, so halving
-/// the step roughly doubles the work. Measured on a Ryzen 7 8845HS (8 cores of a
-/// 16-core chip) with FireRedASR2-AED q4_k, 12 s of audio, in CPU core-seconds:
+/// the streaming mode re-encodes the *whole* utterance on every step, so the cost
+/// grows as `c · L² / step` — halving the step roughly doubles the work, and a
+/// long unbroken sentence is much more expensive than five short ones.
 ///
-///     2000 ms -> 83-88 s   (1.1x realtime: keeps up with headroom)
-///     1500 ms -> 85 s      (1.0x realtime: exactly at the edge)
-///     1000 ms -> 147 s     (0.65x realtime: falls behind, audio is lost)
+/// Measured on a Ryzen 7 8845HS with Paraformer-zh q4_k (4 threads), in CPU
+/// core-seconds per second of audio:
 ///
-/// 2000 ms is the default because this is an input method, not a benchmark: it
-/// has to work on a laptop that is also running a browser and an IDE, and the
-/// numbers above were taken with nothing else running. A CPU half as fast still
-/// keeps up at 2000 ms and would fall behind at 1000 ms — and falling behind is
-/// not "a bit slower": the capture pipe fills, the sound server drops audio, and
-/// words disappear from the middle of sentences.
+///     55 s of speech behind the VAD, 2000 ms  -> 0.31x realtime
+///     55 s of speech behind the VAD, 1000 ms  -> 0.38x realtime
+///     33 s with no pause at all,      500 ms   -> 3.3x realtime (drops audio)
 ///
-/// Only a machine that is genuinely saturated gets the coarser 3000 ms step.
-/// `SUPERIOR_SPEECH_STEP_MS` overrides both (a GPU build or a smaller model can
-/// afford less).
-int streamingStepMs() {
+/// So the baseline belongs to the model (`ModelEntry::stepMs`): Paraformer-zh
+/// asks for 1000 ms because that is 23 % more CPU for half the delay, while the
+/// autoregressive models keep 2000 ms — FireRed measured 2.96x realtime at
+/// 1000 ms over 55 s, which no laptop can give while the user is working.
+///
+/// The baseline is then raised by what this machine actually did: `strikes` come
+/// from `StepTuning`, incremented when a session could not keep up (the
+/// recogniser's pipe stayed full) and forgiven after a few clean ones. The load
+/// average still applies, because a machine at full load has fewer cycles to
+/// spare no matter how fast it is.
+int streamingStepMs(int baselineMs, int strikes) {
     if (const char *value = std::getenv("SUPERIOR_SPEECH_STEP_MS"); value != nullptr) {
         const long parsed = std::atol(value);
         if (parsed >= 200) {
             return static_cast<int>(std::min<long>(parsed, 10000));
         }
     }
+    const int baseline = stepMsWithStrikes(baselineMs > 0 ? baselineMs : 2000, strikes);
     double load = 0.0;
     if (std::FILE *file = std::fopen("/proc/loadavg", "r"); file != nullptr) {
         if (std::fscanf(file, "%lf", &load) != 1) {
@@ -245,7 +267,13 @@ int streamingStepMs() {
         std::fclose(file);
     }
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    return load < 0.9 * static_cast<double>(cores) ? 2000 : 3000;
+    const double busy = load / static_cast<double>(cores);
+    if (busy < 0.9) {
+        return baseline;
+    }
+    // One notch coarser while the machine is busy, and the ceiling of the knob
+    // once it is genuinely saturated.
+    return busy < 1.4 ? std::min(kMaxStepMs, baseline + kStepNotchMs) : kMaxStepMs;
 }
 
 /// The recogniser's reasons are technical and English; the panel shows the
@@ -318,6 +346,8 @@ void Service::startCaptureThread() {
         pendingSinceMs_ = 0;
         lastCommitMs_ = nowMs();
         capturedBytes_.store(0, std::memory_order_relaxed);
+        teeStallMs_.store(0, std::memory_order_relaxed);
+        sessionStartMs_ = nowMs();
     }
 
     if (restoreDefaultAtMs_ == 0 || defaultSourceBefore_.empty()) {
@@ -404,7 +434,8 @@ void Service::startCaptureThread() {
     const bool keepAudio = !streaming_;
     captureThread_ = std::thread([this, teeFd, keepAudio] {
         pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, captureStopping_,
-                    captureEnded_, teeFd, keepAudio, capturedBytes_);
+                    captureEnded_, teeFd, keepAudio, capturedBytes_, teeStallMs_,
+                    asrProducedOutput_);
     });
     // The clock starts when capture starts: time spent waiting for the panel to
     // open is not part of the utterance.
@@ -607,7 +638,9 @@ bool Service::startStreamingRecogniser() {
         // user's back; `off` keeps the CTC output as-is (no punctuation).
         streaming.puncPath = "off";
     }
-    const int step = streamingStepMs();
+    // What this machine needed last time, plus what the model asks for.
+    const StepTuning tuning = readTuning(defaultTuningPath());
+    const int step = streamingStepMs(config_.stepMs, tuning.strikes);
     const int window = streamingWindowMs();
     std::string error;
     const auto command = buildStreamingEngineCommand(streaming, error, step, window);
@@ -684,8 +717,10 @@ bool Service::startStreamingRecogniser() {
         .field("pid", static_cast<std::int64_t>(pid))
         .field("threads", static_cast<std::int64_t>(streaming.threads))
         .field("stepMs", static_cast<std::int64_t>(step))
+        .field("strikes", static_cast<std::int64_t>(tuning.strikes))
         .field("windowMs", static_cast<std::int64_t>(window))
-        << "streaming recogniser started (threads and step chosen from current load)";
+        << "streaming recogniser started (step from the model, this machine's history and "
+           "the current load)";
     return true;
 }
 
@@ -789,9 +824,45 @@ void Service::reapStreamingRecogniser() {
     SUPERIOR_INFO(diag::categories::SpeechRecognition)
         .field("producedOutput", asrProducedOutput_.load(std::memory_order_relaxed))
         << "streaming recogniser reaped";
+    learnStreamingPace();
     streaming_ = false;
     awaitingStreamingExit_ = false;
     closeRequestedMs_ = 0;
+}
+
+/// Turns this session's back-pressure into a longer step for the next one.
+///
+/// Deliberately slow to react and slower to forgive: a single stutter from a
+/// browser tab must not cost the user 500 ms of latency forever, so a strike is
+/// only forgiven after three clean sessions, and a session only counts once it
+/// ran long enough for the measurement to mean anything.
+void Service::learnStreamingPace() {
+    if (sessionStartMs_ == 0) {
+        return;
+    }
+    const std::uint64_t now = nowMs();
+    const std::uint64_t sessionMs = now > sessionStartMs_ ? now - sessionStartMs_ : 0;
+    sessionStartMs_ = 0;
+    if (asrKilledOnPurpose_.load(std::memory_order_relaxed)) {
+        // Cancelled mid-utterance: whatever the pipe did says nothing about the
+        // step, it says the user stopped talking.
+        return;
+    }
+    const std::uint64_t stalledMs = teeStallMs_.load(std::memory_order_relaxed);
+    const StepTuning before = readTuning(defaultTuningPath());
+    const StepTuning after = tunedAfterSession(before, stalledMs >= 1500, sessionMs);
+    if (after.strikes == before.strikes && after.cleanRuns == before.cleanRuns) {
+        return;
+    }
+    if (!writeTuning(defaultTuningPath(), after)) {
+        return;
+    }
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("sessionMs", static_cast<std::int64_t>(sessionMs))
+        .field("stalledMs", static_cast<std::int64_t>(stalledMs))
+        .field("strikes", static_cast<std::int64_t>(after.strikes))
+        .field("cleanRuns", static_cast<std::int64_t>(after.cleanRuns))
+        << "streaming pace learned";
 }
 
 void Service::start() {
