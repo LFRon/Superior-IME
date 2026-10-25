@@ -82,9 +82,35 @@
 ./scripts/install-user.sh
 # agent 加载后会自动拉起 superior_ui；不需要时设 SUPERIOR_UI_AUTOSTART=0
 
-# 4. 添加输入法：fcitx5-configtool 里选「先！进！输入法」
+# 4. 每次重新编译后，完整重启（不用注销、不用重启电脑；脚本在仓库外）
+../restart-ime.sh
+
+# 5. 添加输入法：fcitx5-configtool 里选「先！进！输入法」
 #    或直接切换
 fcitx5-remote -s super-ime
+```
+
+### 改了代码之后怎么让它生效
+
+**不用注销，也不用重启电脑**，但必须让两个进程都退出：
+
+| 进程 | 为什么必须重启 |
+|---|---|
+| `fcitx5` | agent 是 `libsuperioragent.so`，以共享库形式加载进 Fcitx5，无法原地重载 |
+| `superior_ui` | 只杀掉 Fcitx5 时旧浮层不会退出，它会重连到新 agent 并继续跑**旧版本**的 UI |
+
+```bash
+../restart-ime.sh          # 仓库外的本机辅助脚本，见下文等价命令
+```
+
+为什么重启必须写对：`FCITX_ADDON_DIRS` 若没导出，用户目录的 addon 会被静默丢掉
+（`systemctl --user set-environment` 只对 systemd 拉起的进程生效，终端里起的
+`fcitx5` 不继承它），症状是「输入法不见了」。等价命令：
+
+```bash
+kill $(pgrep -x superior_ui) 2>/dev/null; fcitx5-remote -e
+export FCITX_ADDON_DIRS="$HOME/.local/lib/fcitx5:/usr/lib/$(gcc -print-multiarch)/fcitx5"
+setsid fcitx5 -d
 ```
 
 安装后得到两个不同的东西：
