@@ -125,6 +125,25 @@ mkdir -p "$skin_dir"
 cp -a "$staged_skins/." "$skin_dir/"
 rm -rf "$staged_skins"
 
+# A base word list makes the difference between "works" and "feels like a real
+# IME" for anything outside everyday vocabulary. It is fetched, not bundled: 雾凇
+# is ~46 MB of source and updated weekly, so a snapshot in the repository would
+# either bloat history or rot. On a machine without network (or without curl) the
+# install still succeeds — the engine just keeps using its own dictionary.
+dict_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5/pinyin/dictionaries"
+if [[ ! -f "$dict_dir/rime-ice.dict" ]]; then
+    if command -v curl >/dev/null 2>&1 && command -v libime_pinyindict >/dev/null 2>&1; then
+        echo "install-user: fetching the 雾凇 (rime-ice) word list …"
+        if ! SUPERIOR_PRESET="$preset" "$root/scripts/fetch-dictionary.sh" rime-ice \
+                --minimal; then
+            echo "install-user: word list not installed; run scripts/fetch-dictionary.sh rime-ice later" >&2
+        fi
+    else
+        echo "install-user: skipping the word list (needs curl and libime_pinyindict)"
+        echo "  install them, then run: scripts/fetch-dictionary.sh rime-ice"
+    fi
+fi
+
 # Fcitx5 replaces the compiled-in addon directory when this variable is set, so
 # the system directory must stay in the list or every stock addon disappears.
 mkdir -p "$env_dir"

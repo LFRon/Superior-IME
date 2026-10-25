@@ -26,6 +26,11 @@ files=(
     "$HOME/.local/bin/superior_settings"
     "$HOME/.local/share/applications/superior-settings.desktop"
     "$HOME/.config/environment.d/90-superior-ime.conf"
+    # Word list fetched by install-user.sh / fetch-dictionary.sh. Only the files
+    # this project installs; a dictionary the user imported themselves has a
+    # different name and is left alone.
+    "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice.dict"
+    "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice-lite.dict"
 )
 trees=(
     # Binaries + skins.
