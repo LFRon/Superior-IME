@@ -131,6 +131,10 @@ fs::path Paths::fcitxConfigDir() const {
     return configHome / "fcitx5";
 }
 
+fs::path Paths::pinyinConf() const {
+    return fcitxConfigDir() / "conf" / "pinyin.conf";
+}
+
 fs::path Paths::classicUiConf() const {
     return fcitxConfigDir() / "conf" / "classicui.conf";
 }
@@ -207,6 +211,46 @@ FcitxStatus inspect(const Paths &paths, std::string_view superiorThemeName) {
                   std::string(superiorThemeName)) != status.availableThemes.end();
 
     return status;
+}
+
+std::optional<bool> readInnerSegmentation(const Paths &paths) {
+    const IniFile ini = IniFile::parse(readText(paths.pinyinConf()));
+    const auto value = ini.get("Fuzzy", "Inner");
+    if (!value) {
+        return std::nullopt;
+    }
+    return *value == "True" || *value == "true" || *value == "1";
+}
+
+ApplyOutcome setInnerSegmentation(const Paths &paths, bool enabled) {
+    ApplyOutcome outcome;
+    const fs::path file = paths.pinyinConf();
+
+    std::string error;
+    if (!backupOnce(file, outcome.backup, error)) {
+        outcome.detail = error;
+        return outcome;
+    }
+
+    IniFile ini = IniFile::parse(readText(file));
+    if (!ini.set("Fuzzy", "Inner", enabled ? "True" : "False")) {
+        outcome.ok = true;
+        outcome.detail = "inner segmentation already set";
+        return outcome;
+    }
+    if (!writeTextAtomic(file, ini.serialize(), error)) {
+        outcome.detail = error;
+        return outcome;
+    }
+
+    outcome.ok = true;
+    outcome.changed = true;
+    outcome.detail = enabled ? "inner segmentation enabled" : "inner segmentation disabled";
+    SUPERIOR_INFO(diag::categories::Pinyin)
+        .field("inner", enabled)
+        .field("file", file.string())
+        << "pinyin segmentation updated";
+    return outcome;
 }
 
 ApplyOutcome setClassicUiTheme(const Paths &paths, std::string_view themeName) {

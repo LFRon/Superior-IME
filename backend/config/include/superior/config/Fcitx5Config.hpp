@@ -2,6 +2,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,7 @@ struct Paths {
 
     [[nodiscard]] std::filesystem::path fcitxConfigDir() const;
     [[nodiscard]] std::filesystem::path classicUiConf() const;
+    [[nodiscard]] std::filesystem::path pinyinConf() const;
     [[nodiscard]] std::filesystem::path globalConf() const;
     [[nodiscard]] std::filesystem::path userProfile() const;
     [[nodiscard]] std::filesystem::path userThemeDir() const;
@@ -50,6 +52,22 @@ struct ApplyOutcome {
 /// A one-time backup `classicui.conf.bak-superior` is written before the first
 /// change. Comments and unrelated keys are preserved.
 [[nodiscard]] ApplyOutcome setClassicUiTheme(const Paths &paths, std::string_view themeName);
+
+/// `[Fuzzy] Inner` from `conf/pinyin.conf`, or nullopt when unset.
+///
+/// libime's "inner segment" lets one syllable be split into two: `xian` may match
+/// `xi'an`, and — the reason this exists — `bian` may match `bi'an`. That is why
+/// `yubianyi` could come out as the four-character 御笔安逸 instead of a
+/// three-syllable word. It is on by default upstream.
+[[nodiscard]] std::optional<bool> readInnerSegmentation(const Paths &paths);
+
+/// Writes `[Fuzzy] Inner`. `InnerShort` (qie -> qi'e) is deliberately left
+/// alone: it only affects very short input, and turning it off would lose 企鹅
+/// for `qie`.
+///
+/// This edits the shared pinyin engine config, so the stock "拼音" entry is
+/// affected too — both entries are backed by `Addon=pinyin`.
+[[nodiscard]] ApplyOutcome setInnerSegmentation(const Paths &paths, bool enabled);
 
 /// Copies an exported theme directory into the user theme directory.
 [[nodiscard]] ApplyOutcome installThemeDir(const Paths &paths,

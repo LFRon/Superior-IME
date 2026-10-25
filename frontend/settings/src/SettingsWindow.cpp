@@ -466,6 +466,20 @@ QWidget *SettingsWindow::buildInputPage() {
         tr("以英文模式输入的字母会直接上屏，不经过拼音候选。这与搜狗输入法的行为一致。"),
         "rowHint"));
 
+    QVBoxLayout *segmentCard = addCard(
+        layout, tr("拼音切分"),
+        tr("开启后 libime 允许把一个音节拆成两个：例如 xian 也能匹配「西安」。"
+           "代价是 bian 会被拆成 bi'an，于是 yubianyi 可能给出四字的「御笔安逸」"
+           "而不是三字词。关掉它只影响这种跨音节匹配，qie → 企鹅 这类短拼音不受影响。"));
+    innerToggle_ = new ToggleSwitch(true);
+    segmentCard->addWidget(makeRow(
+        tr("允许跨音节切分"), tr("xian → xi'an；关掉后 yubianyi 给出三字词"),
+        innerToggle_));
+    segmentCard->addWidget(makeLabel(
+        tr("这项写的是 Fcitx5 的 pinyin.conf，所以「拼音」条目也会一起改变。"
+           "改完需要重启 Fcitx5。"),
+        "rowHint"));
+
     addCard(layout, tr("候选窗口"),
             tr("候选窗由 Superior 自己的浮层绘制，不受 Fcitx5 全局主题影响；"
                "其他输入法仍使用它们原来的外观。Wayland 会话下浮层自动走 XWayland，"
@@ -592,6 +606,8 @@ QWidget *SettingsWindow::buildAboutPage() {
 }
 
 void SettingsWindow::loadFromDisk() {
+    // Engine setting, separate from our own settings file.
+    innerSegmentation_ = config::readInnerSegmentation(paths_).value_or(true);
     const auto loaded = config::loadSettings(config::defaultSettingsPath());
     settings_ = loaded.settings;
     for (const auto &warning : loaded.warnings) {
@@ -601,6 +617,9 @@ void SettingsWindow::loadFromDisk() {
 }
 
 void SettingsWindow::syncWidgets() {
+    if (innerToggle_ != nullptr) {
+        innerToggle_->setChecked(innerSegmentation_);
+    }
     if (shiftToggle_ != nullptr) {
         shiftToggle_->setChecked(settings_.shiftToggle);
     }
@@ -745,6 +764,21 @@ void SettingsWindow::applyChanges() {
     if (!config::saveSettings(config::defaultSettingsPath(), settings_, error)) {
         setStatus(QString::fromStdString(error), true);
         return;
+    }
+
+    // Engine segmentation is a real Fcitx5 setting, not one of ours: write it
+    // only when the user actually changed it, so opening the page never rewrites
+    // the engine config.
+    if (innerToggle_ != nullptr && innerToggle_->isChecked() != innerSegmentation_) {
+        const bool requested = innerToggle_->isChecked();
+        const auto outcome = config::setInnerSegmentation(paths_, requested);
+        if (!outcome.ok) {
+            setStatus(QString::fromStdString(outcome.detail), true);
+            return;
+        }
+        if (outcome.changed) {
+            innerSegmentation_ = requested;
+        }
     }
 
     // Deliberately does NOT touch classicui.conf: the skin is painted by our own
