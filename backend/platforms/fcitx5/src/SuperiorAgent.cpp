@@ -147,6 +147,23 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
     reloadSettings();
     ensureOverlay();
 
+    // Fcitx5 may already have a focused client when the addon loads (Fcitx5
+    // restarted while an application kept focus). No FocusIn event will follow
+    // in that case, so the toolbar would stay invisible until the user types.
+    // Paint once from the most recent context after the UI had time to connect.
+    startupTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 600000, 0,
+        [this](fcitx::EventSourceTime *, std::uint64_t) {
+            if (auto *inputContext = instance_->mostRecentInputContext();
+                inputContext != nullptr && isOurs(inputContext)) {
+                SUPERIOR_DEBUG(diag::categories::Fcitx5)
+                    .field("program", inputContext->program())
+                    << "initial paint from the most recent input context";
+                refresh(inputContext);
+            }
+            return false;
+        });
+
     // Poll the settings file so a switch in the settings window takes effect
     // without restarting Fcitx5 or refocusing a window.
     settingsTimer_ = instance_->eventLoop().addTimeEvent(
@@ -223,6 +240,13 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
 
 SuperiorAgent::~SuperiorAgent() {
     settingsTimer_.reset();
+    startupTimer_.reset();
+    reaperStop_.store(true, std::memory_order_relaxed);
+    for (auto &reaper : reapers_) {
+        if (reaper.joinable()) {
+            reaper.join();
+        }
+    }
     SUPERIOR_INFO(diag::categories::Fcitx5)
         .field("sessions", static_cast<std::uint64_t>(sessions_.size()))
         << "superior agent stopping";
