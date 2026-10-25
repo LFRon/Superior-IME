@@ -17,14 +17,26 @@ pid=""
 current=""
 
 # Starts the process with the given fake capture and fake engine.
+#
+# `stream_cmd` (optional) switches the session to the streaming recogniser. When
+# it is empty streaming is disabled explicitly: otherwise the test would pick up
+# the real engine and model installed on the developer's machine.
 start_process() {
     local capture="$1"
     local engine="$2"
+    local stream_cmd="${3:-}"
     current="$root/session-$(date +%s%N)"
     mkdir -p "$current"
     mkfifo "$current/in"
-    SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
-        "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
+    if [[ -n "$stream_cmd" ]]; then
+        SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
+            SUPERIOR_ASR_STREAM_CMD="$stream_cmd" \
+            "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
+    else
+        SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
+            SUPERIOR_DISABLE_STREAMING=1 \
+            "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
+    fi
     pid=$!
     exec 3> "$current/in"
 }
@@ -100,6 +112,39 @@ echo '{"cmd":"start"}' >&3
 wait_for '"code":"capture_failed"' ||
     fail "a dead capture tool must be reported, not waited out"
 grep -q '不该到达这里' "$current/out" && fail "a failed capture must not run the engine"
+stop_process
+
+# --- Scenario 4: streaming -> text appears before the user stops ------------
+#
+# The whole point of streaming is that a segment becomes real text *while* the
+# microphone is still open, so the check is ordering, not just presence: the
+# `chunk` must arrive before the stop command is sent.
+# The recogniser closes a segment when it sees a pause, *while* the stream is
+# still open — that is the moment the agent commits and keeps listening. The fake
+# reproduces it: one read, one final, then EOF produces the session final.
+cat > "$root/fake-stream.sh" <<'STREAM'
+#!/bin/sh
+echo '{"type":"partial","text":"你好"}'
+dd bs=32000 count=1 2>/dev/null >/dev/null
+echo '{"type":"final","text":"你好世界"}'
+cat > /dev/null
+echo '{"type":"final","text":"再见"}'
+STREAM
+chmod +x "$root/fake-stream.sh"
+
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 3"' \
+    'bash -c "echo 不该走批处理"' "$root/fake-stream.sh"
+wait_for '"ev":"ready"' || fail "no ready event (streaming)"
+echo '{"cmd":"start"}' >&3
+wait_for '"ev":"chunk"' || fail "no chunk event while recording"
+grep -q '"ev":"chunk".*你好世界' "$current/out" || fail "chunk text missing"
+# The chunk must be there without any stop: that is what "writing while you
+# speak" means at the protocol level.
+grep -q '"ev":"final"' "$current/out" && fail "final arrived before the session ended"
+echo '{"cmd":"stop"}' >&3
+wait_for '"ev":"final"' || fail "no final event after stop (streaming)"
+grep -q '"ev":"final".*再见' "$current/out" || fail "final text missing (streaming)"
+grep -q '不该走批处理' "$current/out" && fail "streaming must not fall back to batch decoding"
 stop_process
 
 echo "speech process: ok"

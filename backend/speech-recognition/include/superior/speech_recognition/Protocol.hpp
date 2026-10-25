@@ -36,6 +36,9 @@ struct Event {
         Phase,
         Level,
         Partial,
+        /// A stable segment finalized *inside* a recording. The session goes on,
+        /// so the agent commits it and keeps listening.
+        Chunk,
         Final,
         Error,
     };
@@ -45,7 +48,7 @@ struct Event {
     std::string phase;
     /// 0..1, only meaningful for `Level`.
     double level = 0.0;
-    /// Transcript, only meaningful for `Partial` / `Final`.
+    /// Transcript, only meaningful for `Partial` / `Chunk` / `Final`.
     std::string text;
     /// Stable machine-readable error code, for `Error`.
     std::string code;

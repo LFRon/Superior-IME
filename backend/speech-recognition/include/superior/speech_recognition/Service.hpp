@@ -48,6 +48,15 @@ public:
 private:
     void stopCapture();
     void startCaptureThread();
+    /// Starts the streaming recogniser and the thread that reads its events.
+    /// Returns false when it cannot, which puts the session back on the batch
+    /// path.
+    bool startStreamingRecogniser();
+    /// Closes the recogniser's stdin so it flushes its last segment, then reaps
+    /// it. Called before the capture pipe disappears.
+    void finishStreamingRecogniser();
+    /// Reads JSON events from the recogniser until it exits.
+    void pumpRecogniser();
     void finishRecognition(std::uint64_t generation, std::vector<std::int16_t> audio);
     /// Puts the sound server's default input back once the desktop's own
     /// re-election has settled. See `shouldRestoreDefaultSource`.
@@ -71,6 +80,16 @@ private:
     /// Ends the utterance when the user stops talking, so the panel does not
     /// require a second click after every sentence.
     SilenceWatch silence_;
+    // Streaming recogniser, alive for the whole utterance.
+    bool streaming_ = false;
+    pid_t asrPid_ = -1;
+    int asrWriteFd_ = -1;
+    int asrReadFd_ = -1;
+    std::thread asrThread_;
+    /// Set when the session is closing: the recogniser's next `final` is the end
+    /// of the utterance, not a segment to commit mid-flight.
+    std::atomic<bool> asrClosing_{false};
+
     /// Default input as it was when recording started, and when to put it back.
     /// Restoring is scheduled rather than immediate because the desktop flips it
     /// ~2 s after the stream closes, i.e. *after* we are done.

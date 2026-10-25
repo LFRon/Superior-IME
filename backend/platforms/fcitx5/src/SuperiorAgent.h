@@ -183,6 +183,9 @@ private:
     void handleSpeechEvent(std::string_view line);
     /// Commits a finished transcript to the focused input context.
     void commitSpeechText(std::string_view text);
+    /// Shows the in-flight transcript as preedit so the user sees words appear
+    /// while speaking, and keeps the committed text untouched.
+    void setSpeechPreedit(std::string_view text);
 
     /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
     /// text. Kept in one place so the policy cannot drift between call sites.
@@ -253,6 +256,9 @@ private:
     std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = true;
+    /// True while a speech draft is shown as preedit, so it is cleared exactly
+    /// once and never left behind in the composition.
+    bool speechPreeditActive_ = false;
     /// Right-Ctrl tap toggles dictation (`settings.json: speechRecognitionHotkey`).
     bool speechRecognitionHotkey_ = true;
     /// Catalogue id selected in settings; the panel can change it.

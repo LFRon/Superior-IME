@@ -144,6 +144,33 @@ void testSceneCarriesSetupFacts() {
     CHECK(hidden.phase == SpeechPhase::Hidden);
 }
 
+/// Streaming: segments become real text mid-recording, and the session keeps
+/// going. A cancel still revokes whatever has not been committed.
+void testChunksCommitWhileRecording() {
+    SpeechState state;
+    state.show(true, true);
+    CHECK(state.beginRecording());
+    state.setPartial("你好");
+    CHECK(state.acceptChunk("你好"));
+    CHECK(state.phase() == SpeechPhase::Recording); // still listening
+    CHECK(state.partial().empty());                 // the draft became real text
+    CHECK(state.lastText() == "你好");
+
+    // An empty segment must not produce an empty commit.
+    CHECK(!state.acceptChunk(""));
+
+    // The session final still closes the recording.
+    state.beginTranscribing();
+    CHECK(state.phase() == SpeechPhase::Transcribing);
+    CHECK(state.acceptFinal("世界"));
+    CHECK(state.phase() == SpeechPhase::Ready);
+
+    // After a cancel, in-flight segments are dropped, not committed.
+    CHECK(state.beginRecording());
+    state.cancel();
+    CHECK(state.acceptChunk("不该上屏") == false);
+}
+
 void testPhaseNamesAreStable() {
     CHECK(std::string(superior::api::speechPhaseName(SpeechPhase::NeedsSetup)) == "needs-setup");
     CHECK(std::string(superior::api::speechPhaseName(SpeechPhase::Recording)) == "recording");
@@ -160,6 +187,7 @@ int main() {
     testLevellessStatesIgnoreTelemetry();
     testFailureCanRetry();
     testSceneCarriesSetupFacts();
+    testChunksCommitWhileRecording();
     testPhaseNamesAreStable();
     return superior::test::finish("speech state tests");
 }

@@ -136,7 +136,6 @@ private:
     QWidget *mic_ = nullptr;
     QLabel *title_ = nullptr;
     QLabel *message_ = nullptr;
-    QLabel *partial_ = nullptr;
     QComboBox *model_ = nullptr;
     PopupDelegate *popupDelegate_ = nullptr;
     QProgressBar *progress_ = nullptr;

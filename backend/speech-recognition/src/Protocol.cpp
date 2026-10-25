@@ -58,6 +58,9 @@ std::string encodeEvent(const Event &event) {
     case Event::Kind::Partial:
         json = Json{{"ev", "partial"}, {"text", event.text}};
         break;
+    case Event::Kind::Chunk:
+        json = Json{{"ev", "chunk"}, {"text", event.text}};
+        break;
     case Event::Kind::Final:
         json = Json{{"ev", "final"}, {"text", event.text}};
         break;

@@ -47,6 +47,14 @@ public:
     /// Recording stopped; the final transcript is being produced.
     void beginTranscribing();
 
+    /// A *segment* finalized while the recording continues (the user paused, so
+    /// what was said so far becomes real text). Returns true when it may be
+    /// committed; the phase stays `Recording`.
+    ///
+    /// This is what makes dictation feel like typing: text appears while the
+    /// user is still speaking, and only the volatile tail stays a draft.
+    [[nodiscard]] bool acceptChunk(std::string text);
+
     /// A final transcript arrived. Returns true when it may be committed.
     ///
     /// Cancelling or hiding revokes permission, so a late result from a

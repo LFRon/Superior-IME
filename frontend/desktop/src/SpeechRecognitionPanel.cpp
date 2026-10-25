@@ -182,10 +182,6 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     message_->setWordWrap(true);
     message_->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
 
-    partial_ = new QLabel(this);
-    partial_->setAlignment(Qt::AlignHCenter);
-    partial_->setWordWrap(true);
-
     model_ = new QComboBox(this);
     for (const auto &entry : speech_recognition::modelCatalog()) {
         model_->addItem(QString::fromStdString(entry.displayName),
@@ -277,7 +273,6 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     root_->addLayout(header);
     root_->addWidget(mic_);
     root_->addWidget(message_);
-    root_->addWidget(partial_);
     root_->addLayout(setupRow);
     // Directly under the model choice: that is the row the progress belongs to.
     root_->addWidget(progress_);
@@ -526,9 +521,6 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
                         ? QStringLiteral("语音输入")
                         : QStringLiteral("语音输入 · %1").arg(QString::fromStdString(scene.modelName)));
     level_ = scene.phase == api::SpeechPhase::Recording ? scene.level : 0.0;
-    // `partial` is the recogniser's draft: it may be revised downwards while the
-    // user keeps talking, so it is replaced wholesale rather than appended.
-    partial_->setText(QString::fromStdString(scene.partial));
     // Follow the scene, but not *against* the user: a frame can still be in
     // flight from before the choice was saved. The pending id is dropped as
     // soon as the agent echoes it back, and on close, so a choice the agent
@@ -578,7 +570,6 @@ void SpeechRecognitionPanel::updateActions() {
     progress_->setVisible(downloader_.running());
     message_->setVisible(!hintText().isEmpty());
     message_->setText(hintText());
-    partial_->setVisible(recording || transcribing);
 
     // The microphone is the button. The cursor says so before the click does.
     if (mic_ != nullptr) {

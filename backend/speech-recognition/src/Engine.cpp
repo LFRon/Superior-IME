@@ -107,6 +107,52 @@ std::optional<EngineCommand> buildEngineCommand(const EngineConfig &config,
     return command;
 }
 
+std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &config,
+                                                         std::string &error, int stepMs) {
+    if (config.modelPath.empty()) {
+        error = "no model path";
+        return std::nullopt;
+    }
+    const std::string threads = std::to_string(config.threads > 0 ? config.threads : 4);
+    const std::string backend = "qwen3";
+
+    if (const char *custom = std::getenv("SUPERIOR_ASR_STREAM_CMD");
+        custom != nullptr && custom[0] != '\0') {
+        std::string line(custom);
+        line = substitute(line, "model", config.modelPath);
+        line = substitute(line, "threads", threads);
+        line = substitute(line, "language", config.language);
+        line = substitute(line, "backend", backend);
+        const auto tokens = splitCommandLine(line);
+        if (tokens.empty()) {
+            error = "SUPERIOR_ASR_STREAM_CMD is empty";
+            return std::nullopt;
+        }
+        EngineCommand command;
+        command.program = tokens.front();
+        command.args.assign(tokens.begin() + 1, tokens.end());
+        return command;
+    }
+
+    if (config.enginePath.empty()) {
+        error = "no recogniser engine";
+        return std::nullopt;
+    }
+    EngineCommand command;
+    command.program = config.enginePath;
+    // `--stream-final-on-silence-ms` is the segment boundary the user perceives:
+    // pause briefly and the sentence becomes real text, keep talking and it stays
+    // a draft. 800 ms is the engine default and matches speech rhythm.
+    command.args = {"--backend", backend, "-m", config.modelPath, "--stream", "--stream-json",
+                    "-t", threads, "--stream-step", std::to_string(stepMs),
+                    "--stream-final-on-silence-ms", "800"};
+    if (!config.language.empty() && config.language != "auto") {
+        command.args.push_back("-l");
+        command.args.push_back(config.language);
+    }
+    return command;
+}
+
 std::optional<std::string> runEngine(const EngineCommand &command, std::string &error) {
     if (command.program.empty()) {
         error = "no recogniser engine";

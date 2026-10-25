@@ -1576,6 +1576,7 @@ void SuperiorAgent::cancelSpeech(std::string_view reason) {
     if (!speech_.busy() || speech_.phase() == api::SpeechPhase::Cancelling) {
         return;
     }
+    setSpeechPreedit({});
     // The decision layer revokes the commit *first*: a `final` that is already
     // on the wire must not be typed after this point.
     speech_.cancel();
@@ -1646,9 +1647,21 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
         speech_.setLevel(parsed.value("rms", 0.0));
     } else if (kind == "partial") {
         speech_.setPartial(parsed.value("text", std::string{}));
+        // The draft lives in the composition line, not in the document: the user
+        // sees words appear, and any rewrite happens before anything is real.
+        setSpeechPreedit(speech_.partial());
+    } else if (kind == "chunk") {
+        // A finalized segment. Commit it now and keep listening — this is what
+        // "writes while I speak" means.
+        const std::string text = parsed.value("text", std::string{});
+        if (speech_.acceptChunk(text)) {
+            setSpeechPreedit({});
+            commitSpeechText(speech_.lastText());
+        }
     } else if (kind == "final") {
         const std::string text = parsed.value("text", std::string{});
         if (speech_.acceptFinal(text)) {
+            setSpeechPreedit({});
             commitSpeechText(speech_.lastText());
         }
     } else if (kind == "error") {
@@ -1658,6 +1671,31 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
     if (activeContext_ != nullptr) {
         refresh(activeContext_);
     }
+}
+
+void SuperiorAgent::setSpeechPreedit(std::string_view text) {
+    if (instance_ == nullptr || activeContext_ == nullptr) {
+        return;
+    }
+    fcitx::InputContext *inputContext = activeContext_;
+    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        return;
+    }
+    if (text.empty() && !speechPreeditActive_) {
+        return;
+    }
+    // The panel preedit (not the client one) on purpose: we own the input line, so
+    // the draft is rendered in our own candidate strip. Sending it to the client
+    // would make every application style it differently, and a few (Electron,
+    // some terminals) do not render it at all.
+    fcitx::Text preedit;
+    if (!text.empty()) {
+        preedit = fcitx::Text(std::string(text));
+        preedit.setCursor(static_cast<int>(text.size()));
+    }
+    inputContext->inputPanel().setPreedit(preedit);
+    speechPreeditActive_ = !text.empty();
+    inputContext->updatePreedit();
 }
 
 void SuperiorAgent::commitSpeechText(std::string_view text) {

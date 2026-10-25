@@ -131,6 +131,16 @@ void SpeechState::beginTranscribing() {
     enter(api::SpeechPhase::Transcribing);
 }
 
+bool SpeechState::acceptChunk(std::string text) {
+    if (phase_ != api::SpeechPhase::Recording || commitRevoked_ || text.empty()) {
+        return false;
+    }
+    // The committed segment is no longer a draft, so the tail restarts empty.
+    partial_.clear();
+    lastText_ = std::move(text);
+    return true;
+}
+
 bool SpeechState::acceptFinal(std::string text) {
     if (phase_ != api::SpeechPhase::Transcribing) {
         return false;

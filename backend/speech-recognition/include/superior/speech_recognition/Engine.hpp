@@ -30,6 +30,20 @@ struct EngineCommand {
                                                               const std::filesystem::path &wav,
                                                               std::string &error);
 
+/// Builds the *streaming* invocation: PCM on stdin, JSON events on stdout.
+///
+/// Streaming is what makes dictation feel like typing: the recogniser reports a
+/// partial transcript while the user is still speaking, and promotes a segment to
+/// `final` after a short pause. `stepMs` is how much audio each re-decode sees —
+/// smaller is more responsive and more expensive.
+///
+/// `SUPERIOR_ASR_STREAM_CMD` overrides the whole command line, with the same
+/// `{model}`/`{threads}`/`{language}`/`{backend}` placeholders as the batch form,
+/// so the pipeline can be tested without a model.
+[[nodiscard]] std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &config,
+                                                                      std::string &error,
+                                                                      int stepMs = 2000);
+
 /// Runs the command with stdout captured; returns the trimmed transcript.
 ///
 /// Blocking: callers run it on a worker thread. `error` is filled on a non-zero

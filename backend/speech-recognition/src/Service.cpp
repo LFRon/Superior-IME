@@ -6,12 +6,15 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <filesystem>
 #include <utility>
 
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <nlohmann/json.hpp>
 
 #include "superior/diagnostics/Log.hpp"
 #include "superior/speech_recognition/Capture.hpp"
@@ -32,9 +35,14 @@ std::uint64_t nowMs() {
 
 constexpr std::uint64_t kLevelIntervalMs = 50;
 
-/// Reads the whole capture stream, appending samples and keeping an RMS value.
+/// Reads the capture stream, keeping the samples for the level meter and (when
+/// streaming) forwarding them to the recogniser's stdin.
+///
+/// The write happens *outside* the lock: a slow recogniser must never stall the
+/// level meter, or the panel's ring would freeze while the model is busy.
 void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
-                 double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended) {
+                 double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended,
+                 int teeFd) {
     std::vector<std::int16_t> chunk(1600); // 100 ms at 16 kHz
     while (!stopping.load(std::memory_order_relaxed)) {
         const ssize_t bytes = ::read(fd, chunk.data(), chunk.size() * sizeof(std::int16_t));
@@ -43,14 +51,42 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
         }
         const auto samples = static_cast<std::size_t>(bytes) / sizeof(std::int16_t);
         const double measured = rmsLevel(chunk.data(), samples);
-        std::lock_guard<std::mutex> lock(mutex);
-        audio.insert(audio.end(), chunk.begin(),
-                     chunk.begin() + static_cast<std::ptrdiff_t>(samples));
-        level = measured;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            audio.insert(audio.end(), chunk.begin(),
+                         chunk.begin() + static_cast<std::ptrdiff_t>(samples));
+            level = measured;
+        }
+        if (teeFd >= 0) {
+            const auto *pcm = reinterpret_cast<const char *>(chunk.data());
+            const std::size_t total = samples * sizeof(std::int16_t);
+            std::size_t written = 0;
+            while (written < total) {
+                const ssize_t result = ::write(teeFd, pcm + written, total - written);
+                if (result <= 0) {
+                    // The recogniser is gone; stop feeding it and let the reader
+                    // report the failure.
+                    teeFd = -1;
+                    break;
+                }
+                written += static_cast<std::size_t>(result);
+            }
+        }
     }
     // The tool exited (device busy, unplugged, killed). Say so: without this the
     // service would keep "recording" silence until the no-speech timeout.
     ended.store(true, std::memory_order_relaxed);
+}
+
+/// Splits one JSON line from the recogniser into (kind, text).
+bool decodeStreamEvent(const std::string &line, std::string &kind, std::string &text) {
+    const auto parsed = nlohmann::json::parse(line, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        return false;
+    }
+    kind = parsed.value("type", std::string{});
+    text = parsed.value("text", std::string{});
+    return !kind.empty();
 }
 
 /// `SUPERIOR_KEEP_DEFAULT_SOURCE=1` leaves the desktop's audio policy alone:
@@ -58,6 +94,41 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
 bool restoreDefaultSourceEnabled() {
     const char *value = std::getenv("SUPERIOR_KEEP_DEFAULT_SOURCE");
     return value == nullptr || std::strcmp(value, "1") != 0;
+}
+
+/// Threads to give the model.
+///
+/// Not "all of them": a dictation session competes with the compositor, the
+/// editor and the browser. Half the machine, at least 2 and at most 8, leaves the
+/// desktop responsive on a 4-core laptop and still finishes a 0.6B decode fast on
+/// a 16-core desktop. `SUPERIOR_SPEECH_THREADS` overrides it.
+int autoThreads() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_THREADS"); value != nullptr) {
+        const int parsed = std::atoi(value);
+        if (parsed > 0) {
+            return parsed;
+        }
+    }
+    const unsigned cores = std::thread::hardware_concurrency();
+    const int half = cores == 0 ? 2 : static_cast<int>(cores / 2);
+    return std::clamp(half, 2, 8);
+}
+
+/// How much audio each streaming re-decode sees.
+///
+/// This is the knob that trades latency for CPU: 2 s is responsive; under load
+/// 3 s costs a third less. Read per session, so a busy hour and an idle one
+/// behave differently without a restart.
+int streamingStepMs() {
+    double load = 0.0;
+    if (std::FILE *file = std::fopen("/proc/loadavg", "r"); file != nullptr) {
+        if (std::fscanf(file, "%lf", &load) != 1) {
+            load = 0.0;
+        }
+        std::fclose(file);
+    }
+    const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+    return load > 0.7 * static_cast<double>(cores) ? 3000 : 2000;
 }
 
 /// The recogniser's reasons are technical and English; the panel shows the
@@ -174,13 +245,160 @@ void Service::startCaptureThread() {
     capturing_ = true;
 
     captureEnded_.store(false, std::memory_order_relaxed);
-    captureThread_ = std::thread([this] {
-        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, revoked_, captureEnded_);
+    const int teeFd = streaming_ ? asrWriteFd_ : -1;
+    captureThread_ = std::thread([this, teeFd] {
+        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, revoked_, captureEnded_,
+                    teeFd);
     });
     // The clock starts when capture starts: time spent waiting for the panel to
     // open is not part of the utterance.
     silence_.begin(nowMs());
     emitPhase("recording");
+}
+
+bool Service::startStreamingRecogniser() {
+    if (std::getenv("SUPERIOR_DISABLE_STREAMING") != nullptr) {
+        return false;
+    }
+    EngineConfig streaming = config_;
+    if (streaming.threads <= 0) {
+        streaming.threads = autoThreads();
+    }
+    const int step = streamingStepMs();
+    std::string error;
+    const auto command = buildStreamingEngineCommand(streaming, error, step);
+    if (!command) {
+        SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
+            .field("reason", error)
+            << "streaming unavailable, falling back to one-shot decoding";
+        return false;
+    }
+
+    int toChild[2] = {-1, -1};
+    int fromChild[2] = {-1, -1};
+    if (::pipe(toChild) != 0) {
+        return false;
+    }
+    if (::pipe(fromChild) != 0) {
+        ::close(toChild[0]);
+        ::close(toChild[1]);
+        return false;
+    }
+
+    std::vector<std::string> storage;
+    storage.push_back(command->program);
+    storage.insert(storage.end(), command->args.begin(), command->args.end());
+    std::vector<char *> argv;
+    argv.reserve(storage.size() + 1);
+    for (auto &item : storage) {
+        argv.push_back(item.data());
+    }
+    argv.push_back(nullptr);
+
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(toChild[0]);
+        ::close(toChild[1]);
+        ::close(fromChild[0]);
+        ::close(fromChild[1]);
+        return false;
+    }
+    if (pid == 0) {
+        ::dup2(toChild[0], STDIN_FILENO);
+        ::dup2(fromChild[1], STDOUT_FILENO);
+        const int devNull = ::open("/dev/null", O_WRONLY);
+        if (devNull >= 0) {
+            ::dup2(devNull, STDERR_FILENO);
+        }
+        ::close(toChild[0]);
+        ::close(toChild[1]);
+        ::close(fromChild[0]);
+        ::close(fromChild[1]);
+        ::execvp(command->program.c_str(), argv.data());
+        ::_exit(127);
+    }
+
+    ::close(toChild[0]);
+    ::close(fromChild[1]);
+    asrPid_ = pid;
+    asrWriteFd_ = toChild[1];
+    asrReadFd_ = fromChild[0];
+    streaming_ = true;
+    asrClosing_.store(false, std::memory_order_relaxed);
+    asrThread_ = std::thread([this] { pumpRecogniser(); });
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("pid", static_cast<std::int64_t>(pid))
+        .field("threads", static_cast<std::int64_t>(streaming.threads))
+        .field("stepMs", static_cast<std::int64_t>(step))
+        << "streaming recogniser started (threads and step chosen from current load)";
+    return true;
+}
+
+void Service::pumpRecogniser() {
+    std::string buffer;
+    std::array<char, 4096> chunk{};
+    while (true) {
+        const ssize_t count = ::read(asrReadFd_, chunk.data(), chunk.size());
+        if (count <= 0) {
+            break;
+        }
+        buffer.append(chunk.data(), static_cast<std::size_t>(count));
+        std::size_t newline = 0;
+        while ((newline = buffer.find('\n')) != std::string::npos) {
+            const std::string line = buffer.substr(0, newline);
+            buffer.erase(0, newline + 1);
+            std::string kind;
+            std::string text;
+            if (!decodeStreamEvent(line, kind, text)) {
+                continue;
+            }
+            Event event;
+            if (kind == "partial") {
+                if (text.empty()) {
+                    continue;
+                }
+                event.kind = Event::Kind::Partial;
+                event.text = text;
+            } else if (kind == "final") {
+                if (text.empty()) {
+                    continue;
+                }
+                // A final while the session is still open is a *segment*: the
+                // user paused, so what was said so far becomes real text and the
+                // microphone keeps listening.
+                event.kind = asrClosing_.load(std::memory_order_relaxed) ? Event::Kind::Final
+                                                                        : Event::Kind::Chunk;
+                event.text = text;
+            } else {
+                continue; // `silence` and anything new the engine adds.
+            }
+            emit_(event);
+        }
+    }
+    ::close(asrReadFd_);
+    asrReadFd_ = -1;
+}
+
+void Service::finishStreamingRecogniser() {
+    if (!streaming_) {
+        return;
+    }
+    asrClosing_.store(true, std::memory_order_relaxed);
+    if (asrWriteFd_ >= 0) {
+        // EOF is the "utterance over" signal the engine understands; it flushes
+        // its last segment before exiting.
+        ::close(asrWriteFd_);
+        asrWriteFd_ = -1;
+    }
+    if (asrThread_.joinable()) {
+        asrThread_.join();
+    }
+    if (asrPid_ > 0) {
+        int status = 0;
+        ::waitpid(asrPid_, &status, 0);
+        asrPid_ = -1;
+    }
+    streaming_ = false;
 }
 
 void Service::start() {
@@ -194,6 +412,10 @@ void Service::start() {
         event.message = "没有找到录音工具（pw-record / parec / arecord）。";
         emit_(event);
         return;
+    }
+    // Start the recogniser first: the capture thread writes straight into it.
+    if (!startStreamingRecogniser()) {
+        streaming_ = false;
     }
     startCaptureThread();
 }
@@ -263,7 +485,17 @@ void Service::stop() {
         emitPhase("idle");
         return;
     }
+    const bool wasStreaming = streaming_;
     stopCapture();
+    if (wasStreaming) {
+        // The recogniser already reported every segment while we were recording;
+        // closing its stdin makes it flush the last one, and `pumpRecogniser`
+        // emits it as the session's final.
+        emitPhase("transcribing");
+        finishStreamingRecogniser();
+        emitPhase("idle");
+        return;
+    }
 
     std::vector<std::int16_t> audio;
     {
@@ -410,6 +642,7 @@ void Service::shutdown() {
     if (capturing_) {
         stopCapture();
     }
+    finishStreamingRecogniser();
     if (worker_.joinable()) {
         worker_.join();
     }
