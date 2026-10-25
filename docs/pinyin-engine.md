@@ -143,6 +143,11 @@ patch:
 翻页改为向引擎发送 `Page_Up` / `Page_Down` 按键，与键盘 `-`/`=` 走同一条
 `key_binder` 路径，因此也能尊重方案自己的键位。
 
+翻页之后选择候选用的是**页内行号**：`RimeApi::select_candidate()` 接受的是整个
+候选列表的绝对索引，`LibrimePort::selectCandidate()` 会先读一次 `RimeContext`，
+按 `page_no * page_size + index` 换算再交给 librime，行号超出当前页则直接失败。
+少了这层换算，翻到第二页选「第 1 行」提交的仍是第一页的同位置词。
+
 滚轮由 UI 发 `PageCandidates`，agent 调 `PageableCandidateList::next()/prev()`，
 `RimeCandidateList` 覆写这两个方法后转发给引擎。
 

@@ -55,6 +55,7 @@ public:
     /// Current frame. Cheap enough to call per event; the menu is copied.
     [[nodiscard]] Snapshot snapshot();
 
+    /// Commits the candidate at row `index` of the current page (0-based).
     bool selectCandidate(std::size_t index);
     bool page(bool backward);
 

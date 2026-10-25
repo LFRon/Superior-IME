@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -317,7 +318,36 @@ bool LibrimePort::selectCandidate(std::size_t index) {
     if (!available() || impl_->session == 0) {
         return false;
     }
-    return impl_->api->select_candidate(impl_->session, index) != 0;
+    // `index` is a row on the *visible* page, but `select_candidate` wants an
+    // index into the whole candidate list. Passing the row straight through used
+    // to commit page one forever: after paging, row 0 resolved to candidate 0.
+    // librime itself converts the same way in `do_with_candidate_on_current_page`
+    // (`selected_index / page_size * page_size + index`).
+    RimeContext context{};
+    RIME_STRUCT_INIT(RimeContext, context);
+    if (!impl_->api->get_context(impl_->session, &context)) {
+        return false;
+    }
+    const RimeMenu &menu = context.menu;
+    const bool insidePage =
+        menu.num_candidates > 0 && index < static_cast<std::size_t>(menu.num_candidates);
+    // A page is `page_size` rows wide except possibly the last one, so the
+    // multiplication still lands on that page's first row.
+    const int pageSize = menu.page_size > 0 ? menu.page_size : menu.num_candidates;
+    const long long global =
+        static_cast<long long>(menu.page_no) * pageSize + static_cast<long long>(index);
+    impl_->api->free_context(&context);
+    if (!insidePage) {
+        return false;
+    }
+    if (menu.page_no > 0 && pageSize <= 0) {
+        // librime reported no page width, so the row cannot be located.
+        return false;
+    }
+    if (global > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    return impl_->api->select_candidate(impl_->session, static_cast<int>(global)) != 0;
 }
 
 bool LibrimePort::changePage(bool backward) {

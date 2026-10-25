@@ -103,6 +103,83 @@ int skip(const std::string &reason) {
     return 0;
 }
 
+/// Selecting a row after paging must commit the word on *that* page.
+///
+/// The C API's `select_candidate` takes an index into the whole list while the
+/// UI numbers rows inside the page, so passing the row through unchanged made
+/// every page commit page one — exactly what "+ then space" produced for users.
+/// The expectation is read from the page the engine itself reports, so the test
+/// tracks data changes instead of hard-coding a dictionary.
+int checkPagingSelection(const superior::pinyin::Paths &paths) {
+    superior::pinyin::LibrimePort port;
+    superior::pinyin::RimeEngine engine(port);
+    std::string message;
+    if (!engine.start(paths, message)) {
+        std::cerr << "golden pinyin: cannot start the engine: " << message << '\n';
+        return 1;
+    }
+    for (const char character : std::string("ni")) {
+        engine.processKey(
+            superior::pinyin::KeyInput{static_cast<std::uint32_t>(character), 0, false});
+    }
+    const superior::pinyin::Snapshot first = engine.snapshot();
+    if (!first.menu.hasNext) {
+        // A shrunk dictionary cannot exercise paging; that is not a text change.
+        engine.stop();
+        std::cout << "golden pinyin: skipped paging (\"ni\" fits on one page)\n";
+        return 0;
+    }
+    if (!engine.page(/*backward=*/false)) {
+        std::cerr << "golden pinyin: FAIL paging \"ni\" forward was refused\n";
+        engine.stop();
+        return 1;
+    }
+    const superior::pinyin::Snapshot second = engine.snapshot();
+    if (second.menu.pageIndex != 2) {
+        std::cerr << "golden pinyin: FAIL paging \"ni\" landed on page "
+                  << second.menu.pageIndex << '\n';
+        engine.stop();
+        return 1;
+    }
+    if (second.menu.candidates.size() < 2) {
+        std::cerr << "golden pinyin: FAIL page 2 of \"ni\" has "
+                  << second.menu.candidates.size() << " row(s)\n";
+        engine.stop();
+        return 1;
+    }
+
+    // One row past the page must be refused; wrapping to the next page would
+    // commit a word that is nowhere near what the user clicked.
+    const std::size_t rows = second.menu.candidates.size();
+    const bool wrapped = engine.selectCandidate(rows);
+    std::string stray;
+    const bool strayCommit = engine.takeCommit(stray);
+    if (wrapped || strayCommit) {
+        std::cerr << "golden pinyin: FAIL row " << rows << " of page 2 was accepted (commit '"
+                  << stray << "')\n";
+        engine.stop();
+        return 1;
+    }
+
+    const std::string expected = second.menu.candidates[1].text;
+    const bool selected = engine.selectCandidate(1);
+    std::string committed;
+    const bool hasCommit = engine.takeCommit(committed);
+    engine.stop();
+
+    if (!selected) {
+        std::cerr << "golden pinyin: FAIL row 1 of page 2 was rejected\n";
+        return 1;
+    }
+    if (!hasCommit || committed != expected) {
+        std::cerr << "golden pinyin: FAIL row 1 of page 2 expected '" << expected << "' got '"
+                  << committed << "'\n";
+        return 1;
+    }
+    std::cout << "golden pinyin: ok paging \"ni\" page 2 row 1 -> " << committed << '\n';
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -178,10 +255,12 @@ int main(int argc, char **argv) {
         engine.stop();
     }
 
+    const int pagingFailure = checkPagingSelection(paths);
+
     std::error_code cleanup;
     std::filesystem::remove_all(isolatedUser, cleanup);
 
-    if (failures != 0) {
+    if (failures != 0 || pagingFailure != 0) {
         std::cerr << "golden pinyin: " << failures << " of " << cases.size() << " failed\n";
         return 1;
     }

@@ -45,6 +45,11 @@ public:
     [[nodiscard]] virtual Composition composition() = 0;
     [[nodiscard]] virtual Menu menu() = 0;
 
+    /// Commits the candidate at row `index` of the **currently visible page**.
+    ///
+    /// The row is relative, like the numbers the UI shows: after paging, row 0
+    /// must be the first word of that page, not of the first one. Ports whose
+    /// engine wants an absolute index do the conversion themselves.
     virtual bool selectCandidate(std::size_t index) = 0;
     virtual bool changePage(bool backward) = 0;
 
