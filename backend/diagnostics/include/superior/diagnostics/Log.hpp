@@ -79,6 +79,15 @@ inline constexpr std::string_view Tool = "superior.tool";
 
 // -------------------------------------------------------------------- config
 
+/// Points `SUPERIOR_LOG_FILE` at `<state>/superior-ime/<name>.log` unless the
+/// caller already chose a file. Returns the path it settled on (empty when no
+/// state directory can be resolved).
+///
+/// Why this exists: both processes are normally started by the desktop with
+/// stderr going to /dev/null. Logging to stderr then means there is *no* record
+/// of anything — a "语音输入没反应" report had nothing to diagnose, twice.
+[[nodiscard]] std::string ensureLogFile(std::string_view name);
+
 /// Installs the primary sink. `nullptr` restores the default stderr sink.
 /// Any exception thrown by the sink is swallowed: logging must never take the
 /// process down.

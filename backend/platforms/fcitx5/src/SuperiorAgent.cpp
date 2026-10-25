@@ -114,6 +114,9 @@ private:
 
 SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
     : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr) {
+    // Fcitx5 starts us with stderr on /dev/null, so the default stderr sink
+    // records nothing at all. Give the agent its own file first.
+    static_cast<void>(diag::ensureLogFile("ime"));
     diag::configureFromEnvironment();
 
     if (instance_ == nullptr) {

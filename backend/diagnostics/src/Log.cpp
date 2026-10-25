@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -398,6 +399,30 @@ bool enabled(Level level, std::string_view category) noexcept {
         }
     }
     return static_cast<int>(level) >= static_cast<int>(threshold);
+}
+
+std::string ensureLogFile(std::string_view name) {
+    if (const char *existing = std::getenv("SUPERIOR_LOG_FILE");
+        existing != nullptr && existing[0] != '\0') {
+        return std::string(existing);
+    }
+    std::filesystem::path base;
+    if (const char *state = std::getenv("XDG_STATE_HOME"); state != nullptr && state[0] != '\0') {
+        base = std::filesystem::path(state);
+    } else if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+        base = std::filesystem::path(home) / ".local" / "state";
+    } else {
+        return {};
+    }
+    std::error_code error;
+    const std::filesystem::path dir = base / "superior-ime";
+    std::filesystem::create_directories(dir, error);
+    if (error) {
+        return {};
+    }
+    const std::filesystem::path path = dir / (std::string(name) + ".log");
+    ::setenv("SUPERIOR_LOG_FILE", path.c_str(), 1);
+    return path.string();
 }
 
 void configureFromEnvironment() {

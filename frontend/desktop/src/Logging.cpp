@@ -98,6 +98,9 @@ void forwardToQt(const diag::Record &record) {
 } // namespace
 
 void installQtLogging() {
+    // The overlay is launched by the agent with stderr on /dev/null; without this
+    // the UI side of a "nothing happened" report leaves no trace either.
+    static_cast<void>(diag::ensureLogFile("ui"));
     diag::configureFromEnvironment();
 
     // Qt captures qFatal/abort paths too; forwarding them keeps a single file.
