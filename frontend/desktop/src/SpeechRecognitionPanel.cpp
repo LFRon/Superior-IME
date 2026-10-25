@@ -474,6 +474,22 @@ void SpeechRecognitionPanel::finishDownload() {
         return;
     }
 
+    // A mirror answering with an error page or a half-written file is common
+    // enough to check for: without this the failure surfaces later as an engine
+    // crash that says nothing about the download.
+    const speech_recognition::ModelEntry *entry =
+        speech_recognition::findModel(downloadingId_);
+    const auto check = speech_recognition::checkModelFile(
+        std::filesystem::path(finalPath_.toStdString()), entry != nullptr ? entry->bytes : 0);
+    if (check != speech_recognition::ModelFileCheck::Ok) {
+        QFile::remove(finalPath_);
+        message_->setText(check == speech_recognition::ModelFileCheck::TooSmall
+                              ? QStringLiteral("下载不完整，请重试。")
+                              : QStringLiteral("下载到的不是模型文件，请换个镜像重试。"));
+        updateActions();
+        return;
+    }
+
     message_->setText(QStringLiteral("模型已就绪。"));
     updateActions();
     if (command_) {

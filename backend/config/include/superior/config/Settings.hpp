@@ -21,7 +21,11 @@ struct Settings {
     double uiScale = 1.0;
     /// Show the microphone button in the toolbar. The recogniser itself is a
     /// separate capability: this is only the product-level entry point.
-    bool speechRecognitionEnabled = false;
+    ///
+    /// On by default: the microphone is how a user discovers the feature, and the
+    /// panel explains what is missing (engine, model) with a download button. A
+    /// hidden entry point cannot do that.
+    bool speechRecognitionEnabled = true;
     /// Which catalogue model the capability should load and the panel offers.
     std::string speechRecognitionModelId = "qwen3-asr-0.6b";
     std::string logLevel = "info";

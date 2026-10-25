@@ -129,10 +129,13 @@ bool enginePresent() {
 }
 
 bool modelPresent(std::string_view id) {
-    const fs::path path = modelPath(id);
-    std::error_code error;
-    return !path.empty() && fs::is_regular_file(path, error) &&
-           fs::file_size(path, error) > 0 && !error;
+    // The same check the downloader applies, so "present" cannot mean "a file
+    // exists with the right name" — it means the model can actually be loaded.
+    const ModelEntry *entry = findModel(id);
+    if (entry == nullptr) {
+        return false;
+    }
+    return checkModelFile(modelPath(id), entry->bytes) == ModelFileCheck::Ok;
 }
 
 fs::path temporaryAudioPath() {

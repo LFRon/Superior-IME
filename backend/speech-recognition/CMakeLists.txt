@@ -6,6 +6,7 @@ add_library(superior_speech_recognition STATIC
     src/Capture.cpp
     src/Engine.cpp
     src/Layout.cpp
+    src/Models.cpp
     src/Protocol.cpp
     src/Service.cpp)
 

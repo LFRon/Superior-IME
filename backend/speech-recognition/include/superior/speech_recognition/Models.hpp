@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,5 +48,23 @@ struct ModelEntry {
 [[nodiscard]] inline const ModelEntry &defaultModel() {
     return modelCatalog().front();
 }
+
+/// Outcome of looking at a downloaded model file.
+enum class ModelFileCheck {
+    /// A GGUF container of plausible size.
+    Ok,
+    /// Missing or unreadable.
+    Missing,
+    /// Downloaded content is not a GGUF file — usually an error page saved under
+    /// a `.gguf` name, which a mirror returns with HTTP 200 surprisingly often.
+    NotGguf,
+    /// Truncated. The catalogue's byte count is approximate, so only a gross
+    /// shortfall is treated as truncation.
+    TooSmall,
+};
+
+/// Checks a file without loading it: four magic bytes plus a size floor.
+[[nodiscard]] ModelFileCheck checkModelFile(const std::filesystem::path &path,
+                                            std::uint64_t expectedBytes);
 
 } // namespace superior::speech_recognition

@@ -13,6 +13,7 @@
 #include "support/TestSupport.hpp"
 #include "superior/speech_recognition/Capture.hpp"
 #include "superior/speech_recognition/Engine.hpp"
+#include "superior/speech_recognition/Models.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
 
 namespace {
@@ -143,6 +144,44 @@ void testSilenceThresholdBoundary() {
     CHECK(watch.heardSpeech());
 }
 
+/// A mirror can answer 200 with an HTML page; a truncated file is just as bad.
+/// Both must be rejected at download time rather than at engine time.
+void testModelFileCheck() {
+    const fs::path dir = fs::temp_directory_path() / "superior-model-check";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    const fs::path good = dir / "good.gguf";
+    {
+        std::ofstream out(good, std::ios::binary);
+        out.write("GGUF", 4);
+        const std::string body(996, '\0');
+        out.write(body.data(), static_cast<std::streamsize>(body.size()));
+    }
+    CHECK(checkModelFile(good, 1000) == ModelFileCheck::Ok);
+
+    const fs::path html = dir / "error.gguf";
+    {
+        std::ofstream out(html, std::ios::binary);
+        const std::string page = "<!DOCTYPE html><html>404</html>";
+        out.write(page.data(), static_cast<std::streamsize>(page.size()));
+    }
+    CHECK(checkModelFile(html, 1000) == ModelFileCheck::NotGguf);
+
+    const fs::path truncated = dir / "partial.gguf";
+    {
+        std::ofstream out(truncated, std::ios::binary);
+        out.write("GGUF", 4);
+    }
+    CHECK(checkModelFile(truncated, 1000) == ModelFileCheck::TooSmall);
+
+    CHECK(checkModelFile(dir / "absent.gguf", 1000) == ModelFileCheck::Missing);
+
+    // An unknown expected size must not reject a valid file.
+    CHECK(checkModelFile(good, 0) == ModelFileCheck::Ok);
+    fs::remove_all(dir);
+}
+
 void testEngineCommandDefault() {
     ::setenv("SUPERIOR_ASR_CMD", "", 1);
     EngineConfig config;
@@ -270,6 +309,7 @@ int main() {
     testSilenceWatchIgnoresBlip();
     testSilenceThresholdBoundary();
     testWavHeader();
+    testModelFileCheck();
     testEngineCommandDefault();
     testEngineCommandOverride();
     testEngineRequiresModel();

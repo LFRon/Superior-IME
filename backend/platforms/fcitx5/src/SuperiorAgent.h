@@ -235,7 +235,7 @@ private:
     core::SpeechState speech_;
     std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
-    bool speechRecognitionEnabled_ = false;
+    bool speechRecognitionEnabled_ = true;
     /// Catalogue id selected in settings; the panel can change it.
     std::string speechModelId_ = "qwen3-asr-0.6b";
     bool inlineEnglishEnabled_ = true;
