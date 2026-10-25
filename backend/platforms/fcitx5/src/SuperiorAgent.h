@@ -31,6 +31,8 @@
 #include "superior/core/Modes.hpp"
 #include "superior/core/SceneInput.hpp"
 #include "superior/core/SpeechState.hpp"
+
+#include "SpeechProcess.h"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/protocol/SceneServer.hpp"
 
@@ -154,6 +156,19 @@ private:
     void clearPendingCloud(fcitx::InputContext *inputContext);
     void updateCloudTimer();
 
+    /// Starts the recogniser child on first use. Returns false when the binary
+    /// is missing, which is a setup state, not a crash.
+    bool ensureSpeechProcess();
+    /// Re-reads "is the engine installed / is a model downloaded" and updates
+    /// the panel's setup state.
+    void refreshSpeechSetup();
+    /// Opens or closes the panel, cancelling a live session on close.
+    void toggleSpeechPanel();
+    /// Applies one JSON line from the recogniser.
+    void handleSpeechEvent(std::string_view line);
+    /// Commits a finished transcript to the focused input context.
+    void commitSpeechText(std::string_view text);
+
     /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
     /// text. Kept in one place so the policy cannot drift between call sites.
     void commitCloudText(fcitx::InputContext *inputContext, std::string_view text);
@@ -218,6 +233,7 @@ private:
     /// recognition) lives in `superior_speech_recognition`; this object only
     /// owns "what should the panel show and may this transcript be committed".
     core::SpeechState speech_;
+    std::unique_ptr<SpeechProcess> speechProcess_;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = false;
     bool inlineEnglishEnabled_ = true;

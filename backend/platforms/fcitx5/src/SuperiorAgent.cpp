@@ -26,11 +26,16 @@
 #include "superior/diagnostics/Log.hpp"
 #include "superior/config/Settings.hpp"
 #include "superior/core/KeyPolicy.hpp"
+#include "superior/speech_recognition/Layout.hpp"
+#include "superior/speech_recognition/Models.hpp"
+#include "superior/speech_recognition/Protocol.hpp"
 #include "superior/fcitx5/InlineText.hpp"
 #include "superior/fcitx5/PreeditSource.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/fcitx5/StatusMapping.hpp"
 #include "superior/protocol/Wire.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <spawn.h>
 #include <sys/wait.h>
@@ -289,6 +294,9 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
 }
 
 SuperiorAgent::~SuperiorAgent() {
+    if (speechProcess_) {
+        speechProcess_->stop();
+    }
     settingsTimer_.reset();
     startupTimer_.reset();
     cloudTimer_.reset();
@@ -958,6 +966,10 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
     const auto handle = [this](const auto &value) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, api::ToggleStatusItem>) {
+            if (value.itemId == "speech") {
+                toggleSpeechPanel();
+                return;
+            }
             if (value.itemId != "inline-mode") {
                 activateStatusItem(value.itemId);
                 return;
@@ -989,22 +1001,47 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                     << "speech start ignored: the capability is not ready";
                 return;
             }
-            speech_.beginRecording();
+            if (activeContext_ != nullptr &&
+                activeContext_->capabilityFlags().testAny(
+                    fcitx::CapabilityFlag::PasswordOrSensitive)) {
+                speech_.fail("密码输入框不允许语音输入。");
+                refresh(activeContext_);
+                return;
+            }
+            if (!ensureSpeechProcess()) {
+                speech_.fail("语音识别组件未安装。");
+                refresh(activeContext_);
+                return;
+            }
+            // Starting speech abandons a half-typed pinyin composition: two
+            // input modes must never own the same commit.
+            if (activeContext_ != nullptr) {
+                activeContext_->reset();
+                activeContext_->inputPanel().reset();
+            }
+            if (speech_.beginRecording()) {
+                speechProcess_->send(R"({"cmd":"start"})");
+            }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechStop>) {
             if (contextFor(value.session) == nullptr) {
                 return;
             }
             speech_.beginTranscribing();
+            if (speechProcess_) {
+                speechProcess_->send(R"({"cmd":"stop"})");
+            }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechCancel>) {
             speech_.cancel();
-            speech_.idle();
+            if (speechProcess_) {
+                speechProcess_->send(R"({"cmd":"cancel"})");
+            }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
             // The UI just finished a download; re-check the files rather than
             // watching the filesystem.
-            speech_.refreshSetup(false, false);
+            refreshSpeechSetup();
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SetUiScale>) {
             // Scaling is applied by the UI process, which also owns the
@@ -1389,6 +1426,120 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
         }
     }
     state = CloudContext{};
+}
+
+bool SuperiorAgent::ensureSpeechProcess() {
+    if (speechProcess_ && speechProcess_->running()) {
+        return true;
+    }
+    if (instance_ == nullptr) {
+        return false;
+    }
+    if (!speechProcess_) {
+        speechProcess_ = std::make_unique<SpeechProcess>(instance_);
+    }
+    std::string error;
+    const bool started = speechProcess_->start(
+        [this](std::string_view line) { handleSpeechEvent(line); }, error);
+    if (!started) {
+        SUPERIOR_INFO(diag::categories::SpeechRecognition)
+            .field("error", error)
+            << "speech recognition process is unavailable";
+        return false;
+    }
+    return true;
+}
+
+void SuperiorAgent::refreshSpeechSetup() {
+    using namespace superior::speech_recognition;
+    const bool engine = enginePresent();
+    const bool model = modelPresent(defaultModel().id);
+    speech_.setModel(defaultModel().id, defaultModel().displayName, defaultModel().bytes);
+    speech_.refreshSetup(engine, model);
+}
+
+void SuperiorAgent::toggleSpeechPanel() {
+    if (speech_.visible()) {
+        // Closing is a cancel: a transcript still in flight must not be typed
+        // into the document after the user closed the panel.
+        speech_.cancel();
+        if (speechProcess_) {
+            speechProcess_->send(R"({"cmd":"cancel"})");
+        }
+        speech_.hide();
+        if (activeContext_ != nullptr) {
+            refresh(activeContext_);
+        }
+        return;
+    }
+
+    using namespace superior::speech_recognition;
+    const bool engine = enginePresent();
+    const bool model = modelPresent(defaultModel().id);
+    speech_.setModel(defaultModel().id, defaultModel().displayName, defaultModel().bytes);
+    speech_.show(engine, model);
+    if (engine && model) {
+        ensureSpeechProcess();
+    }
+    if (activeContext_ != nullptr) {
+        refresh(activeContext_);
+    }
+}
+
+void SuperiorAgent::handleSpeechEvent(std::string_view line) {
+    using namespace superior::speech_recognition;
+    // The child's protocol is small; decoding it here keeps the decision layer
+    // (`core::SpeechState`) free of JSON.
+    const auto parsed = nlohmann::json::parse(std::string(line), nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        return;
+    }
+    const std::string kind = parsed.value("ev", std::string{});
+
+    if (kind == "ready") {
+        speech_.refreshSetup(true, true);
+    } else if (kind == "phase") {
+        const std::string name = parsed.value("name", std::string{});
+        if (name == "idle") {
+            speech_.idle();
+        }
+    } else if (kind == "level") {
+        speech_.setLevel(parsed.value("rms", 0.0));
+    } else if (kind == "partial") {
+        speech_.setPartial(parsed.value("text", std::string{}));
+    } else if (kind == "final") {
+        const std::string text = parsed.value("text", std::string{});
+        if (speech_.acceptFinal(text)) {
+            commitSpeechText(speech_.lastText());
+        }
+    } else if (kind == "error") {
+        speech_.fail(parsed.value("message", std::string{"语音识别失败"}));
+    }
+
+    if (activeContext_ != nullptr) {
+        refresh(activeContext_);
+    }
+}
+
+void SuperiorAgent::commitSpeechText(std::string_view text) {
+    if (instance_ == nullptr || activeContext_ == nullptr || text.empty()) {
+        return;
+    }
+    fcitx::InputContext *inputContext = activeContext_;
+    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        SUPERIOR_WARN(diag::categories::SpeechRecognition)
+            << "refusing to commit a transcript into a password field";
+        return;
+    }
+    // The engine may still hold a composition from before the panel opened.
+    // Dropping it first keeps the transcript from being followed by stale pinyin.
+    inputContext->reset();
+    inputContext->inputPanel().reset();
+    inputContext->commitString(std::string(text));
+    inputContext->updatePreedit();
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("chars", static_cast<std::int64_t>(text.size()))
+        << "transcript committed";
 }
 
 void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::string_view text) {

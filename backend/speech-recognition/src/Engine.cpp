@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "superior/speech_recognition/Engine.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <string_view>
+
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "superior/speech_recognition/Models.hpp"
+
+namespace superior::speech_recognition {
+
+namespace {
+
+std::string substitute(std::string_view pattern, const std::string &key,
+                       const std::string &value) {
+    std::string result(pattern);
+    const std::string token = "{" + key + "}";
+    std::size_t position = 0;
+    while ((position = result.find(token, position)) != std::string::npos) {
+        result.replace(position, token.size(), value);
+        position += value.size();
+    }
+    return result;
+}
+
+std::string trimmed(std::string value) {
+    const auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+} // namespace
+
+std::vector<std::string> splitCommandLine(std::string_view line) {
+    std::vector<std::string> tokens;
+    std::string current;
+    bool quoted = false;
+    for (const char ch : line) {
+        if (ch == '"') {
+            quoted = !quoted;
+            continue;
+        }
+        if (ch == ' ' && !quoted) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+    return tokens;
+}
+
+std::optional<EngineCommand> buildEngineCommand(const EngineConfig &config,
+                                                const std::filesystem::path &wav,
+                                                std::string &error) {
+    if (config.modelPath.empty()) {
+        error = "no model path";
+        return std::nullopt;
+    }
+    const std::string threads = std::to_string(config.threads > 0 ? config.threads : 4);
+    const std::string backend = findModel({}) != nullptr ? defaultModel().backend : "qwen3";
+
+    if (const char *custom = std::getenv("SUPERIOR_ASR_CMD");
+        custom != nullptr && custom[0] != '\0') {
+        std::string line(custom);
+        line = substitute(line, "model", config.modelPath);
+        line = substitute(line, "wav", wav.string());
+        line = substitute(line, "threads", threads);
+        line = substitute(line, "language", config.language);
+        line = substitute(line, "backend", backend);
+        const auto tokens = splitCommandLine(line);
+        if (tokens.empty()) {
+            error = "SUPERIOR_ASR_CMD is empty";
+            return std::nullopt;
+        }
+        EngineCommand command;
+        command.program = tokens.front();
+        command.args.assign(tokens.begin() + 1, tokens.end());
+        return command;
+    }
+
+    if (config.enginePath.empty()) {
+        error = "no recogniser engine";
+        return std::nullopt;
+    }
+
+    EngineCommand command;
+    command.program = config.enginePath;
+    command.args = {"--backend", backend, "-m", config.modelPath, "-f", wav.string(),
+                    "-t", threads, "--no-timestamps"};
+    if (!config.language.empty() && config.language != "auto") {
+        command.args.push_back("-l");
+        command.args.push_back(config.language);
+    }
+    return command;
+}
+
+std::optional<std::string> runEngine(const EngineCommand &command, std::string &error) {
+    if (command.program.empty()) {
+        error = "no recogniser engine";
+        return std::nullopt;
+    }
+
+    int pipeFd[2] = {-1, -1};
+    if (::pipe(pipeFd) != 0) {
+        error = std::string("cannot create a pipe: ") + std::strerror(errno);
+        return std::nullopt;
+    }
+
+    std::vector<std::string> argvStorage;
+    argvStorage.reserve(command.args.size() + 2);
+    argvStorage.push_back(command.program);
+    argvStorage.insert(argvStorage.end(), command.args.begin(), command.args.end());
+    std::vector<char *> argv;
+    argv.reserve(argvStorage.size() + 1);
+    for (auto &item : argvStorage) {
+        argv.push_back(item.data());
+    }
+    argv.push_back(nullptr);
+
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipeFd[0]);
+        ::close(pipeFd[1]);
+        error = std::string("cannot fork: ") + std::strerror(errno);
+        return std::nullopt;
+    }
+    if (pid == 0) {
+        // Child: stdout goes to the pipe, stderr is dropped so engine chatter
+        // never reaches the agent's log as if it were our own.
+        ::dup2(pipeFd[1], STDOUT_FILENO);
+        ::close(pipeFd[0]);
+        ::close(pipeFd[1]);
+        ::execvp(command.program.c_str(), argv.data());
+        ::_exit(127);
+    }
+
+    ::close(pipeFd[1]);
+    std::string output;
+    std::array<char, 4096> buffer{};
+    ssize_t count = 0;
+    while ((count = ::read(pipeFd[0], buffer.data(), buffer.size())) > 0) {
+        output.append(buffer.data(), static_cast<std::size_t>(count));
+    }
+    ::close(pipeFd[0]);
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
+            error = "the recogniser engine is not installed";
+        } else {
+            error = "the recogniser engine failed";
+        }
+        return std::nullopt;
+    }
+
+    const std::string text = trimmed(output);
+    if (text.empty()) {
+        error = "no speech recognized";
+        return std::nullopt;
+    }
+    return text;
+}
+
+} // namespace superior::speech_recognition

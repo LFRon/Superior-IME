@@ -28,9 +28,13 @@ set(SUPERIOR_ICON_DIR "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps" CAC
 
 if(SUPERIOR_ENABLE_FCITX5)
     find_package(Fcitx5Core 5.1 REQUIRED)
+    # The agent parses the recogniser's JSON Lines itself; keeping the parser
+    # here rather than in the child avoids a second protocol translation.
+    find_package(nlohmann_json 3.11 REQUIRED)
     set(FCITX5_CORE_VERSION "${Fcitx5Core_VERSION}")
 
     add_library(superior_fcitx5_agent MODULE
+        src/SpeechProcess.cpp
         src/SuperiorAgent.cpp)
 
     target_include_directories(superior_fcitx5_agent PRIVATE
@@ -39,10 +43,12 @@ if(SUPERIOR_ENABLE_FCITX5)
     target_link_libraries(superior_fcitx5_agent PRIVATE
         Fcitx5::Core
         Superior::Fcitx5Mapping
+        Superior::SpeechRecognition
         Superior::Protocol
         Superior::Config
         Superior::CloudPinyin
-        Superior::Diagnostics)
+        Superior::Diagnostics
+        nlohmann_json::nlohmann_json)
 
     set_target_properties(superior_fcitx5_agent PROPERTIES
         OUTPUT_NAME superioragent)

@@ -38,6 +38,9 @@ pinyin_addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/d
 ui="$build/frontend/desktop/superior_ui"
 settings="$build/frontend/settings/superior_settings"
 config_cli="$build/tools/superior-config/superior_config_cli"
+# The recogniser lives next to the UI binary: it is our program, not a
+# third-party engine (that one goes under speech-recognition/engine).
+speech="$build/backend/speech-recognition/superior_speech_recognition"
 staged_skins="$build/stage-skins"
 
 if [[ -z "$so" || -z "$addon_conf" || -z "$entry_conf" || ! -x "$ui" ]]; then
@@ -75,6 +78,7 @@ echo "  $addon_conf    -> $addon_dir/superioragent.conf"
 echo "  $entry_conf    -> $im_dir/super-ime.conf"
 [[ -n "$pinyin_so" ]] && echo "  $pinyin_so -> $lib_dir/libsuperiorpinyin.so"
 [[ -n "$pinyin_addon_conf" ]] && echo "  $pinyin_addon_conf -> $addon_dir/superiorpinyin.conf"
+[[ -f "$speech" ]] && echo "  $speech -> $app_root/bin/superior_speech_recognition"
 echo "  $ui            -> $bin_dir/superior_ui"
 [[ -x "$settings" ]] && echo "  $settings -> $bin_dir/superior_settings"
 [[ -x "$config_cli" ]] && echo "  $config_cli -> $bin_dir/superior-config"
@@ -107,6 +111,9 @@ if [[ -x "$settings" ]]; then
 fi
 if [[ -x "$config_cli" ]]; then
     install -Dm755 "$config_cli" "$bin_dir/superior-config"
+    if [[ -f "$speech" ]]; then
+        install -Dm755 "$speech" "$bin_dir/superior_speech_recognition"
+    fi
 fi
 
 # Wrappers keep the commands on PATH (and keep the desktop entry stable) while
