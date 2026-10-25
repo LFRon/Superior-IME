@@ -259,12 +259,28 @@ echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"final"' || fail "the process did not survive a revised draft"
 stop_process
 
-# --- Scenario 8: the decode step honours SUPERIOR_SPEECH_STEP_MS -----------
+# --- Scenario 8: the decode step defaults to 2000 ms and is overridable ------
 #
 # The step is the latency knob, and the wrong value is invisible: too small and
-# the decoder falls behind real time, too large and text appears in lumps. Making
-# it overridable is only useful if the override actually reaches the engine
-# command, which the startup log proves.
+# the decoder falls behind real time (words are dropped when the capture pipe
+# fills), too large and text appears in lumps. 2000 ms is the shipped default; the
+# environment variable is the escape hatch for a GPU build or a smaller model.
+#
+# The default depends on the load at session start by design, so the expectation is
+# computed the same way the service does it: 2000 ms unless the machine is
+# saturated (>= 0.9 x cores), in which case 3000 ms.
+expected_step="$(awk '{ if ($1 < 0.9 * '"$(nproc)"') print 2000; else print 3000 }' /proc/loadavg)"
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 6"' \
+    'bash -c "echo 不该走批处理"' "$root/quiet-stream.sh"
+wait_for '"ev":"ready"' || fail "no ready event (step default)"
+echo '{"cmd":"start"}' >&3
+sleep 0.6
+grep -q "stepMs=${expected_step}" "$current/err" ||
+    fail "the default decode step is not ${expected_step} ms (see the 'streaming recogniser started' log line)"
+echo '{"cmd":"stop"}' >&3
+wait_for '"ev":"final"' || fail "no final event after stop (step default)"
+stop_process
+
 start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 6"' \
     'bash -c "echo 不该走批处理"' "$root/quiet-stream.sh" "SUPERIOR_SPEECH_STEP_MS=2500"
 wait_for '"ev":"ready"' || fail "no ready event (step override)"

@@ -176,18 +176,23 @@ constexpr std::uint64_t kDraftDwellMs = 250;
 ///
 /// This is the knob that trades latency against CPU, and it is not a free knob:
 /// the streaming mode re-encodes the *whole* utterance on every step, so halving
-/// the step roughly doubles the work. Measured on a Ryzen 7 8845HS with
-/// FireRedASR2-AED q4_k (12 s of audio, 8 threads, CPU core-seconds):
+/// the step roughly doubles the work. Measured on a Ryzen 7 8845HS (8 cores of a
+/// 16-core chip) with FireRedASR2-AED q4_k, 12 s of audio, in CPU core-seconds:
 ///
-///     2000 ms -> 83-88 s   (1.1x realtime: keeps up)
-///     1500 ms -> 85 s      (1.0x realtime: the edge)
+///     2000 ms -> 83-88 s   (1.1x realtime: keeps up with headroom)
+///     1500 ms -> 85 s      (1.0x realtime: exactly at the edge)
 ///     1000 ms -> 147 s     (0.65x realtime: falls behind, audio is lost)
 ///
-/// Below ~1.5 s the decoder cannot keep up on this class of CPU, and falling
-/// behind is worse than a coarse step: the capture pipe fills, the sound server
-/// drops audio, and words disappear. The load bands below therefore bottom out at
-/// 1.5 s. `SUPERIOR_SPEECH_STEP_MS` forces a value for experiments (a GPU build or
-/// a smaller model can afford less).
+/// 2000 ms is the default because this is an input method, not a benchmark: it
+/// has to work on a laptop that is also running a browser and an IDE, and the
+/// numbers above were taken with nothing else running. A CPU half as fast still
+/// keeps up at 2000 ms and would fall behind at 1000 ms — and falling behind is
+/// not "a bit slower": the capture pipe fills, the sound server drops audio, and
+/// words disappear from the middle of sentences.
+///
+/// Only a machine that is genuinely saturated gets the coarser 3000 ms step.
+/// `SUPERIOR_SPEECH_STEP_MS` overrides both (a GPU build or a smaller model can
+/// afford less).
 int streamingStepMs() {
     if (const char *value = std::getenv("SUPERIOR_SPEECH_STEP_MS"); value != nullptr) {
         const long parsed = std::atol(value);
@@ -203,12 +208,6 @@ int streamingStepMs() {
         std::fclose(file);
     }
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    if (load < 0.35 * static_cast<double>(cores)) {
-        return 1500;
-    }
-    // Only a machine that is really saturated gives up the 2 s cadence: 2000 ms
-    // is the measured "keeps up" value, and a coarser step is a bigger loss for
-    // the user than the extra load is.
     return load < 0.9 * static_cast<double>(cores) ? 2000 : 3000;
 }
 
