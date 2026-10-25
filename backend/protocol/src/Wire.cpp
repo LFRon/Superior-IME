@@ -176,6 +176,7 @@ api::StatusPlacement placementFrom(std::string_view name) {
 const char *statusRoleName(api::StatusRole role) {
     switch (role) {
     case api::StatusRole::Punctuation: return "punctuation";
+    case api::StatusRole::Speech: return "speech";
     case api::StatusRole::Text: break;
     }
     return "text";
@@ -184,7 +185,13 @@ const char *statusRoleName(api::StatusRole role) {
 api::StatusRole statusRoleFrom(std::string_view name) {
     // Unknown roles degrade to text: a newer agent talking to an older UI must
     // not make an item disappear or render as an empty box.
-    return name == "punctuation" ? api::StatusRole::Punctuation : api::StatusRole::Text;
+    if (name == "punctuation") {
+        return api::StatusRole::Punctuation;
+    }
+    if (name == "speech") {
+        return api::StatusRole::Speech;
+    }
+    return api::StatusRole::Text;
 }
 
 Json statusItemJson(const api::StatusItem &item) {
@@ -205,6 +212,28 @@ api::StatusItem statusItemFrom(const Json &json) {
     item.enabled = json.value("enabled", true);
     item.role = statusRoleFrom(json.value("role", std::string{"text"}));
     return item;
+}
+
+api::SpeechPhase speechPhaseFrom(std::string_view name) {
+    if (name == "needs-setup") {
+        return api::SpeechPhase::NeedsSetup;
+    }
+    if (name == "ready") {
+        return api::SpeechPhase::Ready;
+    }
+    if (name == "recording") {
+        return api::SpeechPhase::Recording;
+    }
+    if (name == "transcribing") {
+        return api::SpeechPhase::Transcribing;
+    }
+    if (name == "cancelling") {
+        return api::SpeechPhase::Cancelling;
+    }
+    if (name == "failed") {
+        return api::SpeechPhase::Failed;
+    }
+    return api::SpeechPhase::Hidden;
 }
 
 const char *profileName(api::UiProfile profile) {
@@ -410,10 +439,22 @@ std::string encodeScene(const api::UiSceneFrame &frame) {
                 {"skinGeneration", frame.status.skinGeneration},
                 {"items", std::move(items)}};
 
+    Json speech{{"visible", frame.speech.visible},
+                {"phase", api::speechPhaseName(frame.speech.phase)},
+                {"modelId", frame.speech.modelId},
+                {"modelName", frame.speech.modelName},
+                {"modelBytes", frame.speech.modelBytes},
+                {"modelPresent", frame.speech.modelPresent},
+                {"enginePresent", frame.speech.enginePresent},
+                {"message", frame.speech.message},
+                {"skinId", frame.speech.skinId},
+                {"skinGeneration", frame.speech.skinGeneration}};
+
     Json json{{"frameId", frame.frameId},
               {"session", sessionJson(frame.session)},
               {"panel", std::move(panel)},
-              {"status", std::move(status)}};
+              {"status", std::move(status)},
+              {"speech", std::move(speech)}};
     if (frame.transition) {
         json["transition"] = Json{{"motion", frame.transition->motion},
                                   {"startMs", frame.transition->startMs},
@@ -467,6 +508,21 @@ std::optional<api::UiSceneFrame> decodeScene(std::string_view payload, DecodeErr
                 }
             }
 
+            if (json.contains("speech")) {
+                const auto &speech = json.at("speech");
+                frame.speech.visible = speech.value("visible", false);
+                frame.speech.phase = speechPhaseFrom(speech.value("phase", std::string{"hidden"}));
+                frame.speech.modelId = speech.value("modelId", std::string{});
+                frame.speech.modelName = speech.value("modelName", std::string{});
+                frame.speech.modelBytes = speech.value("modelBytes", std::uint64_t{0});
+                frame.speech.modelPresent = speech.value("modelPresent", false);
+                frame.speech.enginePresent = speech.value("enginePresent", false);
+                frame.speech.message = speech.value("message", std::string{});
+                frame.speech.skinId = speech.value("skinId", std::string{});
+                frame.speech.skinGeneration =
+                    speech.value("skinGeneration", api::SkinGeneration{0});
+            }
+
             if (json.contains("transition")) {
                 const auto &transition = json.at("transition");
                 api::TransitionSpec spec;
@@ -516,17 +572,19 @@ std::string encodeCommand(const api::UiCommand &command) {
             } else if constexpr (std::is_same_v<Type, api::ResetPanelPosition>) {
                 json = Json{{"kind", "resetPanelPosition"},
                             {"session", sessionJson(value.session)}};
-            } else if constexpr (std::is_same_v<Type, api::VoiceStart>) {
-                json = Json{{"kind", "voiceStart"},
+            } else if constexpr (std::is_same_v<Type, api::SpeechStart>) {
+                json = Json{{"kind", "speechStart"},
                             {"session", sessionJson(value.session)},
                             {"deviceId", value.deviceId},
                             {"language", value.language}};
-            } else if constexpr (std::is_same_v<Type, api::VoiceStop>) {
-                json = Json{{"kind", "voiceStop"},
+            } else if constexpr (std::is_same_v<Type, api::SpeechStop>) {
+                json = Json{{"kind", "speechStop"},
                             {"session", sessionJson(value.session)},
                             {"commit", value.commit}};
-            } else if constexpr (std::is_same_v<Type, api::VoiceCancel>) {
-                json = Json{{"kind", "voiceCancel"}, {"session", sessionJson(value.session)}};
+            } else if constexpr (std::is_same_v<Type, api::SpeechCancel>) {
+                json = Json{{"kind", "speechCancel"}, {"session", sessionJson(value.session)}};
+            } else if constexpr (std::is_same_v<Type, api::SpeechReload>) {
+                json = Json{{"kind", "speechReload"}};
             } else if constexpr (std::is_same_v<Type, api::RequestSettings>) {
                 json = Json{{"kind", "requestSettings"}, {"page", value.page}};
             } else if constexpr (std::is_same_v<Type, api::ShellReady>) {
@@ -582,17 +640,20 @@ std::optional<api::UiCommand> decodeCommand(std::string_view payload, DecodeErro
             if (kind == "resetPanelPosition") {
                 return api::ResetPanelPosition{sessionFrom(json.at("session"))};
             }
-            if (kind == "voiceStart") {
-                return api::VoiceStart{sessionFrom(json.at("session")),
+            if (kind == "speechStart") {
+                return api::SpeechStart{sessionFrom(json.at("session")),
                                        json.value("deviceId", std::string{}),
                                        json.value("language", std::string{"zh-CN"})};
             }
-            if (kind == "voiceStop") {
-                return api::VoiceStop{sessionFrom(json.at("session")),
+            if (kind == "speechStop") {
+                return api::SpeechStop{sessionFrom(json.at("session")),
                                       json.value("commit", true)};
             }
-            if (kind == "voiceCancel") {
-                return api::VoiceCancel{sessionFrom(json.at("session"))};
+            if (kind == "speechCancel") {
+                return api::SpeechCancel{sessionFrom(json.at("session"))};
+            }
+            if (kind == "speechReload") {
+                return api::SpeechReload{};
             }
             if (kind == "requestSettings") {
                 return api::RequestSettings{json.value("page", std::string{})};

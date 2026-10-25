@@ -8,6 +8,7 @@
 
 #include "superior/api/Content.hpp"
 #include "superior/api/Ids.hpp"
+#include "superior/api/Speech.hpp"
 
 namespace superior::api {
 
@@ -102,11 +103,38 @@ struct TransitionSpec {
     double toOpacity = 1.0;
 };
 
+/// The speech-recognition panel: a separate, persistent surface.
+///
+/// `partial` and `level` are deliberately **not** here. They arrive on the
+/// telemetry channel at ~20 Hz, while a scene frame is a complete, droppable
+/// description of what should be on screen. Mixing them would turn every level
+/// sample into a full serialization.
+struct SpeechScene {
+    bool visible = false;
+    SpeechPhase phase = SpeechPhase::Hidden;
+
+    /// The selected model, for display and for the download size hint.
+    std::string modelId;
+    std::string modelName;
+    std::uint64_t modelBytes = 0;
+    bool modelPresent = false;
+    bool enginePresent = false;
+
+    /// Human-readable reason for `NeedsSetup` / `Failed`; already localised by
+    /// the producer because the UI has no access to the capability's error codes.
+    std::string message;
+
+    std::string skinId;
+    SkinGeneration skinGeneration = 0;
+    std::optional<TransitionSpec> transition;
+};
+
 struct UiSceneFrame {
     FrameId frameId = 0;
     SessionKey session;
     PanelScene panel;
     StatusScene status;
+    SpeechScene speech;
     std::optional<TransitionSpec> transition;
 };
 

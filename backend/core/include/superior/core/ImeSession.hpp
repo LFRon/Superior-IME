@@ -58,6 +58,12 @@ public:
     void setPageInfo(int pageIndex, int pageCount);
     void clearPageInfo();
 
+    /// The speech panel is a separate surface with its own state machine; the
+    /// session only carries its scene section so one frame describes every
+    /// window the UI owns.
+    void setSpeech(api::SpeechScene speech);
+    [[nodiscard]] const api::SpeechScene &speech() const noexcept;
+
     void setTransition(std::string motion, std::uint64_t startMs, double from = 0.0,
                        double to = 1.0);
     void clearTransition();
@@ -74,6 +80,7 @@ private:
     std::string styleId_;
     std::string mode_;
     CandidateModel candidates_;
+    api::SpeechScene speech_{};
     std::vector<api::StatusItem> statusItems_;
     api::StatusPlacement statusPlacement_ = api::StatusPlacement::BottomRight;
     std::optional<api::TransitionSpec> transition_;

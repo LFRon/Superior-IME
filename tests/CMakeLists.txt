@@ -172,6 +172,12 @@ target_include_directories(superior_golden_pinyin_tests PRIVATE "${CMAKE_CURRENT
 target_compile_features(superior_golden_pinyin_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_golden_pinyin_tests)
 
+add_executable(superior_speech_state_tests speech_state_tests.cpp)
+target_link_libraries(superior_speech_state_tests PRIVATE Superior::Core)
+target_include_directories(superior_speech_state_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_speech_state_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_speech_state_tests)
+
 add_executable(superior_protocol_tests protocol_tests.cpp)
 target_link_libraries(superior_protocol_tests PRIVATE Superior::Protocol)
 target_include_directories(superior_protocol_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -209,6 +215,7 @@ add_test(NAME scene-input COMMAND superior_scene_input_tests)
 add_test(NAME pinyin-layout COMMAND superior_pinyin_layout_tests)
 add_test(NAME golden-pinyin
     COMMAND superior_golden_pinyin_tests "${PROJECT_SOURCE_DIR}/tests/golden/pinyin.txt")
+add_test(NAME speech-state COMMAND superior_speech_state_tests)
 add_test(NAME protocol COMMAND superior_protocol_tests)
 add_test(NAME socket COMMAND superior_socket_tests)
 

@@ -171,6 +171,51 @@ void testSceneRoundTrip() {
     CHECK(decoded->transition->startMs == 1234);
 }
 
+/// The speech panel is part of the scene, so it must survive the same
+/// round-trip as the candidate panel and the toolbar.
+void testSpeechSceneRoundTrip() {
+    api::UiSceneFrame original;
+    original.frameId = 9;
+    original.speech.visible = true;
+    original.speech.phase = api::SpeechPhase::NeedsSetup;
+    original.speech.modelId = "qwen3-asr-0.6b";
+    original.speech.modelName = "Qwen3-ASR-0.6B";
+    original.speech.modelBytes = 631000000;
+    original.speech.modelPresent = false;
+    original.speech.enginePresent = true;
+    original.speech.message = "请先下载模型";
+    original.speech.skinId = "org.superior.default";
+    original.speech.skinGeneration = 12;
+
+    DecodeError error;
+    const auto decoded = protocol::decodeScene(protocol::encodeScene(original), error);
+    CHECK(decoded.has_value());
+    CHECK(error.ok());
+    if (!decoded) {
+        return;
+    }
+    CHECK(decoded->speech.visible);
+    CHECK(decoded->speech.phase == api::SpeechPhase::NeedsSetup);
+    CHECK(decoded->speech.modelId == "qwen3-asr-0.6b");
+    CHECK(decoded->speech.modelBytes == 631000000);
+    CHECK(!decoded->speech.modelPresent);
+    CHECK(decoded->speech.enginePresent);
+    CHECK(decoded->speech.message == "请先下载模型");
+    CHECK(decoded->speech.skinGeneration == 12);
+
+    // A frame from an older agent has no `speech` object at all: the panel must
+    // default to hidden instead of failing the whole frame.
+    const std::string withoutSpeech =
+        R"({"frameId":1,"session":{"epoch":0,"context":0},)"
+        R"("panel":{"anchor":{"cursor":{"x":0,"y":0,"width":0,"height":0}}},"status":{}})";
+    const auto fallback = protocol::decodeScene(withoutSpeech, error);
+    CHECK(fallback.has_value());
+    if (fallback) {
+        CHECK(!fallback->speech.visible);
+        CHECK(fallback->speech.phase == api::SpeechPhase::Hidden);
+    }
+}
+
 void testSceneRejectsGarbage() {
     DecodeError error;
     CHECK(!protocol::decodeScene("{}", error).has_value());
@@ -189,9 +234,10 @@ void testAllCommandsRoundTrip() {
         api::SetUiScale{1.5},
         api::MovePanel{session, 4.0, -2.0},
         api::ResetPanelPosition{session},
-        api::VoiceStart{session, "default", "zh-CN"},
-        api::VoiceStop{session, false},
-        api::VoiceCancel{session},
+        api::SpeechStart{session, "default", "zh-CN"},
+        api::SpeechStop{session, false},
+        api::SpeechCancel{session},
+        api::SpeechReload{},
         api::RequestSettings{"appearance"},
         api::ShellReady{"superior-ui", "0.1.0", api::UiProfile::Desktop, {"x11"}},
         api::ShellLost{"disconnected"},
@@ -225,6 +271,7 @@ int main() {
     testStreamingDecode();
     testHelloRoundTrip();
     testSceneRoundTrip();
+    testSpeechSceneRoundTrip();
     testSceneRejectsGarbage();
     testAllCommandsRoundTrip();
     testUnknownCommandRejected();

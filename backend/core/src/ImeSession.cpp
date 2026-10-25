@@ -61,6 +61,14 @@ void ImeSession::setMode(std::string mode) {
     mode_ = std::move(mode);
 }
 
+void ImeSession::setSpeech(api::SpeechScene speech) {
+    speech_ = std::move(speech);
+}
+
+const api::SpeechScene &ImeSession::speech() const noexcept {
+    return speech_;
+}
+
 void ImeSession::setStatus(std::vector<api::StatusItem> items) {
     statusItems_ = std::move(items);
 }
@@ -171,6 +179,7 @@ api::UiSceneFrame ImeSession::snapshot(api::FrameId frameId) const {
     }
     frame.panel.selected = candidates_.selectedId();
 
+    frame.speech = speech_;
     frame.status.visible = !statusItems_.empty();
     frame.status.placement = statusPlacement_;
     frame.status.skinId = skinId_;

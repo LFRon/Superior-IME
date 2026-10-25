@@ -51,7 +51,11 @@ struct CandidatePage {
 /// of a word, which is how Sogou presents it.
 enum class StatusRole {
     Text,
+    /// Half/full-width punctuation: drawn as a crescent or a filled circle.
     Punctuation,
+    /// Speech recognition: drawn as the microphone from the skin, and it is a
+    /// toggle (active while recording), unlike a plain label.
+    Speech,
 };
 
 /// One status-area control. `id` is a semantic action name (for example

@@ -30,6 +30,7 @@
 #include "superior/core/ImeSession.hpp"
 #include "superior/core/Modes.hpp"
 #include "superior/core/SceneInput.hpp"
+#include "superior/core/SpeechState.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/protocol/SceneServer.hpp"
 
@@ -213,6 +214,12 @@ private:
     bool settingsLoaded_ = false;
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;
     std::unique_ptr<fcitx::EventSourceTime> startupTimer_;
+    /// The speech panel's decision layer. The capability itself (recording and
+    /// recognition) lives in `superior_speech_recognition`; this object only
+    /// owns "what should the panel show and may this transcript be committed".
+    core::SpeechState speech_;
+    /// Product switch: show the microphone in the toolbar at all.
+    bool speechRecognitionEnabled_ = false;
     bool inlineEnglishEnabled_ = true;
     /// The single owner of Chinese/English. Nothing else may keep its own copy:
     /// two booleans flipping on the same Shift release is exactly the bug this

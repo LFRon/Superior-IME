@@ -407,6 +407,19 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
         host.statusItems.push_back(std::move(item));
     }
 
+    // The microphone is ours too. It is injected as a status item instead of a
+    // Fcitx5 `SimpleAction` because the agent owns the decision and the UI
+    // draws the bar: a real action would need a second addon to click into.
+    if (speechRecognitionEnabled_) {
+        api::StatusItem mic;
+        mic.id = "speech";
+        mic.label = "";
+        mic.icon = "microphone";
+        mic.active = speech_.recording();
+        mic.role = api::StatusRole::Speech;
+        host.statusItems.insert(host.statusItems.begin(), std::move(mic));
+    }
+
     // The inline mode chip is ours, not the engine's: it mirrors `modes_`, the
     // only owner of the Chinese/English switch.
     api::StatusItem modeItem;
@@ -453,6 +466,16 @@ void SuperiorAgent::reloadSettings() {
 
     const bool previousInlineEnglish = inlineEnglishEnabled_;
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
+    const bool previousSpeech = speechRecognitionEnabled_;
+    speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
+    if (previousSpeech != speechRecognitionEnabled_) {
+        SUPERIOR_INFO(diag::categories::SpeechRecognition)
+            .field("enabled", speechRecognitionEnabled_)
+            << "speech recognition toolbar entry changed";
+        if (!speechRecognitionEnabled_) {
+            speech_.hide();
+        }
+    }
     if (!loaded.settings.skinId.empty()) {
         skinId_ = loaded.settings.skinId;
     }
@@ -830,6 +853,7 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     core::HostFacts host;
     collect(inputContext, engine, host);
     core::updateSession(engine, host, session, skinId_);
+    session.setSpeech(speech_.scene(skinId_, 1));
 
     if (server_.clientCount() > 0) {
         broadcast(inputContext);
@@ -955,6 +979,33 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
             activateCandidate(value);
         } else if constexpr (std::is_same_v<T, api::PageCandidates>) {
             pageCandidates(value);
+        } else if constexpr (std::is_same_v<T, api::SpeechStart>) {
+            if (contextFor(value.session) == nullptr) {
+                return;
+            }
+            if (!speech_.canStart()) {
+                SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
+                    .field("phase", api::speechPhaseName(speech_.phase()))
+                    << "speech start ignored: the capability is not ready";
+                return;
+            }
+            speech_.beginRecording();
+            refresh(activeContext_);
+        } else if constexpr (std::is_same_v<T, api::SpeechStop>) {
+            if (contextFor(value.session) == nullptr) {
+                return;
+            }
+            speech_.beginTranscribing();
+            refresh(activeContext_);
+        } else if constexpr (std::is_same_v<T, api::SpeechCancel>) {
+            speech_.cancel();
+            speech_.idle();
+            refresh(activeContext_);
+        } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
+            // The UI just finished a download; re-check the files rather than
+            // watching the filesystem.
+            speech_.refreshSetup(false, false);
+            refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SetUiScale>) {
             // Scaling is applied by the UI process, which also owns the
             // settings file. Logged so a wrong value is visible in a trace.

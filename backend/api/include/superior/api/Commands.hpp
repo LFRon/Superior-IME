@@ -63,20 +63,28 @@ struct ResetPanelPosition {
     SessionKey session;
 };
 
-struct VoiceStart {
+/// Starts a speech-recognition session. The agent decides whether the request
+/// is legal (panel ready, model present, field not a password field).
+struct SpeechStart {
     SessionKey session;
     std::string deviceId;
     std::string language;
 };
 
-struct VoiceStop {
+/// Stops capture and asks for the final transcript.
+struct SpeechStop {
     SessionKey session;
     bool commit = true;
 };
 
-struct VoiceCancel {
+/// Discards the session; a transcript that arrives later is dropped.
+struct SpeechCancel {
     SessionKey session;
 };
+
+/// "The setup may have changed" — sent after a model or engine download so the
+/// agent can re-check the files instead of watching the filesystem.
+struct SpeechReload {};
 
 struct RequestSettings {
     std::string page;
@@ -103,9 +111,10 @@ using UiCommand = std::variant<
     SetUiScale,
     MovePanel,
     ResetPanelPosition,
-    VoiceStart,
-    VoiceStop,
-    VoiceCancel,
+    SpeechStart,
+    SpeechStop,
+    SpeechCancel,
+    SpeechReload,
     RequestSettings,
     ShellReady,
     ShellLost>;

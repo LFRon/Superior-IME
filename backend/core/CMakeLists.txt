@@ -8,7 +8,8 @@ add_library(superior_core STATIC
     src/ImeSession.cpp
     src/KeyPolicy.cpp
     src/Modes.cpp
-    src/SceneInput.cpp)
+    src/SceneInput.cpp
+    src/SpeechState.cpp)
 
 add_library(Superior::Core ALIAS superior_core)
 
