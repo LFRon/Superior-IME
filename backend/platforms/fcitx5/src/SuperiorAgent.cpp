@@ -399,6 +399,12 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
                                               byteCursor(clientPreedit));
     engine.preedit = preedit.text;
     engine.preeditCursor = preedit.cursor;
+    if (speechPreeditActive_) {
+        // The speech draft is drawn by the application itself (client preedit).
+        // Showing it here as well is the duplicate box the user asked us to remove.
+        engine.preedit.clear();
+        engine.preeditCursor = 0;
+    }
 
     if (auto candidateList = panel.candidateList()) {
         const int size = candidateList->size();
@@ -1763,17 +1769,26 @@ void SuperiorAgent::setSpeechPreedit(std::string_view text) {
     if (text.empty() && !speechPreeditActive_) {
         return;
     }
-    // The panel preedit (not the client one) on purpose: we own the input line, so
-    // the draft is rendered in our own candidate strip. Sending it to the client
-    // would make every application style it differently, and a few (Electron,
-    // some terminals) do not render it at all.
-    fcitx::Text preedit;
-    if (!text.empty()) {
-        preedit = fcitx::Text(std::string(text));
-        preedit.setCursor(static_cast<int>(text.size()));
+    // The draft belongs inline at the caret, in the application, exactly where the
+    // committed text will land. Setting the *panel* preedit put it in our own
+    // candidate strip instead — a second box next to the text field, which reads as
+    // "the input method is writing somewhere else".
+    //
+    // Client preedit is only used when the application says it supports it; the
+    // fallback is to show nothing and let the committed chunks appear, which is
+    // still direct typing. The panel preedit stays empty either way, so our window
+    // never duplicates the line (see `collect`).
+    fcitx::Text draft;
+    const bool inlinePreedit =
+        !text.empty() && inputContext->capabilityFlags().test(fcitx::CapabilityFlag::Preedit) &&
+        !inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive);
+    if (inlinePreedit) {
+        draft = fcitx::Text(std::string(text));
+        draft.setCursor(static_cast<int>(text.size()));
     }
-    inputContext->inputPanel().setPreedit(preedit);
-    speechPreeditActive_ = !text.empty();
+    inputContext->inputPanel().setPreedit(fcitx::Text{});
+    inputContext->inputPanel().setClientPreedit(draft);
+    speechPreeditActive_ = inlinePreedit;
     inputContext->updatePreedit();
 }
 
