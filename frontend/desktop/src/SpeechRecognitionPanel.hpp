@@ -103,6 +103,8 @@ private:
     /// opening the file) that often is what made the UI stop responding.
     void updateDownloadProgress();
     void stopProgressTimer();
+    /// Records the verdict on a download attempt and repaints the message line.
+    void setNotice(const QString &text);
     void saveModelChoice(const std::string &id);
 
     CommandHandler command_;
@@ -157,6 +159,11 @@ private:
     /// `45% · 12 MiB / 123 MiB`, shown in the message line while a transfer runs.
     /// The bar itself is 9 px tall and therefore cannot carry text.
     QString downloadHint_;
+    /// Outcome of the last download attempt ("已取消下载", "下载失败，请重试").
+    /// `updateActions()` rewrites the message line from the scene on every frame,
+    /// so without a dedicated slot those notices appeared for one frame and were
+    /// replaced by the setup hint — i.e. never seen at all.
+    QString notice_;
     /// Rendered icons, keyed by resource + colour + size. Re-rasterising the SVG
     /// on every repaint would be wasteful while the level ring animates.
     std::map<std::string, QPixmap> iconCache_;

@@ -606,6 +606,11 @@ QString SpeechRecognitionPanel::hintText() const {
     if (downloader_.running() && !downloadHint_.isEmpty()) {
         return downloadHint_;
     }
+    // The result of the last attempt outranks the setup sentence, otherwise
+    // "已取消下载" would be replaced by the hint before the next paint.
+    if (!notice_.isEmpty()) {
+        return notice_;
+    }
     // The state machine writes the setup and failure sentences; the rest is pure
     // presentation and stays here, so "which words does the panel use" has one
     // answer per state.
@@ -829,6 +834,8 @@ void SpeechRecognitionPanel::beginDownload() {
     progress_->setRange(0, 0); // indeterminate until the size is known
     progress_->setValue(0);
     downloadHint_ = QStringLiteral("正在下载…");
+    // A new attempt replaces the verdict on the previous one.
+    notice_.clear();
     progressTimer_->start();
     // The transfer runs on a worker thread. See ModelDownload.hpp: Qt's TLS
     // setup is synchronous inside `get()` and walks the CA directory, which took
@@ -876,6 +883,12 @@ void SpeechRecognitionPanel::stopProgressTimer() {
     progress_->setValue(0);
 }
 
+void SpeechRecognitionPanel::setNotice(const QString &text) {
+    notice_ = text;
+    updateActions();
+    relayout();
+}
+
 void SpeechRecognitionPanel::cancelDownload() {
     downloader_.cancel();
 }
@@ -885,25 +898,19 @@ void SpeechRecognitionPanel::finishDownload() {
 
     if (cancelled_) {
         QFile::remove(partPath_);
-        message_->setText(QStringLiteral("已取消下载"));
-        updateActions();
-        relayout();
+        setNotice(QStringLiteral("已取消下载"));
         return;
     }
 
     if (!downloaded_) {
         QFile::remove(partPath_);
-        message_->setText(QStringLiteral("下载失败，请重试"));
-        updateActions();
-        relayout();
+        setNotice(QStringLiteral("下载失败，请重试"));
         return;
     }
 
     QFile::remove(finalPath_);
     if (!QFile::rename(partPath_, finalPath_)) {
-        message_->setText(QStringLiteral("无法保存模型文件"));
-        updateActions();
-        relayout();
+        setNotice(QStringLiteral("无法保存模型文件"));
         return;
     }
 
@@ -916,15 +923,15 @@ void SpeechRecognitionPanel::finishDownload() {
         std::filesystem::path(finalPath_.toStdString()), entry != nullptr ? entry->bytes : 0);
     if (check != speech_recognition::ModelFileCheck::Ok) {
         QFile::remove(finalPath_);
-        message_->setText(check == speech_recognition::ModelFileCheck::TooSmall
-                              ? QStringLiteral("下载不完整，请重试")
-                              : QStringLiteral("下载到的不是模型文件，请换个镜像重试"));
-        updateActions();
-        relayout();
+        setNotice(check == speech_recognition::ModelFileCheck::TooSmall
+                      ? QStringLiteral("下载不完整，请重试")
+                      : QStringLiteral("下载到的不是模型文件，请换个镜像重试"));
         return;
     }
 
-    message_->setText(QStringLiteral("模型已就绪"));
+    // "模型已就绪" is not a notice about the attempt but the new state of the
+    // panel, and the agent is about to say exactly that in the next scene.
+    notice_.clear();
     updateActions();
     relayout();
     if (command_) {
