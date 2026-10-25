@@ -53,8 +53,16 @@ struct SilencePolicy {
     /// Absolute cap, so a forgotten panel cannot record forever.
     std::uint64_t maxRecordingMs = 60000;
     /// How long to wait for the first word before giving up. Without this a user
-    /// who pressed the button and changed their mind waits a full minute.
+    /// who pressed the button and changed their mind waits a full minute. It only
+    /// applies *before* the first word, so a long pause mid-dictation is safe.
     std::uint64_t noSpeechTimeoutMs = 8000;
+    /// End the utterance on a pause.
+    ///
+    /// Off in continuous dictation: the whole point there is that thinking for a
+    /// few seconds in the middle of a paragraph must not stop the microphone. The
+    /// safety net becomes `maxRecordingMs` alone, announced in the UI before it
+    /// expires.
+    bool endOnSilence = true;
 };
 
 /// Tracks level samples and answers one question: is this utterance over?
@@ -74,6 +82,14 @@ public:
 
     /// Whether any speech was heard at all. Drives the "you said nothing" hint.
     [[nodiscard]] bool heardSpeech() const noexcept { return voicedMs_ > 0; }
+
+    /// True once the absolute cap is reached. Separate from `finished()` because
+    /// the cap is not a pause: the capability distinguishes "you stopped talking"
+    /// from "the session is over" to report the right thing.
+    [[nodiscard]] bool limitReached(std::uint64_t nowMs) const noexcept;
+
+    /// Milliseconds left before the cap, or 0 when there is no cap.
+    [[nodiscard]] std::uint64_t remainingMs(std::uint64_t nowMs) const noexcept;
 
     [[nodiscard]] std::uint64_t elapsedMs(std::uint64_t nowMs) const;
 

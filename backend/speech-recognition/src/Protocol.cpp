@@ -54,6 +54,9 @@ std::string encodeEvent(const Event &event) {
         break;
     case Event::Kind::Level:
         json = Json{{"ev", "level"}, {"rms", event.level}};
+        if (event.remainingMs >= 0) {
+            json["remainingMs"] = event.remainingMs;
+        }
         break;
     case Event::Kind::Partial:
         json = Json{{"ev", "partial"}, {"text", event.text}};

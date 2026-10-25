@@ -114,6 +114,10 @@ void SpeechState::setLevel(double level) {
     level_ = level;
 }
 
+void SpeechState::setRemaining(std::int64_t remainingMs) {
+    remainingMs_ = remainingMs;
+}
+
 void SpeechState::setPartial(std::string text) {
     if (phase_ != api::SpeechPhase::Recording) {
         return;
@@ -205,6 +209,7 @@ api::SpeechScene SpeechState::scene(std::string skinId,
     scene.message = message_;
     scene.level = level_;
     scene.partial = partial_;
+    scene.remainingMs = phase_ == api::SpeechPhase::Recording ? remainingMs_ : -1;
     scene.skinId = std::move(skinId);
     scene.skinGeneration = generation;
     return scene;

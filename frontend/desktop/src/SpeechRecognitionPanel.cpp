@@ -607,6 +607,14 @@ QString SpeechRecognitionPanel::hintText() const {
     case api::SpeechPhase::Ready:
         return QStringLiteral("点击麦克风开始说话");
     case api::SpeechPhase::Recording:
+        // A cap that arrives unannounced is a bug from the user's point of view,
+        // so the last seconds are counted down in the same line that explains how
+        // to stop. Above ten seconds the line stays quiet.
+        if (scene_.remainingMs >= 0 && scene_.remainingMs <= 10000) {
+            const int seconds = static_cast<int>((scene_.remainingMs + 999) / 1000);
+            return QStringLiteral("正在聆听…还可说 %1 秒，之后自动停止（再点麦克风可提前结束）")
+                .arg(seconds);
+        }
         return QStringLiteral("正在聆听…再次点击麦克风结束");
     case api::SpeechPhase::Transcribing:
         return QStringLiteral("正在识别…");

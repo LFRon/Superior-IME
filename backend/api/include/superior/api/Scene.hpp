@@ -132,6 +132,10 @@ struct SpeechScene {
     /// engine reports only final transcripts.
     std::string partial;
 
+    /// Milliseconds left before the session cap, `-1` when unlimited. Continuous
+    /// dictation announces the cap instead of surprising the user with it.
+    std::int64_t remainingMs = -1;
+
     std::string skinId;
     SkinGeneration skinGeneration = 0;
     std::optional<TransitionSpec> transition;

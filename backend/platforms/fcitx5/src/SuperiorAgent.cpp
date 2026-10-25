@@ -1723,6 +1723,7 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
         }
     } else if (kind == "level") {
         speech_.setLevel(parsed.value("rms", 0.0));
+        speech_.setRemaining(parsed.value("remainingMs", std::int64_t{-1}));
     } else if (kind == "partial") {
         speech_.setPartial(parsed.value("text", std::string{}));
         // The draft lives in the composition line, not in the document: the user

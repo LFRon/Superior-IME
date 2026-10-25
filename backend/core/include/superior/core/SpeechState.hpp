@@ -42,6 +42,8 @@ public:
 
     /// Live level in 0..1 and the live transcript. Ignored unless recording.
     void setLevel(double level);
+    /// Remaining time until the session cap, or `-1` for unlimited.
+    void setRemaining(std::int64_t remainingMs);
     void setPartial(std::string text);
 
     /// Recording stopped; the final transcript is being produced.
@@ -94,6 +96,7 @@ private:
     std::string modelName_;
     std::uint64_t modelBytes_ = 0;
     double level_ = 0.0;
+    std::int64_t remainingMs_ = -1;
     std::string partial_;
     std::string lastText_;
     /// Set by cancel()/hide(); cleared when a new recording starts.

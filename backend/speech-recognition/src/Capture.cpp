@@ -256,17 +256,32 @@ std::uint64_t SilenceWatch::elapsedMs(std::uint64_t nowMs) const {
     return begun_ && nowMs >= startMs_ ? nowMs - startMs_ : 0;
 }
 
+bool SilenceWatch::limitReached(std::uint64_t nowMs) const noexcept {
+    return begun_ && policy_.maxRecordingMs > 0 && elapsedMs(nowMs) >= policy_.maxRecordingMs;
+}
+
+std::uint64_t SilenceWatch::remainingMs(std::uint64_t nowMs) const noexcept {
+    if (!begun_ || policy_.maxRecordingMs == 0) {
+        return 0;
+    }
+    const std::uint64_t elapsed = elapsedMs(nowMs);
+    return elapsed >= policy_.maxRecordingMs ? 0 : policy_.maxRecordingMs - elapsed;
+}
+
 bool SilenceWatch::finished(std::uint64_t nowMs) const {
     if (!begun_ || nowMs < startMs_) {
         return false;
     }
-    if (elapsedMs(nowMs) >= policy_.maxRecordingMs) {
+    if (limitReached(nowMs)) {
         return true;
     }
     // Silence before any speech is not an ending: the user pressed the button and
     // is still gathering their words. It does expire, just much later.
     if (voicedMs_ < policy_.minSpeechMs) {
         return elapsedMs(nowMs) >= policy_.noSpeechTimeoutMs;
+    }
+    if (!policy_.endOnSilence) {
+        return false;
     }
     return nowMs >= lastVoiceMs_ && nowMs - lastVoiceMs_ >= policy_.holdMs;
 }

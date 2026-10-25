@@ -52,11 +52,28 @@ private:
     /// Returns false when it cannot, which puts the session back on the batch
     /// path.
     bool startStreamingRecogniser();
-    /// Closes the recogniser's stdin so it flushes its last segment, then reaps
-    /// it. Called before the capture pipe disappears.
-    void finishStreamingRecogniser();
+    /// Closes the recogniser's stdin so it flushes its last segment. Returns
+    /// immediately: the flush can take seconds on a big model, and blocking here
+    /// would freeze the panel's telemetry exactly when the user pressed stop.
+    void beginStreamingClose();
+    /// Joins and reaps the recogniser once its reader thread has finished.
+    void reapStreamingRecogniser();
+    /// True while we are waiting for the recogniser to flush.
+    [[nodiscard]] bool streamingClosing() const noexcept { return awaitingStreamingExit_; }
     /// Reads JSON events from the recogniser until it exits.
     void pumpRecogniser();
+    /// Turns one recogniser event into our events, applying the commit cadence.
+    ///
+    /// The recogniser rewrites its transcript as it re-decodes, so a partial is a
+    /// *guess*, not a prefix. Only text that has survived one full cadence without
+    /// changing is committed; anything before the commit point is already typed
+    /// and can no longer be revised, which is why the gate exists at all.
+    void handleStreamEvent(std::string kind, std::string text, std::uint64_t nowMs,
+                           bool closing);
+    /// Longest prefix of `text` that has already been committed.
+    [[nodiscard]] std::size_t committedPrefixLength(std::string_view text) const;
+    /// Records a committed fragment, inserting a space at a Latin word seam.
+    void commitSeam(const std::string &tail);
     void finishRecognition(std::uint64_t generation, std::vector<std::int16_t> audio);
     /// Puts the sound server's default input back once the desktop's own
     /// re-election has settled. See `shouldRestoreDefaultSource`.
@@ -77,6 +94,10 @@ private:
     std::uint64_t lastLevelMs_ = 0;
     /// Set by the capture thread when the tool exits without being asked to.
     std::atomic<bool> captureEnded_{false};
+    /// Set by `stopCapture()` so the capture thread leaves its loop even while it
+    /// is blocked writing to a busy recogniser. Without it, stopping could hang
+    /// until the model finished decoding everything that was already queued.
+    std::atomic<bool> captureStopping_{false};
     /// Ends the utterance when the user stops talking, so the panel does not
     /// require a second click after every sentence.
     SilenceWatch silence_;
@@ -93,6 +114,23 @@ private:
     /// silently, and "no events" is the only signal we get; without this the panel
     /// would go back to Ready as if the user had said nothing.
     std::atomic<bool> asrProducedOutput_{false};
+    /// Bytes the capture tool produced. Kept separate from `audio_.size()`: in
+    /// streaming mode no audio is retained, so the buffer cannot answer "did we
+    /// capture anything".
+    std::atomic<std::uint64_t> capturedBytes_{0};
+    /// Set by the reader thread when the recogniser's stdout reached EOF.
+    std::atomic<bool> asrReaderDone_{false};
+    /// True between "stop requested" and "recogniser flushed".
+    bool awaitingStreamingExit_ = false;
+
+    // Commit cadence for continuous dictation.
+    /// Text already emitted as `chunk` for the current utterance.
+    std::string committed_;
+    /// Tail that is waiting to become stable, and since when it has been stable.
+    std::string pendingTail_;
+    std::uint64_t pendingSinceMs_ = 0;
+    /// How long a tail must stay unchanged before it is committed.
+    std::uint64_t commitCadenceMs_ = 1500;
 
     /// Default input as it was when recording started, and when to put it back.
     /// Restoring is scheduled rather than immediate because the desktop flips it

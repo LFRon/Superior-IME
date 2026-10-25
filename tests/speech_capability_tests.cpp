@@ -390,8 +390,44 @@ void testBackendAndPunctuationArgs() {
     }
 }
 
+/// Continuous dictation: a mid-sentence pause must not end the session, and the
+/// cap must be visible before it arrives.
+void testContinuousModeNeverEndsOnSilence() {
+    SilencePolicy policy;
+    policy.endOnSilence = false;
+    policy.maxRecordingMs = 60000;
+    SilenceWatch watch(policy);
+    watch.begin(0);
+
+    // Half a minute of speech with long thinking pauses.
+    for (std::uint64_t now = 100; now <= 30000; now += 100) {
+        // Loud for a second, quiet for two: the old policy would have ended it.
+        watch.observe((now / 100) % 3 == 0 ? 0.4 : 0.0, now);
+        CHECK(watch.finished(now) == false);
+    }
+    CHECK(watch.limitReached(30000) == false);
+    CHECK(watch.remainingMs(30000) == 30000);
+
+    // The cap still fires, and it is what ends the session.
+    CHECK(watch.limitReached(60000));
+    CHECK(watch.finished(60000));
+    CHECK(watch.remainingMs(60000) == 0);
+
+    // Silence before the first word still expires, so a stuck microphone is not
+    // left listening forever.
+    SilencePolicy idle;
+    idle.endOnSilence = false;
+    SilenceWatch idleWatch(idle);
+    idleWatch.begin(0);
+    for (std::uint64_t now = 100; now <= 9000; now += 100) {
+        idleWatch.observe(0.0, now);
+    }
+    CHECK(idleWatch.finished(9000));
+}
+
 int main() {
     testCaptureArgv();
+    testContinuousModeNeverEndsOnSilence();
     testTranscriptCleaning();
     testBackendAndPunctuationArgs();
     testDefaultSourceRestoreRules();

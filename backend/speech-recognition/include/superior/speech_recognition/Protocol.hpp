@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -55,6 +56,10 @@ struct Event {
     std::string phase;
     /// 0..1, only meaningful for `Level`.
     double level = 0.0;
+    /// Milliseconds left before the session cap, `-1` when there is none. Rides
+    /// along with `Level` because that is the event the UI already gets at 20 Hz,
+    /// and a countdown needs exactly that rate.
+    std::int64_t remainingMs = -1;
     /// Transcript, only meaningful for `Partial` / `Chunk` / `Final`.
     std::string text;
     /// Stable machine-readable error code, for `Error`.

@@ -29,8 +29,9 @@ start_process() {
     mkdir -p "$current"
     mkfifo "$current/in"
     if [[ -n "$stream_cmd" ]]; then
+        # A short cadence keeps the suite fast; the default is 1500 ms.
         SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
-            SUPERIOR_ASR_STREAM_CMD="$stream_cmd" \
+            SUPERIOR_ASR_STREAM_CMD="$stream_cmd" SUPERIOR_SPEECH_COMMIT_MS=700 \
             "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
     else
         SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
@@ -114,37 +115,44 @@ wait_for '"code":"capture_failed"' ||
 grep -q '不该到达这里' "$current/out" && fail "a failed capture must not run the engine"
 stop_process
 
-# --- Scenario 4: streaming -> text appears before the user stops ------------
+# --- Scenario 4: streaming commits on a cadence, without stopping -----------
 #
-# The whole point of streaming is that a segment becomes real text *while* the
-# microphone is still open, so the check is ordering, not just presence: the
-# `chunk` must arrive before the stop command is sent.
-# The recogniser closes a segment when it sees a pause, *while* the stream is
-# still open — that is the moment the agent commits and keeps listening. The fake
-# reproduces it: one read, one final, then EOF produces the session final.
+# Continuous dictation: the recogniser keeps rewriting its draft, so a segment is
+# only committed after it has stayed unchanged for the cadence. The fake keeps
+# repeating the same draft, which is exactly the "stable" case, and never emits a
+# final of its own: the session must keep listening until the user stops it.
 cat > "$root/fake-stream.sh" <<'STREAM'
 #!/bin/sh
-echo '{"type":"partial","text":"你好"}'
-dd bs=32000 count=1 2>/dev/null >/dev/null
-echo '{"type":"final","text":"你好世界"}'
+i=0
+while [ $i -lt 12 ]; do
+  echo '{"type":"partial","text":"你好世界"}'
+  i=$((i + 1))
+  sleep 0.3
+done
 cat > /dev/null
-echo '{"type":"final","text":"再见"}'
+echo '{"type":"final","text":"你好世界"}'
 STREAM
 chmod +x "$root/fake-stream.sh"
 
-start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 3"' \
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 8"' \
     'bash -c "echo 不该走批处理"' "$root/fake-stream.sh"
 wait_for '"ev":"ready"' || fail "no ready event (streaming)"
 echo '{"cmd":"start"}' >&3
+# The cadence is 1.5 s by default; give it room without making the suite slow.
 wait_for '"ev":"chunk"' || fail "no chunk event while recording"
 grep -q '"ev":"chunk".*你好世界' "$current/out" || fail "chunk text missing"
-# The chunk must be there without any stop: that is what "writing while you
-# speak" means at the protocol level.
+# Committing mid-session must not end it.
 grep -q '"ev":"final"' "$current/out" && fail "final arrived before the session ended"
+# The engine closes a segment on a pause. In continuous dictation that is a
+# commit, not the end: the phase must still be `recording` afterwards.
+grep -q '"ev":"phase","name":"transcribing"' "$current/out" &&
+    fail "an engine-side pause must not end the session"
 echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"final"' || fail "no final event after stop (streaming)"
-grep -q '"ev":"final".*再见' "$current/out" || fail "final text missing (streaming)"
 grep -q '不该走批处理' "$current/out" && fail "streaming must not fall back to batch decoding"
+# Everything was already committed as chunks, so the final carries no leftover.
+grep -q '"ev":"final","text":"你好世界"' "$current/out" &&
+    fail "the final repeated text that was already committed as a chunk"
 stop_process
 
 echo "speech process: ok"

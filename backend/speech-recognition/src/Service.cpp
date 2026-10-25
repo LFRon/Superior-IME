@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -42,7 +43,7 @@ constexpr std::uint64_t kLevelIntervalMs = 50;
 /// level meter, or the panel's ring would freeze while the model is busy.
 void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
                  double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended,
-                 int teeFd) {
+                 int teeFd, bool keepAudio, std::atomic<std::uint64_t> &capturedBytes) {
     std::vector<std::int16_t> chunk(1600); // 100 ms at 16 kHz
     while (!stopping.load(std::memory_order_relaxed)) {
         const ssize_t bytes = ::read(fd, chunk.data(), chunk.size() * sizeof(std::int16_t));
@@ -50,11 +51,14 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
             break;
         }
         const auto samples = static_cast<std::size_t>(bytes) / sizeof(std::int16_t);
+        capturedBytes.fetch_add(static_cast<std::uint64_t>(bytes), std::memory_order_relaxed);
         const double measured = rmsLevel(chunk.data(), samples);
         {
             std::lock_guard<std::mutex> lock(mutex);
-            audio.insert(audio.end(), chunk.begin(),
-                         chunk.begin() + static_cast<std::ptrdiff_t>(samples));
+            if (keepAudio) {
+                audio.insert(audio.end(), chunk.begin(),
+                             chunk.begin() + static_cast<std::ptrdiff_t>(samples));
+            }
             level = measured;
         }
         if (teeFd >= 0) {
@@ -63,13 +67,25 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
             std::size_t written = 0;
             while (written < total) {
                 const ssize_t result = ::write(teeFd, pcm + written, total - written);
-                if (result <= 0) {
-                    // The recogniser is gone; stop feeding it and let the reader
-                    // report the failure.
-                    teeFd = -1;
-                    break;
+                if (result > 0) {
+                    written += static_cast<std::size_t>(result);
+                    continue;
                 }
-                written += static_cast<std::size_t>(result);
+                if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    // The recogniser is decoding behind us; wait for room, but
+                    // stay responsive to a stop. Blocking here is what made
+                    // "stop" take as long as the model's backlog.
+                    pollfd writable{teeFd, POLLOUT, 0};
+                    if (stopping.load(std::memory_order_relaxed)) {
+                        break;
+                    }
+                    ::poll(&writable, 1, 100);
+                    continue;
+                }
+                // The recogniser is gone; stop feeding it and let the reader
+                // report the failure.
+                teeFd = -1;
+                break;
             }
         }
     }
@@ -112,6 +128,37 @@ int autoThreads() {
     const unsigned cores = std::thread::hardware_concurrency();
     const int half = cores == 0 ? 2 : static_cast<int>(cores / 2);
     return std::clamp(half, 2, 8);
+}
+
+/// Absolute cap for one continuous dictation session.
+///
+/// A safety net, not a feature: a microphone left open by accident must not listen
+/// for an hour. The panel starts a countdown before it expires, and because every
+/// segment is committed as it stabilises, reaching the cap loses nothing the user
+/// said. `SUPERIOR_SPEECH_MAX_MS` raises it for long-form dictation.
+std::uint64_t sessionCapMs() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_MAX_MS"); value != nullptr) {
+        const long long parsed = std::atoll(value);
+        if (parsed > 0) {
+            return static_cast<std::uint64_t>(parsed);
+        }
+    }
+    return 60000;
+}
+
+/// How long a draft must stay unchanged before it is committed.
+///
+/// The recogniser rewrites its transcript while it re-decodes, so committing every
+/// second would type guesses. `SUPERIOR_SPEECH_COMMIT_MS` tunes it; 1500 ms is the
+/// measured point where a draft stops changing for Mandarin.
+std::uint64_t commitCadenceFromEnvironment() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_COMMIT_MS"); value != nullptr) {
+        const long long parsed = std::atoll(value);
+        if (parsed > 0) {
+            return static_cast<std::uint64_t>(parsed);
+        }
+    }
+    return 1500;
 }
 
 /// How much audio each streaming re-decode sees.
@@ -184,6 +231,23 @@ void Service::startCaptureThread() {
     // and only we know what it was. While a restore is still pending the value
     // is kept instead of re-read, so a second sentence spoken inside that window
     // does not adopt the flipped default as "the user's choice".
+    // Continuous dictation: the microphone stays open until the user stops it.
+    // The pause rule is off and the only limit is the announced cap, so thinking
+    // mid-sentence cannot end the session.
+    {
+        SilencePolicy policy;
+        if (streaming_) {
+            policy.endOnSilence = false;
+            policy.maxRecordingMs = sessionCapMs();
+        }
+        silence_ = SilenceWatch(policy);
+        commitCadenceMs_ = commitCadenceFromEnvironment();
+        committed_.clear();
+        pendingTail_.clear();
+        pendingSinceMs_ = 0;
+        capturedBytes_.store(0, std::memory_order_relaxed);
+    }
+
     if (restoreDefaultAtMs_ == 0 || defaultSourceBefore_.empty()) {
         defaultSourceBefore_ =
             restoreDefaultSourceEnabled() ? defaultSourceName() : std::string{};
@@ -245,15 +309,117 @@ void Service::startCaptureThread() {
     capturing_ = true;
 
     captureEnded_.store(false, std::memory_order_relaxed);
+    captureStopping_.store(false, std::memory_order_relaxed);
     const int teeFd = streaming_ ? asrWriteFd_ : -1;
-    captureThread_ = std::thread([this, teeFd] {
-        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, revoked_, captureEnded_,
-                    teeFd);
+    // Streaming does not keep the audio: batch fallback is the only consumer, and
+    // an hour of dictation would otherwise sit in RAM (32 KB/s ≈ 115 MB/h).
+    const bool keepAudio = !streaming_;
+    captureThread_ = std::thread([this, teeFd, keepAudio] {
+        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, captureStopping_,
+                    captureEnded_, teeFd, keepAudio, capturedBytes_);
     });
     // The clock starts when capture starts: time spent waiting for the panel to
     // open is not part of the utterance.
     silence_.begin(nowMs());
     emitPhase("recording");
+}
+
+std::size_t Service::committedPrefixLength(std::string_view text) const {
+    const std::size_t limit = std::min(text.size(), committed_.size());
+    std::size_t index = 0;
+    while (index < limit && text[index] == committed_[index]) {
+        ++index;
+    }
+    // A multi-byte character cut in half is not a prefix we can trust.
+    while (index > 0 && (static_cast<unsigned char>(text[index - 1]) & 0xC0) == 0x80) {
+        --index;
+    }
+    return index;
+}
+
+void Service::handleStreamEvent(std::string kind, std::string text, std::uint64_t nowMs,
+                                bool closing) {
+    text = cleanTranscript(text);
+
+    if (kind == "partial") {
+        const std::size_t prefix = committedPrefixLength(text);
+        // Only a draft that still starts with everything already typed can be
+        // diffed; the rest of the character work is plain substring arithmetic.
+        const bool agrees = prefix >= committed_.size() || prefix == text.size();
+        std::string tail = agrees ? text.substr(std::min(committed_.size(), text.size())) : text;
+        if (!agrees && prefix < text.size()) {
+            // The model revised text we already typed. Nothing can take that back,
+            // so the only safe move is to stop trusting this draft: keep showing
+            // it, commit nothing until it agrees with what was typed again.
+            pendingTail_.clear();
+            Event event;
+            event.kind = Event::Kind::Partial;
+            event.text = text;
+            emit_(event);
+            return;
+        }
+        if (tail != pendingTail_) {
+            pendingTail_ = tail;
+            pendingSinceMs_ = nowMs;
+        } else if (!tail.empty() && commitCadenceMs_ > 0 &&
+                   nowMs - pendingSinceMs_ >= commitCadenceMs_) {
+            // Stable for a full cadence: this is as close to final as a guess gets.
+            Event chunk;
+            chunk.kind = Event::Kind::Chunk;
+            chunk.text = tail;
+            commitSeam(tail);
+            emit_(chunk);
+            pendingTail_.clear();
+            pendingSinceMs_ = nowMs;
+        }
+
+        Event event;
+        event.kind = Event::Kind::Partial;
+        event.text = tail;
+        emit_(event);
+        return;
+    }
+
+    if (kind == "final") {
+        // Whatever is left beyond the committed prefix is the tail of this
+        // segment. During continuous dictation the engine's final is just a
+        // pause — commit it and keep listening; only our own close ends the
+        // session, or the text spoken since the last chunk would be lost.
+        std::string remainder;
+        if (text.size() >= committed_.size() && text.compare(0, committed_.size(), committed_) == 0) {
+            remainder = text.substr(committed_.size());
+        } else {
+            remainder = text;
+        }
+        Event event;
+        event.kind = closing ? Event::Kind::Final : Event::Kind::Chunk;
+        event.text = remainder;
+        if (!closing) {
+            commitSeam(remainder);
+        }
+        emit_(event);
+        if (closing) {
+            committed_.clear();
+        }
+        pendingTail_.clear();
+        pendingSinceMs_ = nowMs;
+    }
+}
+
+/// Appends `tail` to the record of committed text, with a space when the seam is
+/// between two Latin words. Chinese needs no separator, English does.
+void Service::commitSeam(const std::string &tail) {
+    if (tail.empty()) {
+        return;
+    }
+    const auto isWordByte = [](unsigned char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9');
+    };
+    if (!committed_.empty() && isWordByte(static_cast<unsigned char>(committed_.back())) &&
+        isWordByte(static_cast<unsigned char>(tail.front()))) {
+        committed_.push_back(' ');
+    }
+    committed_ += tail;
 }
 
 bool Service::startStreamingRecogniser() {
@@ -327,6 +493,12 @@ bool Service::startStreamingRecogniser() {
     ::close(fromChild[1]);
     asrPid_ = pid;
     asrWriteFd_ = toChild[1];
+    // Non-blocking so the capture thread can honour a stop request instead of
+    // sitting inside `write()` until the model catches up.
+    const int flags = ::fcntl(asrWriteFd_, F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(asrWriteFd_, F_SETFL, flags | O_NONBLOCK);
+    }
     asrReadFd_ = fromChild[0];
     streaming_ = true;
     asrClosing_.store(false, std::memory_order_relaxed);
@@ -359,44 +531,34 @@ void Service::pumpRecogniser() {
                 continue;
             }
             asrProducedOutput_.store(true, std::memory_order_relaxed);
-            text = cleanTranscript(text);
-            Event event;
-            if (kind == "partial") {
-                if (text.empty()) {
-                    continue;
-                }
-                event.kind = Event::Kind::Partial;
-                event.text = text;
-            } else if (kind == "final") {
-                // An empty final is still news: it is how "I heard nothing"
-                // reaches the panel. Only *chunks* need text to be worth
-                // committing.
-                // A final while the session is still open is a *segment*: the
-                // user paused, so what was said so far becomes real text and the
-                // microphone keeps listening.
-                event.kind = asrClosing_.load(std::memory_order_relaxed) ? Event::Kind::Final
-                                                                        : Event::Kind::Chunk;
-                event.text = text;
-            } else {
-                continue; // `silence` and anything new the engine adds.
-            }
-            emit_(event);
+            const bool closing = asrClosing_.load(std::memory_order_relaxed);
+            handleStreamEvent(kind, text, nowMs(), closing);
         }
     }
     ::close(asrReadFd_);
     asrReadFd_ = -1;
+    asrReaderDone_.store(true, std::memory_order_relaxed);
 }
 
-void Service::finishStreamingRecogniser() {
+void Service::beginStreamingClose() {
     if (!streaming_) {
         return;
     }
     asrClosing_.store(true, std::memory_order_relaxed);
     if (asrWriteFd_ >= 0) {
         // EOF is the "utterance over" signal the engine understands; it flushes
-        // its last segment before exiting.
+        // its last segment before exiting. Closing is instant; the flush is not,
+        // which is why the wait happens in `poll()`.
         ::close(asrWriteFd_);
         asrWriteFd_ = -1;
+    }
+    awaitingStreamingExit_ = true;
+}
+
+void Service::reapStreamingRecogniser() {
+    if (!streaming_) {
+        awaitingStreamingExit_ = false;
+        return;
     }
     if (asrThread_.joinable()) {
         asrThread_.join();
@@ -415,6 +577,7 @@ void Service::finishStreamingRecogniser() {
         }
     }
     streaming_ = false;
+    awaitingStreamingExit_ = false;
 }
 
 void Service::start() {
@@ -437,6 +600,7 @@ void Service::start() {
 }
 
 void Service::stopCapture() {
+    captureStopping_.store(true, std::memory_order_relaxed);
     if (capturePid_ > 0) {
         ::kill(capturePid_, SIGTERM);
     }
@@ -506,10 +670,10 @@ void Service::stop() {
     if (wasStreaming) {
         // The recogniser already reported every segment while we were recording;
         // closing its stdin makes it flush the last one, and `pumpRecogniser`
-        // emits it as the session's final.
+        // emits it as the session's final. `poll()` reaps it when it is done, so
+        // the panel keeps receiving telemetry meanwhile.
         emitPhase("transcribing");
-        finishStreamingRecogniser();
-        emitPhase("idle");
+        beginStreamingClose();
         return;
     }
 
@@ -557,6 +721,16 @@ void Service::cancel() {
     if (capturing_) {
         stopCapture();
     }
+    if (streaming_) {
+        // Cancelling must not commit anything, so the recogniser is killed rather
+        // than flushed: its pending final is exactly what we do not want. Killing
+        // also makes the reader hit EOF immediately, so this reap is fast.
+        beginStreamingClose();
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+    }
     {
         std::lock_guard<std::mutex> lock(captureMutex_);
         audio_.clear();
@@ -567,6 +741,10 @@ void Service::cancel() {
 void Service::poll() {
     const std::uint64_t now = nowMs();
     pollDefaultSourceRestore(now);
+    if (awaitingStreamingExit_ && asrReaderDone_.load(std::memory_order_relaxed)) {
+        reapStreamingRecogniser();
+        emitPhase("idle");
+    }
     if (capturing_) {
         double level = 0.0;
         {
@@ -578,17 +756,15 @@ void Service::poll() {
             Event event;
             event.kind = Event::Kind::Level;
             event.level = level;
+            event.remainingMs = static_cast<std::int64_t>(silence_.remainingMs(now));
             emit_(event);
         }
 
         // `capturing_` is still true here, so this EOF came from the tool, not
         // from a stop we asked for.
         if (captureEnded_.load(std::memory_order_relaxed)) {
-            std::size_t captured = 0;
-            {
-                std::lock_guard<std::mutex> lock(captureMutex_);
-                captured = audio_.size();
-            }
+            // Bytes, not buffer size: streaming keeps no audio at all.
+            const std::uint64_t captured = capturedBytes_.load(std::memory_order_relaxed);
             if (captured > 0) {
                 stop();
             } else {
@@ -658,7 +834,14 @@ void Service::shutdown() {
     if (capturing_) {
         stopCapture();
     }
-    finishStreamingRecogniser();
+    if (streaming_) {
+        // Shutting down must not wait for a model to flush: kill it and reap.
+        beginStreamingClose();
+        if (asrPid_ > 0) {
+            ::kill(asrPid_, SIGTERM);
+        }
+        reapStreamingRecogniser();
+    }
     if (worker_.joinable()) {
         worker_.join();
     }
