@@ -1,8 +1,10 @@
 add_library(superior_fcitx5_mapping STATIC
+    src/CandidateActions.cpp
     src/Dictionary.cpp
     src/InlineText.cpp
     src/PanelMapper.cpp
     src/PinyinAssets.cpp
+    src/PreeditSource.cpp
     src/ShiftTap.cpp)
 
 add_library(Superior::Fcitx5Mapping ALIAS superior_fcitx5_mapping)

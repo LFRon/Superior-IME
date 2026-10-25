@@ -49,6 +49,16 @@ target_include_directories(superior_layout_rules_tests PRIVATE
 target_compile_features(superior_layout_rules_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_layout_rules_tests)
 
+add_executable(superior_drag_handle_tests
+    drag_handle_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/DragHandle.cpp"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/LayoutRules.cpp")
+target_include_directories(superior_drag_handle_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_drag_handle_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_drag_handle_tests)
+
 add_executable(superior_candidate_label_tests
     candidate_label_tests.cpp
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src/CandidateLabel.cpp")
@@ -76,6 +86,12 @@ target_include_directories(superior_wheel_step_tests PRIVATE
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
 target_compile_features(superior_wheel_step_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_wheel_step_tests)
+
+add_executable(superior_status_bar_state_tests status_bar_state_tests.cpp)
+target_link_libraries(superior_status_bar_state_tests PRIVATE Superior::Config)
+target_include_directories(superior_status_bar_state_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_status_bar_state_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_status_bar_state_tests)
 
 add_executable(superior_config_tests config_tests.cpp)
 target_link_libraries(superior_config_tests PRIVATE Superior::Config)
@@ -141,9 +157,11 @@ add_test(NAME candidate-actions COMMAND superior_candidate_actions_tests)
 add_test(NAME shift-tap COMMAND superior_shift_tap_tests)
 add_test(NAME qt-platform COMMAND superior_qt_platform_tests)
 add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
+add_test(NAME drag-handle COMMAND superior_drag_handle_tests)
 add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
 add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
 add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)
+add_test(NAME status-bar-state COMMAND superior_status_bar_state_tests)
 add_test(NAME config COMMAND superior_config_tests)
 add_test(NAME inputmethod COMMAND superior_inputmethod_tests)
 add_test(NAME theme COMMAND superior_theme_tests)

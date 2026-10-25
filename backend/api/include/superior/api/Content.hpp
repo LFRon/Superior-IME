@@ -35,6 +35,8 @@ struct Candidate {
 
 struct CandidatePage {
     std::vector<Candidate> items;
+    /// Zero-based page index; the renderer adds 1 for display. Fcitx5 reports
+    /// 1-based pages, the mapper converts once here so no layer has to guess.
     int pageIndex = 0;
     int pageCount = 0;
     bool hasPrevious = false;

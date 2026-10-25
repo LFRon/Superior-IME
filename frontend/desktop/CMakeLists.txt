@@ -1,15 +1,18 @@
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 add_executable(superior_ui
+    src/CandidateLabel.cpp
     src/CandidateWindow.cpp
     src/DragHandle.cpp
     src/LayoutRules.cpp
     src/Logging.cpp
     src/Overlay.cpp
     src/PlatformChoice.cpp
+    src/PreeditLayout.cpp
     src/SceneClient.cpp
     src/SkinTheme.cpp
     src/StatusWindow.cpp
+    src/WheelStep.cpp
     src/main.cpp)
 
 target_link_libraries(superior_ui PRIVATE

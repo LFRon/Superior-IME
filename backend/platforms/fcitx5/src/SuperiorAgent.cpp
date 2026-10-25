@@ -24,8 +24,10 @@
 
 #include "superior/diagnostics/Log.hpp"
 #include "superior/config/Settings.hpp"
+#include "superior/fcitx5/CandidateActions.hpp"
 #include "superior/fcitx5/InlineText.hpp"
 #include "superior/fcitx5/PanelMapper.hpp"
+#include "superior/fcitx5/PreeditSource.hpp"
 #include "superior/fcitx5/PinyinAssets.hpp"
 #include "superior/protocol/Wire.hpp"
 
@@ -722,6 +724,10 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                 return;
             }
             setEnglishMode(activeContext_, value.mode == api::InputMode::English, "ui command");
+        } else if constexpr (std::is_same_v<T, api::ActivateCandidate>) {
+            activateCandidate(value);
+        } else if constexpr (std::is_same_v<T, api::PageCandidates>) {
+            pageCandidates(value);
         } else if constexpr (std::is_same_v<T, api::SetUiScale>) {
             // Scaling is applied by the UI process, which also owns the
             // settings file. Logged so a wrong value is visible in a trace.
@@ -734,6 +740,95 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
         }
     };
     std::visit(handle, command);
+}
+
+void SuperiorAgent::activateCandidate(const api::ActivateCandidate &command) {
+    auto *inputContext = contextFor(command.session);
+    if (inputContext == nullptr) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("candidate", static_cast<std::int64_t>(command.candidate))
+            << "candidate activation ignored: session is no longer active";
+        return;
+    }
+
+    const auto candidateList = inputContext->inputPanel().candidateList();
+    if (!candidateList) {
+        // The list changed between painting and clicking. Dropping the click is
+        // correct: guessing would commit a word the user never saw.
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("candidate", static_cast<std::int64_t>(command.candidate))
+            << "candidate activation ignored: no candidate list";
+        return;
+    }
+
+    const auto index = candidateIndexFor(command.candidate, candidateList->size());
+    if (!index) {
+        SUPERIOR_WARN(diag::categories::Fcitx5)
+            .field("candidate", static_cast<std::int64_t>(command.candidate))
+            .field("size", static_cast<std::int64_t>(candidateList->size()))
+            << "candidate activation ignored: id outside the current page";
+        return;
+    }
+
+    SUPERIOR_DEBUG(diag::categories::Fcitx5)
+        .field("candidate", static_cast<std::int64_t>(command.candidate))
+        .field("index", static_cast<std::int64_t>(*index))
+        .field("program", inputContext->program())
+        << "candidate activated from the UI";
+    candidateList->candidate(*index).select(inputContext);
+    refresh(inputContext);
+}
+
+void SuperiorAgent::pageCandidates(const api::PageCandidates &command) {
+    auto *inputContext = contextFor(command.session);
+    if (inputContext == nullptr) {
+        return;
+    }
+    const auto candidateList = inputContext->inputPanel().candidateList();
+    if (!candidateList) {
+        return;
+    }
+    auto *pageable = candidateList->toPageable();
+    if (pageable == nullptr) {
+        // A single-page list: scrolling must do nothing, not wrap silently.
+        return;
+    }
+
+    // One wheel notch is one page, matching every other paging key
+    // (Tab/Shift+Tab, +/-) rather than scrolling a single candidate.
+    bool moved = false;
+    if (command.delta > 0) {
+        if (pageable->hasNext()) {
+            pageable->next();
+            moved = true;
+        }
+    } else if (command.delta < 0) {
+        if (pageable->hasPrev()) {
+            pageable->prev();
+            moved = true;
+        }
+    }
+    SUPERIOR_DEBUG(diag::categories::Fcitx5)
+        .field("delta", static_cast<std::int64_t>(command.delta))
+        .field("moved", moved)
+        .field("program", inputContext->program())
+        << "candidate page requested";
+    if (moved) {
+        refresh(inputContext);
+    }
+}
+
+fcitx::InputContext *SuperiorAgent::contextFor(const api::SessionKey &session) {
+    // Only the session the UI is currently being fed for may act: a click on a
+    // window that already lost focus must not type into the new one.
+    if (activeContext_ == nullptr || session.epoch != epoch_) {
+        return nullptr;
+    }
+    const auto it = sessions_.find(activeContext_);
+    if (it == sessions_.end() || session.context != it->second->key().context) {
+        return nullptr;
+    }
+    return activeContext_;
 }
 
 } // namespace superior::fcitx5

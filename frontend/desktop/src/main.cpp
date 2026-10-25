@@ -216,6 +216,28 @@ int main(int argc, char **argv) {
         render(frame);
     });
 
+    // Candidate clicks and wheel paging are intent too: the id of the frame the
+    // user saw is sent back, and the agent re-validates it against the live
+    // list. Nothing here mutates input state.
+    candidates.setActivateHandler([&client, &lastFrame](api::CandidateId candidate) {
+        if (!lastFrame) {
+            return;
+        }
+        SUPERIOR_INFO(diag::categories::Ui)
+            .field("candidate", static_cast<std::int64_t>(candidate))
+            << "candidate clicked";
+        client.send(api::ActivateCandidate{lastFrame->session, candidate});
+    });
+    candidates.setPageHandler([&client, &lastFrame](int delta) {
+        if (!lastFrame) {
+            return;
+        }
+        SUPERIOR_DEBUG(diag::categories::Ui)
+            .field("delta", static_cast<std::int64_t>(delta))
+            << "page requested";
+        client.send(api::PageCandidates{lastFrame->session, delta});
+    });
+
     // The status bar only sends intent; the agent owns the mode and answers
     // with a new scene.
     status.setItemClickHandler([&client](const std::string &itemId) {
