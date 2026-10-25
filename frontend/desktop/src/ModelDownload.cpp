@@ -79,6 +79,14 @@ void ModelDownloader::start(const QUrl &url, const QString &partPath) {
             transfer->reply = transfer->manager->get(request);
             Transfer *current = transfer.release();
             transfer_ = current;
+            if (cancelRequested_.load()) {
+                // The user clicked "取消" while this request was still being set up
+                // (TLS handshake, redirect chain — seconds on a slow mirror). The
+                // queued abort from `cancel()` found no reply yet and did nothing,
+                // so the transfer used to run to completion before reporting
+                // "cancelled". Aborting here is the fix.
+                current->reply->abort();
+            }
             QObject::connect(current->reply, &QNetworkReply::readyRead, context_,
                              [current] { current->file->write(current->reply->readAll()); });
             QObject::connect(current->reply, &QNetworkReply::downloadProgress, context_,
