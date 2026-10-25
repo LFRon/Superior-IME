@@ -417,6 +417,11 @@ void SpeechRecognitionPanel::saveModelChoice(const std::string &id) {
             << "cannot save the speech model choice";
         return;
     }
+    // Optimistic on purpose: the combo already shows the new entry, and the
+    // command below makes the agent re-read the file and answer with the same
+    // id. Without this the answer to "which model?" was still the old one for
+    // one round trip, so the first click looked like it did nothing.
+    pendingModelChoice_ = id;
     if (command_) {
         command_(api::SpeechReload{});
     }
@@ -430,13 +435,14 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     if (theme.text != theme_.text || theme_.selection != theme.selection) {
         theme_ = theme;
         setStyleSheet(styleFor(theme_));
-        popupDelegate_ = new PopupDelegate(theme_, model_);
-    model_->setItemDelegate(popupDelegate_);
-    model_->view()->installEventFilter(this);
-    applyPopupPalette();
+        if (popupDelegate_ != nullptr) {
+            popupDelegate_->setTheme(theme_);
+        }
+        applyPopupPalette();
     }
 
     if (!scene.visible) {
+        pendingModelChoice_.reset();
         hide();
         return;
     }
@@ -449,7 +455,15 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     // `partial` is the recogniser's draft: it may be revised downwards while the
     // user keeps talking, so it is replaced wholesale rather than appended.
     partial_->setText(QString::fromStdString(scene.partial));
-    if (!scene.modelId.empty()) {
+    // Follow the scene, but not *against* the user: a frame can still be in
+    // flight from before the choice was saved. The pending id is dropped as
+    // soon as the agent echoes it back, and on close, so a choice the agent
+    // refused cannot stick forever.
+    if (pendingModelChoice_.has_value() && !scene.modelId.empty() &&
+        scene.modelId == *pendingModelChoice_) {
+        pendingModelChoice_.reset();
+    }
+    if (!scene.modelId.empty() && !pendingModelChoice_.has_value()) {
         const int index = model_->findData(QString::fromStdString(scene.modelId));
         if (index >= 0 && index != model_->currentIndex() && reply_ == nullptr) {
             QSignalBlocker blocker(model_);
@@ -472,7 +486,11 @@ void SpeechRecognitionPanel::updateActions() {
     const bool recording = scene_.phase == api::SpeechPhase::Recording;
     const bool transcribing = scene_.phase == api::SpeechPhase::Transcribing;
 
-    model_->setVisible(setup);
+    // Switching the model is not a setup-only action: a user with 0.6B installed
+    // must be able to move to 1.7B without deleting files. Picking a model that
+    // is not downloaded simply lands back in NeedsSetup, with the download
+    // button already visible.
+    model_->setVisible(setup || scene_.phase == api::SpeechPhase::Ready);
     download_->setVisible(setup);
     message_->setVisible(setup || scene_.phase == api::SpeechPhase::Failed ||
                          !scene_.message.empty());

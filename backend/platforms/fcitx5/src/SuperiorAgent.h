@@ -159,6 +159,10 @@ private:
     /// Starts the recogniser child on first use. Returns false when the binary
     /// is missing, which is a setup state, not a crash.
     bool ensureSpeechProcess();
+    /// Sends the model/engine configuration to the child. Called on start and
+    /// whenever the selected model changes, so a running child cannot keep
+    /// decoding with the model the user just switched away from.
+    void configureSpeechProcess();
     /// Re-reads "is the engine installed / is a model downloaded" and updates
     /// the panel's setup state.
     void refreshSpeechSetup();

@@ -1050,9 +1050,15 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
             }
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
-            // The UI just finished a download; re-check the files rather than
-            // watching the filesystem.
+            // The panel sends this right after it writes `settings.json` (model
+            // choice) or finishes a download. Re-reading the file first is not
+            // optional: the 500 ms poll has not run yet, so without it this very
+            // refresh answers with the *previous* model and the panel's combo
+            // snaps back — which looked like "the first click does nothing".
+            reloadSettings();
             refreshSpeechSetup();
+            // A child that is already running loaded the old model at start.
+            configureSpeechProcess();
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SetUiScale>) {
             // Scaling is applied by the UI process, which also owns the
@@ -1472,21 +1478,29 @@ bool SuperiorAgent::ensureSpeechProcess() {
         return false;
     }
 
+    configureSpeechProcess();
+    return true;
+}
+
+void SuperiorAgent::configureSpeechProcess() {
+    if (!speechProcess_ || !speechProcess_->running()) {
+        return;
+    }
     // Tell the child which model to load. Sending it after every (re)start keeps
     // the two in sync without the child reading our settings file.
     using namespace superior::speech_recognition;
     const ModelEntry &model = selectedModel(speechModelId_);
     const std::string resolvedModel = speech_recognition::modelPath(model.id).string();
-    if (!resolvedModel.empty()) {
-        Command configure;
-        configure.kind = Command::Kind::Configure;
-        configure.config.enginePath = resolveEngine();
-        configure.config.modelPath = resolvedModel;
-        configure.config.language = "zh";
-        configure.config.threads = 4;
-        speechProcess_->send(encodeCommand(configure));
+    if (resolvedModel.empty()) {
+        return;
     }
-    return true;
+    Command configure;
+    configure.kind = Command::Kind::Configure;
+    configure.config.enginePath = resolveEngine();
+    configure.config.modelPath = resolvedModel;
+    configure.config.language = "zh";
+    configure.config.threads = 4;
+    speechProcess_->send(encodeCommand(configure));
 }
 
 void SuperiorAgent::refreshSpeechSetup() {

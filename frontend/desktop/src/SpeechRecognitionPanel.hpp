@@ -96,6 +96,10 @@ private:
     /// Live input level from the capability process, `[0, 1]`.
     double level_ = 0.0;
 
+    /// Model the user just picked, until a scene confirms it. Scenes are
+    /// snapshots: a frame that was already in flight carries the previous model
+    /// and must not undo the click.
+    std::optional<std::string> pendingModelChoice_;
     /// Position chosen by dragging; empty means "use the anchor".
     std::optional<Point> customPosition_;
     bool dragging_ = false;
