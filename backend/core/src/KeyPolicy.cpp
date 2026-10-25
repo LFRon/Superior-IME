@@ -8,6 +8,16 @@ bool isEditingKey(std::uint32_t sym) noexcept {
            sym == kKeyKpEnter || sym == kKeyTab;
 }
 
+int pageStep(std::uint32_t sym) noexcept {
+    if (sym == kKeyPlus || sym == kKeyKpAdd) {
+        return 1;
+    }
+    if (sym == kKeyKpSubtract) {
+        return -1;
+    }
+    return 0;
+}
+
 KeyDecision decideKey(const KeyPolicyInput &input) noexcept {
     const KeyPress &key = input.key;
 

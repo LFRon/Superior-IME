@@ -10,12 +10,15 @@
 #include <functional>
 #include <utility>
 
+#include "superior/core/KeyPolicy.hpp"
 #include "superior/diagnostics/Log.hpp"
 #include "superior/pinyin/Layout.hpp"
 
 namespace superior::fcitx5 {
 
 namespace diag = ::superior::diagnostics;
+
+namespace core = superior::core;
 
 namespace pinyin = superior::pinyin;
 
@@ -73,9 +76,10 @@ private:
 
 /// A candidate that routes selection back into librime.
 ///
-/// The stored index is librime's own index, not the row position: the agent may
-/// insert a learned word or a cloud candidate above it, and those rows must not
-/// shift which word this one commits.
+/// The stored index is the candidate's row on the page librime currently shows,
+/// not an absolute list index: the agent may insert a learned word or a cloud
+/// candidate above it, and those rows must not shift which word this one
+/// commits. `LibrimePort` turns the row into an absolute index when selecting.
 class RimeCandidateWord final : public fcitx::CandidateWord {
 public:
     using Selector = std::function<void(fcitx::InputContext *, std::size_t)>;
@@ -332,6 +336,33 @@ void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyE
     if (handleSelectionKey(inputContext, event)) {
         event.filterAndAccept();
         return;
+    }
+
+    // Sogou-style paging. `+` reaches us as Shift+`=` with the `plus` keysym,
+    // which the schema has no binding for, so librime would commit it as
+    // punctuation and end the composition. Paging through the list keeps this
+    // identical to a wheel scroll: same engine call, same panel refresh.
+    if (const int step = core::pageStep(static_cast<std::uint32_t>(event.key().sym()));
+        step != 0 && !event.isRelease()) {
+        const fcitx::KeyStates states = event.key().states();
+        const bool shortcut =
+            states.testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
+                                            fcitx::KeyState::Super});
+        auto list = std::dynamic_pointer_cast<RimeCandidateList>(
+            inputContext->inputPanel().candidateList());
+        if (!shortcut && list && list->size() > 0) {
+            SUPERIOR_TRACE(diag::categories::Pinyin)
+                .field("pageStep", static_cast<std::int64_t>(step))
+                .field("page", static_cast<std::int64_t>(list->currentPage()))
+                << "paging the visible list";
+            if (step > 0) {
+                list->next();
+            } else {
+                list->prev();
+            }
+            event.filterAndAccept();
+            return;
+        }
     }
 
     const bool asciiBefore = session->engine.asciiMode();

@@ -126,6 +126,19 @@ void testEditingKeyPredicate() {
     CHECK(!isEditingKey(kKeyEscape));
 }
 
+/// `+` is Shift+`=` on most layouts, so the paging decision must be about the
+/// keysym alone; the adapter filters out Ctrl/Alt/Super itself.
+void testPagingKeys() {
+    CHECK(pageStep(kKeyPlus) == 1);
+    CHECK(pageStep(kKeyKpAdd) == 1);
+    CHECK(pageStep(kKeyKpSubtract) == -1);
+    // `-` and `=` keep going to librime's own key_binder.
+    CHECK(pageStep(0x002dU) == 0);
+    CHECK(pageStep(0x003dU) == 0);
+    CHECK(pageStep('a') == 0);
+    CHECK(pageStep(kKeyEscape) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -140,5 +153,6 @@ int main() {
     testPrintableInChineseStartsComposition();
     testNavigationInChineseIdleIsForwarded();
     testEditingKeyPredicate();
+    testPagingKeys();
     return superior::test::finish("key policy tests");
 }

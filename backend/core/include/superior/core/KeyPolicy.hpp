@@ -14,6 +14,9 @@ inline constexpr std::uint32_t kKeyEscape = 0xff1bU;
 inline constexpr std::uint32_t kKeyBackspace = 0xff08U;
 inline constexpr std::uint32_t kKeyKpEnter = 0xff8dU;
 inline constexpr std::uint32_t kKeyDelete = 0xffffU;
+inline constexpr std::uint32_t kKeyPlus = 0x002bU;
+inline constexpr std::uint32_t kKeyKpAdd = 0xffabU;
+inline constexpr std::uint32_t kKeyKpSubtract = 0xffadU;
 
 /// One key press, already stripped of toolkit types.
 struct KeyPress {
@@ -83,5 +86,18 @@ struct KeyPolicyInput {
 /// `deleteSurroundingText` broke Backspace on every client without surrounding
 /// text support.
 [[nodiscard]] bool isEditingKey(std::uint32_t sym) noexcept;
+
+/// Sogou-style candidate paging: `+` (or keypad `+`) is "next page", keypad `-`
+/// is "previous page", anything else is 0.
+///
+/// The rule lives here rather than in the schema because librime's `key_binder`
+/// only ships `minus`/`equal`, and `+` is Shift+`=` — a key the punctuation
+/// engine happily commits as text, ending the composition. Returning a step
+/// instead of acting keeps this decision testable and reusable by the Windows
+/// and Android frontends.
+///
+/// Modifiers are the caller's business: `+` *is* Shift on most layouts, so a
+/// plain "no Shift" test would reject the very key this describes.
+[[nodiscard]] int pageStep(std::uint32_t sym) noexcept;
 
 } // namespace superior::core
