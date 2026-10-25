@@ -99,7 +99,9 @@ flowchart TB
   AGENT -- 提交文本 --> ENGINE
 ```
 
-- **文本输入始终由 Fcitx5 引擎完成**；Superior-IME 不重写拼音。
+- **文本输入由内置 librime 完成**（`backend/rime` + `libsuperiorrime.so`）。
+  Superior-IME 不自己实现拼音语言模型，只做引擎适配，见
+  [docs/rime-engine.md](rime-engine.md)。
 - **语义状态在 agent**：候选、选中、可见性、皮肤代次、语音状态。
 - **瞬时视觉状态在 UI**：hover、按下、动画进度。
 - UI 崩溃不影响输入；agent 继续提交文本，UI 重连后重建快照。
@@ -194,7 +196,8 @@ MovePanel         { session, deltaX, deltaY }
 | `backend/core` | 已实现：`CandidateModel`、`MotionTimeline`、`ImeSession` |
 | `backend/runtime` | 已实现：`LatestOperation`、`SerialPump`、`SessionRuntime` |
 | `backend/protocol` | 已实现：帧、JSON 编解码、Unix socket 广播 |
-| `backend/platforms/fcitx5` | 已实现：纯映射、观察者 agent、内联中英文、command 处理、词库布局与搜狗导入 |
+| `backend/rime` | 已实现：librime 端口、会话状态机、路径与部署检测 |
+| `backend/platforms/fcitx5` | 已实现：Rime 引擎适配、观察者 agent、内联中英文、command 处理 |
 | `frontend/desktop` | 已实现：自绘候选窗（皮肤）+ 可点击状态栏 + 设置热重载 + 平台自动选择 |
 | `frontend/settings` | 已实现：原生 Qt 设置页（外观/输入/状态栏/语音/高级/关于） |
 

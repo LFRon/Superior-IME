@@ -91,7 +91,7 @@ void testNormalizePinyin() {
 }
 
 void testUmlaut() {
-    // libime shows ü in the composition while providers spell it v: `lü` must
+    // The preview shows ü while providers spell it v: `lü` must
     // reach them as `lv`, otherwise every word containing ü lost cloud pinyin.
     CHECK(normalizePinyin("l\xc3\xbc") == std::optional<std::string>("lv"));
     CHECK(normalizePinyin("gai l\xc3\xbc kong jian") ==

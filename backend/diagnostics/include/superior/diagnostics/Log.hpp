@@ -57,8 +57,8 @@ inline constexpr std::string_view Runtime = "superior.runtime";
 inline constexpr std::string_view Protocol = "superior.protocol";
 inline constexpr std::string_view Socket = "superior.protocol.socket";
 inline constexpr std::string_view Fcitx5 = "superior.fcitx5";
-inline constexpr std::string_view Pinyin = "superior.pinyin";
 inline constexpr std::string_view Cloud = "superior.cloud";
+inline constexpr std::string_view Rime = "superior.rime";
 inline constexpr std::string_view Ui = "superior.ui";
 inline constexpr std::string_view Tool = "superior.tool";
 

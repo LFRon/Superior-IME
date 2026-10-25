@@ -65,9 +65,9 @@ private:
     /// Handles keys for our input method.
     ///
     /// Returns true when the event was consumed. Chinese mode returns false so
-    /// the Fcitx5 pinyin engine keeps working unchanged; English mode commits
-    /// the typed character directly, which is what "Shift 切换英文" means for a
-    /// Sogou-style IME: no input method switch, no separate keyboard layout.
+    /// the Rime engine keeps working unchanged; English mode commits the typed
+    /// character directly, which is what "Shift 切换英文" means for a Sogou-style
+    /// IME: no input method switch, no separate keyboard layout.
     bool handleKeyEvent(fcitx::KeyEvent &event);
 
     /// Spawns the overlay process if no UI is connected, unless disabled.
@@ -181,10 +181,10 @@ private:
     std::map<fcitx::InputContext *, CloudContext> cloudContexts_;
     /// What this user picked from a cloud candidate, in `$XDG_CONFIG_HOME`.
     ///
-    /// The engine already learns its own candidates (libime writes user.dict and
-    /// user.history), so the only gap is a word that did not exist locally: it
-    /// is committed by us, and libime never saw it. Recording it here is what
-    /// makes the second `yuanshen` offer 原神 without asking the network again.
+    /// The engine already learns its own candidates (librime writes its userdb),
+    /// so the only gap is a word that did not exist locally: it is committed by
+    /// us, and the engine never saw it. Recording it here is what makes the
+    /// second `yuanshen` offer 原神 without asking the network again.
     std::vector<config::LearnedWord> learned_;
 
     cloudpinyin::Fetcher cloudFetcher_;

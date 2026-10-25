@@ -47,12 +47,15 @@ void testEntryNameMatchesRequest() {
     CHECK(!has(text, "先!進!"));
 }
 
-void testEntryBindsToPinyinEngine() {
+void testEntryBindsToTheBundledEngine() {
     const std::string text = entry();
     CHECK(has(text, "[InputMethod]"));
-    CHECK(has(text, "Addon=pinyin"));
+    CHECK(has(text, "Addon=superiorrime"));
     CHECK(has(text, "LangCode=zh_CN"));
-    CHECK(has(text, "Configurable=True"));
+    CHECK(has(text, "Configurable=False"));
+    // The old entry was removed with the libime engine; a stray binding would
+    // silently register a second input method.
+    CHECK(!has(text, "Addon=pinyin"));
 }
 
 void testEntryIdentityAndIcon() {
@@ -72,10 +75,12 @@ void testIconMatchesEntry() {
     CHECK(has(svg, "</svg>"));
 }
 
-void testNoDuplicateLegacyEntry() {
-    const auto legacy =
-        sourceRoot() / "backend/platforms/fcitx5/data/inputmethod/superior.conf.in";
-    CHECK(!fs::exists(legacy));
+void testNoDuplicateEntry() {
+    // Exactly one input method entry may be installed. The Rime-specific one was
+    // folded into super-ime.conf, and the very old path-based file never existed.
+    const fs::path data = sourceRoot() / "backend/platforms/fcitx5/data";
+    CHECK(!fs::exists(data / "super-ime-rime.conf.in"));
+    CHECK(!fs::exists(data / "inputmethod/superior.conf.in"));
 }
 
 } // namespace
@@ -83,9 +88,9 @@ void testNoDuplicateLegacyEntry() {
 int main() {
     testEntryExists();
     testEntryNameMatchesRequest();
-    testEntryBindsToPinyinEngine();
+    testEntryBindsToTheBundledEngine();
     testEntryIdentityAndIcon();
     testIconMatchesEntry();
-    testNoDuplicateLegacyEntry();
+    testNoDuplicateEntry();
     return superior::test::finish("input method entry tests");
 }

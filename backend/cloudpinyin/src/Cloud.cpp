@@ -169,7 +169,7 @@ std::optional<std::string> normalizePinyin(std::string_view preedit) {
             out.push_back(static_cast<char>(byte));
             continue;
         }
-        // `ü` (U+00FC) is how libime renders ü in the composition, while the
+        // `ü` (U+00FC) is how engines render ü in the composition, while the
         // providers spell it `v` — `lü` must be sent as `lv`, not dropped.
         if (byte == 0xC3 && index + 1 < preedit.size()) {
             const auto next = static_cast<unsigned char>(preedit[index + 1]);

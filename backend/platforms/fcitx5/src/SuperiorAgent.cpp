@@ -29,7 +29,6 @@
 #include "superior/fcitx5/InlineText.hpp"
 #include "superior/fcitx5/PanelMapper.hpp"
 #include "superior/fcitx5/PreeditSource.hpp"
-#include "superior/fcitx5/PinyinAssets.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/fcitx5/StatusMapping.hpp"
 #include "superior/protocol/Wire.hpp"
@@ -125,15 +124,6 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             .field("entries", static_cast<std::int64_t>(learned_.size()))
             .field("path", config::defaultLearningPath().string())
             << "learning loaded";
-    }
-
-    // Read-only probe: never parses or modifies the engine dictionaries, only
-    // reports whether the data Fcitx5 needs is present.
-    const PinyinAssets assets = detectPinyinAssets();
-    if (!assets.usable()) {
-        SUPERIOR_WARN(diag::categories::Fcitx5)
-            << "pinyin assets are incomplete; text input still works but "
-               "candidates may be missing";
     }
 
     std::string error;
@@ -534,7 +524,11 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
         // Drop the half-finished pinyin composition, otherwise its stale
         // candidate list would keep the panel visible while English letters
         // are committed directly.
-        instance_->resetCompose(inputContext);
+        //
+        // `InputContext::reset` dispatches `InputContextReset`, which is what
+        // calls the engine's `reset()`. `Instance::resetCompose` only clears
+        // XKB's compose state and leaves the engine composition alive.
+        inputContext->reset();
         inputContext->inputPanel().reset();
         inputContext->updatePreedit();
     }
@@ -731,6 +725,13 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
                                                       : ShiftTapDetector::ShiftKey::Right;
         const auto result =
             release ? shiftTap.shiftReleased(shiftKey, now) : shiftTap.shiftPressed(shiftKey, now);
+        SUPERIOR_TRACE(diag::categories::Fcitx5)
+            .field("sym", static_cast<std::int64_t>(sym))
+            .field("release", release)
+            .field("tap", result == ShiftTapDetector::Result::Toggle)
+            .field("english", englishMode_)
+            .field("program", inputContext->program())
+            << "shift key";
         if (result == ShiftTapDetector::Result::Toggle) {
             if (inlineEnglishEnabled_) {
                 setEnglishMode(inputContext, !englishMode_, "shift tap");
@@ -1034,8 +1035,9 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         return;
     }
 
-    // libime rebuilds the *contents* of the same list object on every keystroke,
-    // so the pinyin — not the list pointer — is what identifies a composition.
+    // An engine may rebuild the list contents in place or hand us a new list
+    // object when the candidates change, so the pinyin — not the pointer — is
+    // what identifies a composition.
     if (state.pinyin != *normalized || state.list != candidateList.get()) {
         state = CloudContext{};
         state.list = candidateList.get();
@@ -1343,14 +1345,15 @@ void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::stri
 
     // The engine still owns a composition for the pinyin we completed. Drop it
     // first, otherwise the committed word would be followed by the remaining
-    // pinyin as soon as the user types again.
-    instance_->resetCompose(inputContext);
+    // pinyin as soon as the user types again. `InputContext::reset` reaches the
+    // engine's `reset()`; `Instance::resetCompose` only resets XKB.
+    inputContext->reset();
     inputContext->inputPanel().reset();
     inputContext->commitString(std::string(text));
     inputContext->updatePreedit();
 
     // Remember the pick, so the next `yuanshen` offers 原神 first without a
-    // request. libime cannot learn this one: we committed it, not the engine.
+    // request. The engine cannot learn this one: we committed it, not rime.
     if (!pinyin.empty()) {
         const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::system_clock::now().time_since_epoch())

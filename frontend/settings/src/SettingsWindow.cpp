@@ -466,28 +466,10 @@ QWidget *SettingsWindow::buildInputPage() {
         tr("以英文模式输入的字母会直接上屏，不经过拼音候选。这与搜狗输入法的行为一致。"),
         "rowHint"));
 
-    QVBoxLayout *segmentCard = addCard(
-        layout, tr("拼音切分"),
-        tr("开启后 libime 允许把一个音节拆成两个：例如 xian 也能匹配「西安」。"
-           "代价是 bian 会被拆成 bi'an，于是 yubianyi 可能给出四字的「御笔安逸」"
-           "而不是三字词。关掉它只影响这种跨音节匹配，qie → 企鹅 这类短拼音不受影响。"));
-    innerToggle_ = new ToggleSwitch(true);
-    segmentCard->addWidget(makeRow(
-        tr("允许跨音节切分"), tr("xian → xi'an；关掉后 yubianyi 给出三字词"),
-        innerToggle_));
-    segmentCard->addWidget(makeLabel(
-        tr("这项写的是 Fcitx5 的 pinyin.conf，所以「拼音」条目也会一起改变。"
-           "改完需要重启 Fcitx5。"),
-        "rowHint"));
-
-    // libime's own typo tolerance. This is the only form that works: a dictionary
-    // row whose pinyin is not a legal syllable is rejected by libime_pinyindict,
-    // so Rime-style derived spellings cannot be imported as data.
-    fuzzyToggle_ = new ToggleSwitch(false);
-    segmentCard->addWidget(makeRow(
-        tr("常用模糊音"),
-        tr("z/zh、c/ch、s/sh、n/l、an/ang、en/eng、in/ing；打错也能出对的词"),
-        fuzzyToggle_));
+    addCard(layout, tr("输入方案"),
+            tr("引擎是内置的 librime，方案为万象拼音。候选排序与用户词频由 Rime 维护，"
+               "数据在 ~/.local/share/superior-ime/rime，与系统的 fcitx5-rime 完全隔离。"
+               "常见错音由方案自带的错音词表处理，不需要额外开关。"));
 
     addCard(layout, tr("候选窗口"),
             tr("候选窗由 Superior 自己的浮层绘制，不受 Fcitx5 全局主题影响；"
@@ -605,7 +587,7 @@ QWidget *SettingsWindow::buildAboutPage() {
 
     QVBoxLayout *card =
         addCard(layout, tr("先！进！输入法"), tr("跨平台输入法的 UI 与皮肤层，Linux/Fcitx5 优先。"));
-    card->addWidget(makeLabel(tr("输入引擎：Fcitx5 + libime（不重写拼音引擎）"), "rowHint"));
+    card->addWidget(makeLabel(tr("输入引擎：内置 librime + 万象拼音方案"), "rowHint"));
     card->addWidget(makeLabel(tr("皮肤格式：superior.skin/1（自建、可校验）"), "rowHint"));
     card->addWidget(makeLabel(tr("界面：Qt 6，前端只依赖契约与纯数据模块"), "rowHint"));
     card->addWidget(makeLabel(tr("许可：GPL-3.0-or-later"), "rowHint"));
@@ -616,8 +598,6 @@ QWidget *SettingsWindow::buildAboutPage() {
 
 void SettingsWindow::loadFromDisk() {
     // Engine setting, separate from our own settings file.
-    innerSegmentation_ = config::readInnerSegmentation(paths_).value_or(true);
-    commonFuzzy_ = config::readCommonFuzzy(paths_);
     const auto loaded = config::loadSettings(config::defaultSettingsPath());
     settings_ = loaded.settings;
     for (const auto &warning : loaded.warnings) {
@@ -627,12 +607,6 @@ void SettingsWindow::loadFromDisk() {
 }
 
 void SettingsWindow::syncWidgets() {
-    if (innerToggle_ != nullptr) {
-        innerToggle_->setChecked(innerSegmentation_);
-    }
-    if (fuzzyToggle_ != nullptr) {
-        fuzzyToggle_->setChecked(commonFuzzy_);
-    }
     if (shiftToggle_ != nullptr) {
         shiftToggle_->setChecked(settings_.shiftToggle);
     }
@@ -777,33 +751,6 @@ void SettingsWindow::applyChanges() {
     if (!config::saveSettings(config::defaultSettingsPath(), settings_, error)) {
         setStatus(QString::fromStdString(error), true);
         return;
-    }
-
-    // Engine segmentation is a real Fcitx5 setting, not one of ours: write it
-    // only when the user actually changed it, so opening the page never rewrites
-    // the engine config.
-    if (innerToggle_ != nullptr && innerToggle_->isChecked() != innerSegmentation_) {
-        const bool requested = innerToggle_->isChecked();
-        const auto outcome = config::setInnerSegmentation(paths_, requested);
-        if (!outcome.ok) {
-            setStatus(QString::fromStdString(outcome.detail), true);
-            return;
-        }
-        if (outcome.changed) {
-            innerSegmentation_ = requested;
-        }
-    }
-
-    if (fuzzyToggle_ != nullptr && fuzzyToggle_->isChecked() != commonFuzzy_) {
-        const bool requested = fuzzyToggle_->isChecked();
-        const auto outcome = config::setCommonFuzzy(paths_, requested);
-        if (!outcome.ok) {
-            setStatus(QString::fromStdString(outcome.detail), true);
-            return;
-        }
-        if (outcome.changed) {
-            commonFuzzy_ = requested;
-        }
     }
 
     // Deliberately does NOT touch classicui.conf: the skin is painted by our own

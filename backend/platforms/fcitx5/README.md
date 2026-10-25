@@ -4,22 +4,22 @@ Fcitx5 适配层。这里有两个**不同**的注册面，混在一起就会“
 
 | 产物 | 类型 | 作用 |
 |---|---|---|
-| `libsuperioragent.so` + `superioragent.conf` | addon，`Category=Module` | 被动观察者：读 `InputPanel`/`StatusArea`/`cursorRect`，经 socket 推给 UI |
+| `libsuperioragent.so` + `superioragent.conf` | addon，`Category=Module` | 观察者 + 浮层：读 `InputPanel`/`StatusArea`/`cursorRect`，经 socket 推给 UI |
+| `libsuperiorrime.so` + `superiorrime.conf` | addon，`Category=InputMethod` | 真正的拼音引擎：内置 librime，万象方案 |
 | `super-ime.conf` | 输入法条目（`[InputMethod]`） | 出现在“添加输入法”里；uniqueName = `super-ime` |
 | `org.superior.ime.svg` | 图标 | 条目图标 |
 
-`super-ime.conf` 用 `Addon=pinyin` 绑定 Fcitx5 自带的 libime 拼音引擎。
-Superior 不重写拼音，只是给引擎一个自己的名称、图标和标签，并让 UI 观察会话。
+`super-ime.conf` 用 `Addon=superiorrime` 绑定本仓库的引擎。**只有这一个条目**：
+原来绑定 `Addon=pinyin`（libime）的条目已经删除，不再有第二个“Rime 版”可选，
+也不和系统的 `pinyin` addon 共享配置或词库。
 
-## 不干扰输入的保证
+## 分工
 
-- agent 不是 `InputMethodEngine`，不处理按键；
-- agent 不是 `UserInterface`，不占用 Fcitx5 唯一的 UI addon 槽位；
-- 只读 `InputPanel`、`StatusArea`、`InputContext`；
-- 从不调用 `setPreedit` / `setClientPreedit` / commit 接口。
-
-因此 Wayland 客户端继续走 Fcitx5 的 wayland 前端，X11 客户端继续走 XCB/XIM 前端，
-客户端内的预编辑行为不变。Superior 只负责额外浮层与皮肤。
+- `RimeInputMethod`（`libsuperiorrime.so`）负责按键、组合、候选、提交和翻页，
+  一个输入框一个 librime session。
+- `SuperiorAgent` 不是引擎：它接管 `InputPanel` 的绘制、把场景发给 Qt 浮层、
+  在候选列表里插入云端词/学习词，并处理 Shift 轻按（英文模式直接提交字母）。
+- 两者都只通过 Fcitx5 的公开接口交互，互不 include。
 
 ## 生效方式
 
@@ -46,3 +46,9 @@ sudo cmake --install build/linux-system
 ```
 
 或 `scripts/install-addon-system.sh`（支持 `--dry-run`）。
+
+安装后还需要方案数据（不属于仓库）：
+
+```bash
+scripts/fetch-rime-data.sh
+```

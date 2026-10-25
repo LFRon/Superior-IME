@@ -1,11 +1,8 @@
 add_library(superior_fcitx5_mapping STATIC
     src/CandidateActions.cpp
-    src/Dictionary.cpp
     src/InlineText.cpp
     src/PanelMapper.cpp
-    src/PinyinAssets.cpp
     src/PreeditSource.cpp
-    src/RimeDict.cpp
     src/ShiftTap.cpp
     src/StatusMapping.cpp)
 
@@ -60,6 +57,31 @@ if(SUPERIOR_ENABLE_FCITX5)
         "${CMAKE_CURRENT_BINARY_DIR}/superioragent.conf"
         @ONLY)
 
+    # librime engine. A separate addon library, so a machine without librime
+    # still loads the agent and Fcitx5 reports what is missing instead of failing
+    # the whole addon tree.
+    add_library(superior_fcitx5_rime MODULE
+        src/RimeInputMethod.cpp)
+
+    target_include_directories(superior_fcitx5_rime PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+    target_link_libraries(superior_fcitx5_rime PRIVATE
+        Fcitx5::Core
+        Superior::Rime
+        Superior::Diagnostics)
+
+    set_target_properties(superior_fcitx5_rime PROPERTIES
+        OUTPUT_NAME superiorrime)
+
+    target_compile_features(superior_fcitx5_rime PRIVATE cxx_std_20)
+    superior_set_warnings(superior_fcitx5_rime)
+
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/superiorrime.conf.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/superiorrime.conf"
+        @ONLY)
+
     # The input method entry is a plain file: Fcitx5 derives the unique name
     # from the file name, so it must be installed as "super-ime.conf".
     configure_file(
@@ -67,15 +89,15 @@ if(SUPERIOR_ENABLE_FCITX5)
         "${CMAKE_CURRENT_BINARY_DIR}/super-ime.conf"
         COPYONLY)
 
-    install(TARGETS superior_fcitx5_agent
+    install(TARGETS superior_fcitx5_agent superior_fcitx5_rime
         LIBRARY DESTINATION "${SUPERIOR_FCITX5_ADDON_DIR}")
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/superioragent.conf"
+        "${CMAKE_CURRENT_BINARY_DIR}/superiorrime.conf"
         DESTINATION "${SUPERIOR_FCITX5_DATA_DIR}")
 
-    # Exactly one entry is installed: Fcitx5 derives the unique name from the
-    # file name, so installing a second file would create a second duplicate
-    # entry backed by the same pinyin engine.
+    # Exactly one entry: its Addon is superiorrime, so there is no second
+    # libime-backed entry to choose between.
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/super-ime.conf"
         DESTINATION "${SUPERIOR_FCITX5_INPUTMETHOD_DIR}")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/icons/org.superior.ime.svg"

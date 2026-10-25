@@ -18,20 +18,19 @@ done
 
 files=(
     "$HOME/.local/lib/fcitx5/libsuperioragent.so"
+    "$HOME/.local/lib/fcitx5/libsuperiorrime.so"
     "$HOME/.local/share/fcitx5/addon/superioragent.conf"
+    "$HOME/.local/share/fcitx5/addon/superiorrime.conf"
     "$HOME/.local/share/fcitx5/inputmethod/super-ime.conf"
+    # Cleanup for installs made before the engine became the only entry.
+    "$HOME/.local/share/fcitx5/inputmethod/super-ime-rime.conf"
     "$HOME/.local/share/icons/hicolor/scalable/apps/org.superior.ime.svg"
     # Wrappers only; the binaries themselves live in the tree below.
     "$HOME/.local/bin/superior_ui"
     "$HOME/.local/bin/superior_settings"
+    "$HOME/.local/bin/superior-config"
     "$HOME/.local/share/applications/superior-settings.desktop"
     "$HOME/.config/environment.d/90-superior-ime.conf"
-    # Word list fetched by install-user.sh / fetch-dictionary.sh. Only the files
-    # this project installs; a dictionary the user imported themselves has a
-    # different name and is left alone.
-    "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice.dict"
-    "$HOME/.local/share/fcitx5/pinyin/dictionaries/rime-ice-lite.dict"
-    "$HOME/.local/share/fcitx5/pinyin/dictionaries/wanxiang-cuoyin.dict"
 )
 trees=(
     # Binaries + skins.

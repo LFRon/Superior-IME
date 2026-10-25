@@ -93,7 +93,8 @@ backend/platforms/fcitx5  ──►  backend/runtime  ──►  backend/core  �
 ### 3.2 运行时拓扑
 
 ```
-Fcitx5 (pinyin / rime 引擎不变)
+Fcitx5
+  ├─ libsuperiorrime  (Category=InputMethod, 内置 librime, 唯一输入法条目)
   └─ superior-agent  (Category=Module, 常驻, 无 Qt)
        ├─ 观察 InputContextUpdateUI / FocusIn / FocusOut / IM 切换
        ├─ 读取 InputPanel: preedit / candidates / cursorRect / capabilities
@@ -281,7 +282,7 @@ Superior-IME/
 | **M1 皮肤** | `superior.skin/1` 规范、loader/validator、`specHash`、`skin-lint`、`skins/default` | 默认皮肤零 error；坏样本给出精确 pointer；strict 模式 warning 即失败；hash 稳定 |
 | **M2 核心与运行时** ✅ | `superior-core` 候选/选中/翻页/会话状态、`superior-runtime` 串行泵/票据/帧合并 | 单元测试覆盖取消、过期结果、确定性采样 |
 | **M2.5 协议** ✅ | `backend/protocol`：帧、`Hello`/`Scene`/`Command`、Unix socket、单测 | 往返、坏帧、截断、socket 广播/命令 |
-| **M3.5 可观测性与词库** ✅ | `backend/diagnostics`、Qt 日志桥、埋点；`Dictionary` 布局对齐 + 搜狗导入 | 日志单测；词库布局/导入拒绝路径单测；不记录用户输入 |
+| **M3.5 可观测性** ✅ | `backend/diagnostics`、Qt 日志桥、埋点 | 日志单测；不记录用户输入 |
 | **M3 X11 端到端** ✅ | `fcitx5/agent`、IPC、Qt 候选窗/状态栏、内联英文 | agent 无 Qt、只读；X11 浮层 override-redirect 已实测；候选窗/状态栏自绘已实测 |
 | **M4 Wayland** 🚧 | XWayland 平台自动选择、设置热重载、layer-shell 状态栏、classicui 主题导出 | 自动选择、热重载、可点击状态栏已完成（17 个 ctest 全绿）；layer-shell 待做 |
 | **M5 收尾** | `dev-install`、文档、打包骨架 | 新用户按文档 5 分钟跑通；`fcitx5-diagnose` 可见 addon |

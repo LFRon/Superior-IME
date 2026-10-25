@@ -3,14 +3,16 @@
 先！进！的跨平台输入法,目标是完全取代老旧的搜狗输入法
 目标支持Android,GNU/Linux,Windows三平台 (苹果系没设备暂缓)
 
-- 输入引擎交给 Fcitx5（拼音 / Rime），本项目不重写引擎。
+- 输入引擎：**内置 librime + 万象拼音方案**。不依赖 `fcitx5-pinyin`，也不重写
+  语言模型，只做引擎适配、候选后处理与 UI。
 - 前端与后端分离：UI 只通过契约与后端通信。
 - 皮肤使用自有的 `superior.skin/1`：声明式、版本化、可校验、可确定性渲染。
 - 语音、Windows、macOS、Android 是后续里程碑，接口已预留。
 
 详细设计：[PLAN.md](PLAN.md)、[docs/architecture.md](docs/architecture.md)、
 [docs/skin-format.md](docs/skin-format.md)、[docs/logging.md](docs/logging.md)、
-[docs/dictionary.md](docs/dictionary.md)、[docs/fcitx5-integration.md](docs/fcitx5-integration.md)。
+[docs/fcitx5-integration.md](docs/fcitx5-integration.md)、
+[docs/rime-engine.md](docs/rime-engine.md)。
 
 ---
 
@@ -23,7 +25,8 @@
 | M2 | `backend/core`、`backend/runtime` | ✅ |
 | M2.5 | `backend/protocol`：帧、`Hello` / `Scene` / `Command`、Unix socket | ✅ |
 | M3 | Fcitx5 观察者 agent、Qt 桌面壳、X11 浮层 | ✅ 自绘候选窗与状态栏已实测 |
-| M3.5 | 统一日志、词库布局对齐、搜狗细胞词库导入 | ✅ |
+| M3.5 | 统一日志、可观测性与错误路径单测 | ✅ |
+| M3.6 | 内置 librime、万象方案、独立数据目录、按键/翻页/云端行一致 | ✅ |
 | M4 | XWayland 自动选择、classicui 主题导出 | 🚧 自动选择已完成；layer-shell 状态栏待做 |
 | P2 | `.ssf` 导入器（可选工具，不进入运行时） | 未计划 |
 | P3 | 本地流式语音（sherpa-onnx） | 未计划 |
@@ -113,12 +116,22 @@ export FCITX_ADDON_DIRS="$HOME/.local/lib/fcitx5:/usr/lib/$(gcc -print-multiarch
 setsid fcitx5 -d
 ```
 
-安装后得到两个不同的东西：
+安装后得到这些东西：
 
 | 产物 | 类型 |
 |---|---|
 | `libsuperioragent.so` + `superioragent.conf` | `Category=Module` 观察者 addon（不是输入法） |
-| `super-ime.conf` | 输入法条目，uniqueName = `super-ime`，绑定 `Addon=pinyin` |
+| `libsuperiorrime.so` + `superiorrime.conf` | `Category=InputMethod` 的引擎 addon（内置 librime） |
+| `super-ime.conf` | **唯一**输入法条目，uniqueName = `super-ime`，绑定 `Addon=superiorrime` |
+
+Rime 条目的方案数据不在安装包里，需要单独下载并编译（约 26 MB，一次即可）：
+
+```bash
+scripts/fetch-rime-data.sh
+```
+
+没下载时条目仍然存在，但打字没有候选，日志会说明缺什么。
+只有一个条目，没有需要二选一的“兼容模式”，详见 [docs/rime-engine.md](docs/rime-engine.md)。
 
 新增条目必须**重启** Fcitx5 才会出现在“添加输入法”里；`fcitx5-remote -r` 不够，
 `Controller1.ResetIMList` 会重建分组并丢掉用户条目，不要用。
@@ -163,23 +176,18 @@ SUPERIOR_LOG_VIA_QT=1 QT_LOGGING_RULES="superior.*=true" ./superior_ui
 
 ## 词库
 
-拼音引擎仍是 `fcitx5-pinyin` + `libime`，Superior 不复制词库格式，只按同样的
-XDG 布局读取、检测、报告：
+方案数据不在仓库里，由脚本下载并部署到独立目录：
 
 ```bash
-./build/linux-ui/tools/dict-tool/superior_dict diagnose
+scripts/fetch-rime-data.sh
+superior-config rime lookup nihao   # 端到端自检
 ```
 
-搜狗细胞词库导入使用与 fcitx5-pinyin 相同的工具链
-（`scel2org5` → `libime_pinyindict`），产物落在
-`~/.local/share/fcitx5/pinyin/dictionaries/`：
-
-```bash
-./build/linux-ui/tools/dict-tool/superior_dict import 网络流行.scel
-fcitx5-remote -e && fcitx5 -d
-```
-
-细节见 [docs/dictionary.md](docs/dictionary.md)。
+- 方案：万象拼音 Pure（版本固定在脚本里，SHA-256 校验）
+- 位置：`$XDG_DATA_HOME/superior-ime/rime/{shared,user}`
+- 与 `~/.config/fcitx5/rime` 完全隔离，不读取也不修改系统的 Rime 配置
+- 用户词频由 Rime 的 `userdb` 维护；云端选词由 `learning.json` 维护
+- 设计、部署、翻页与语法模型的取舍见 [docs/rime-engine.md](docs/rime-engine.md)
 
 ---
 
@@ -188,6 +196,8 @@ fcitx5-remote -e && fcitx5 -d
 轻按 Shift 在输入法内部切换中英文，与搜狗一致：
 
 - 英文模式下字母、数字、符号直接上屏，不经过拼音；
+- 只有 agent 管这个开关：Rime 引擎的 `ascii_composer` 被部署脚本设为 `noop`，
+  否则两边状态会错位，出现“切回中文还在打英文”；
 - 长按 Shift 打大写字母、`Ctrl`/`Alt`/`Super` 组合键都不会触发切换；
 - `Esc` 立刻回到中文；模式是**全局**的，切窗口不会改变；
 - 关闭设置页的「Shift 切换中英文」后，Shift 完全归还给应用。
@@ -358,7 +368,8 @@ backend/
 ├─ core/       纯逻辑
 ├─ runtime/    串行泵 + 票据
 ├─ protocol/   帧编解码 + Unix socket
-└─ platforms/  fcitx5（观察者 agent）
+├─ rime/       内置 librime 引擎（无 Qt / 无 Fcitx5，可单测）
+└─ platforms/  fcitx5（观察者 agent + Rime 引擎适配）
 
 frontend/
 ├─ app/        （后续）应用装配
@@ -377,6 +388,7 @@ docs/
 
 - `frontend/` 不得依赖 `backend/core`、`backend/runtime`、`fcitx*`；
 - `backend/core` 不得依赖 Qt / Fcitx5 / 墙钟；
+- `backend/rime` 不得依赖 Qt / Fcitx5，公共头不得出现 `rime_api.h` / `dlfcn.h`；
 - `backend/skin` 不得依赖 Qt 或做像素解码；
 - `backend/api` 不得依赖任何实现。
 
@@ -387,3 +399,7 @@ docs/
 GPL-3.0-or-later，见 [LICENSE](LICENSE)。
 
 内置皮肤为本项目自绘，不含任何第三方输入法的素材、字体或图标。
+
+可选下载的万象拼音方案/词库不随仓库分发，由 `scripts/fetch-rime-data.sh`
+按需获取，其许可为 CC-BY-4.0（作者 amzxyz），详见
+[docs/rime-engine.md](docs/rime-engine.md)。

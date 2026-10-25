@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 
 #include "support/TestSupport.hpp"
@@ -171,76 +172,6 @@ void testSkinRootsPriority() {
     CHECK(roots.back() == fs::path("/usr/share/superior-ime/skins"));
 }
 
-/// `[Fuzzy] Inner` is the switch behind "yubianyi -> 御笔安逸": it lets libime
-/// split `bian` into `bi'an`. The settings page writes it, so it has to round-trip
-/// without disturbing the rest of the engine config.
-void testInnerSegmentation() {
-    TempTree tree;
-    tree.write("config/fcitx5/conf/pinyin.conf",
-               "# 拼音\nPageSize=7\n\n[Fuzzy]\n# 内模糊音节\nInner=True\n"
-               "InnerShort=True\nPartialFinal=True\n");
-
-    // Unset in a file that has no [Fuzzy] section at all.
-    TempTree empty;
-    empty.write("config/fcitx5/conf/pinyin.conf", "PageSize=7\n");
-    CHECK(!superior::config::readInnerSegmentation(empty.paths()).has_value());
-
-    CHECK(superior::config::readInnerSegmentation(tree.paths()) == std::optional<bool>(true));
-
-    const ApplyOutcome outcome = superior::config::setInnerSegmentation(tree.paths(), false);
-    CHECK(outcome.ok);
-    CHECK(outcome.changed);
-    CHECK(superior::config::readInnerSegmentation(tree.paths()) == std::optional<bool>(false));
-
-    // Comments and unrelated keys must survive: this file belongs to Fcitx5.
-    const std::string text = tree.read("config/fcitx5/conf/pinyin.conf");
-    CHECK(text.find("# 内模糊音节") != std::string::npos);
-    CHECK(text.find("PageSize=7") != std::string::npos);
-    CHECK(text.find("InnerShort=True") != std::string::npos);
-    CHECK(text.find("Inner=False") != std::string::npos);
-
-    // Writing the same value again is a no-op, not a rewrite.
-    const ApplyOutcome again = superior::config::setInnerSegmentation(tree.paths(), false);
-    CHECK(again.ok);
-    CHECK(!again.changed);
-}
-
-/// libime's fuzzy pairs are the only typo tolerance that survives the pinyin
-/// validator; the settings page drives them as one switch.
-void testCommonFuzzy() {
-    TempTree tree;
-    tree.write("config/fcitx5/conf/pinyin.conf",
-               "# 拼音\n[Fuzzy]\nZ_ZH=False\nC_CH=False\nS_SH=False\nL_N=False\n"
-               "AN_ANG=False\nEN_ENG=False\nIN_ING=False\nV_U=False\n");
-
-    CHECK(!superior::config::readCommonFuzzy(tree.paths()));
-
-    const ApplyOutcome on = superior::config::setCommonFuzzy(tree.paths(), true);
-    CHECK(on.ok);
-    CHECK(on.changed);
-    CHECK(superior::config::readCommonFuzzy(tree.paths()));
-
-    const std::string text = tree.read("config/fcitx5/conf/pinyin.conf");
-    CHECK(text.find("Z_ZH=True") != std::string::npos);
-    CHECK(text.find("IN_ING=True") != std::string::npos);
-    // A pair we do not drive must be left alone.
-    CHECK(text.find("V_U=False") != std::string::npos);
-
-    // Enabling twice is a no-op, not a rewrite.
-    const ApplyOutcome again = superior::config::setCommonFuzzy(tree.paths(), true);
-    CHECK(again.ok);
-    CHECK(!again.changed);
-
-    const ApplyOutcome off = superior::config::setCommonFuzzy(tree.paths(), false);
-    CHECK(off.ok);
-    CHECK(!superior::config::readCommonFuzzy(tree.paths()));
-
-    // A file without [Fuzzy] reads as "off" rather than crashing.
-    TempTree empty;
-    empty.write("config/fcitx5/conf/pinyin.conf", "PageSize=7\n");
-    CHECK(!superior::config::readCommonFuzzy(empty.paths()));
-}
-
 } // namespace
 
 int main() {
@@ -252,7 +183,5 @@ int main() {
     testSettingsRoundTrip();
     testSettingsRejectsBadValues();
     testSkinRootsPriority();
-    testInnerSegmentation();
-    testCommonFuzzy();
     return superior::test::finish("config tests");
 }

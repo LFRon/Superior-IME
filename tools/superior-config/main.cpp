@@ -13,6 +13,9 @@
 #include "superior/cloudpinyin/Fetcher.hpp"
 #include "superior/config/Settings.hpp"
 #include "superior/diagnostics/Log.hpp"
+#include "superior/rime/LibrimePort.hpp"
+#include "superior/rime/RimeEngine.hpp"
+#include "superior/rime/RimePaths.hpp"
 #include "superior/theme/ClassicUiTheme.hpp"
 #include "superior/skin/Skin.hpp"
 
@@ -30,12 +33,17 @@ void usage(std::ostream &out) {
            "  theme select NAME            select an already installed theme\n"
            "  cloud probe [--backend NAME] [PINYIN]\n"
            "                               ask the cloud provider once and report\n"
+           "  rime status                  report librime, data directories and artifacts\n"
+           "  rime deploy                  compile the schema in the shared directory\n"
+           "  rime lookup [PINYIN]         type PINYIN into a real session and print the frame\n"
            "\n"
            "Inline Chinese/English switching is handled inside the input method and\n"
            "is not a global Fcitx5 hotkey; see docs/input-panel.md.\n"
            "\n"
            "options:\n"
            "  --skin-dir DIR               where skins live (default: <dataHome>/superior-ime/skins)\n"
+           "  --shared DIR                 Rime shared data directory (default: <dataHome>/superior-ime/rime/shared)\n"
+           "  --user DIR                   Rime user data directory (default: <dataHome>/superior-ime/rime/user)\n"
            "\n"
            "After changing the theme or trigger keys, restart Fcitx5:\n"
            "  fcitx5-remote -e && fcitx5 -d\n";
@@ -248,6 +256,160 @@ int handleCloudProbe(const std::string &backendName, const std::string &pinyin) 
     return 1;
 }
 
+/// Fills in the Rime paths, honouring command-line overrides.
+rime::Paths rimePaths(const fs::path &sharedOverride, const fs::path &userOverride) {
+    rime::Paths paths = rime::Paths::fromEnvironment();
+    if (!sharedOverride.empty()) {
+        paths.sharedData = fs::absolute(sharedOverride);
+    }
+    if (!userOverride.empty()) {
+        paths.userData = fs::absolute(userOverride);
+    }
+    return paths;
+}
+
+/// Reports what the engine would see: library, directories, compiled artifacts.
+int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverride) {
+    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
+    std::error_code error;
+    const bool shared = fs::is_directory(paths.sharedData, error);
+
+    std::cout << "shared    : " << paths.sharedData << (shared ? "" : "  (missing)") << '\n';
+    std::cout << "user      : " << paths.userData << '\n';
+
+    {
+        rime::LibrimePort probe;
+        if (!probe.available()) {
+            std::cout << "library   : unavailable (" << probe.unavailableReason() << ")\n";
+            return 1;
+        }
+        std::cout << "library   : " << probe.libraryVersion() << '\n';
+    }
+
+    std::size_t schemas = 0;
+    if (shared) {
+        for (const auto &entry : fs::directory_iterator(paths.sharedData, error)) {
+            if (error) {
+                break;
+            }
+            if (entry.is_regular_file(error) && entry.path().extension() == ".yaml" &&
+                entry.path().string().ends_with(".schema.yaml")) {
+                ++schemas;
+            }
+        }
+    }
+    std::cout << "schemas   : " << schemas << " in the shared directory\n";
+    const bool artifacts = rime::hasCompiledArtifacts(paths);
+    std::cout << "artifacts : " << (artifacts ? "present" : "missing (run: superior-config rime deploy)")
+              << '\n';
+    if (!shared) {
+        std::cout << "verdict   : no schema data; run scripts/fetch-rime-data.sh first\n";
+        return 1;
+    }
+    return artifacts ? 0 : 1;
+}
+
+/// Compiles every schema in the shared directory into the user directory.
+///
+/// Runs outside Fcitx5 on purpose: the first deployment of a large schema takes
+/// minutes, and doing it inside the addon would block every key press (or need a
+/// worker thread that Fcitx5 may unload from under librime).
+int handleRimeDeploy(const fs::path &sharedOverride, const fs::path &userOverride) {
+    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
+    std::error_code error;
+    if (!fs::is_directory(paths.sharedData, error)) {
+        std::cerr << "superior-config: no shared data at " << paths.sharedData
+                  << "; run scripts/fetch-rime-data.sh first\n";
+        return 1;
+    }
+
+    rime::LibrimePort port;
+    if (!port.available()) {
+        std::cerr << "superior-config: librime is not available: " << port.unavailableReason()
+                  << '\n';
+        return 1;
+    }
+    std::cout << "library   : " << port.libraryVersion() << '\n';
+    std::cout << "shared    : " << paths.sharedData << '\n';
+    std::cout << "user      : " << paths.userData << '\n';
+
+    std::string message;
+    if (!port.initialize(paths, message)) {
+        std::cerr << "superior-config: " << message << '\n';
+        return 1;
+    }
+    std::cout << "deploying : this can take a few minutes on the first run\n" << std::flush;
+    if (!port.deploy(message)) {
+        std::cerr << "superior-config: deployment failed: " << message << '\n';
+        return 1;
+    }
+    if (!rime::hasCompiledArtifacts(paths)) {
+        std::cerr << "superior-config: deployment reported success but produced no .bin files\n";
+        return 1;
+    }
+    std::cout << "deployed  : artifacts written to " << paths.userData << '\n';
+    return 0;
+}
+
+/// Feeds ASCII letters into a real session and prints the resulting frame.
+///
+/// This is the smoke test for the whole engine stack: library loading, schema
+/// loading, key processing, commit draining and candidate extraction. Typing in
+/// an application cannot distinguish "no candidates" from "the addon is not
+/// enabled", so this exists as a one-command answer.
+int handleRimeLookup(const std::string &word, const fs::path &sharedOverride,
+                     const fs::path &userOverride) {
+    const rime::Paths paths = rimePaths(sharedOverride, userOverride);
+    rime::LibrimePort port;
+    if (!port.available()) {
+        std::cerr << "superior-config: librime is not available: " << port.unavailableReason()
+                  << '\n';
+        return 1;
+    }
+
+    rime::RimeEngine engine(port);
+    std::string message;
+    if (!engine.start(paths, message)) {
+        std::cerr << "superior-config: " << message << '\n';
+        return 1;
+    }
+    if (engine.needsDeploy()) {
+        std::cerr << "superior-config: no schema is deployed; run 'rime deploy' first\n";
+        return 1;
+    }
+
+    std::string committed;
+    for (const char character : word) {
+        if (character < 'a' || character > 'z') {
+            std::cerr << "superior-config: lookup only accepts a-z\n";
+            return 2;
+        }
+        // X11 keysyms for ASCII letters are the character codes themselves.
+        const auto result = engine.processKey(
+            rime::KeyInput{static_cast<std::uint32_t>(character), 0, false});
+        committed += result.commit;
+    }
+
+    const rime::Snapshot snapshot = engine.snapshot();
+    std::cout << "schema    : " << port.schemaId() << '\n';
+    std::cout << "preedit   : " << snapshot.composition.preedit << '\n';
+    std::cout << "page      : " << snapshot.menu.pageIndex
+              << (snapshot.menu.pageCount > 0 ? " / " : " / ?") << '\n';
+    std::cout << "candidates: " << snapshot.menu.candidates.size() << '\n';
+    for (std::size_t index = 0; index < snapshot.menu.candidates.size(); ++index) {
+        const auto &candidate = snapshot.menu.candidates[index];
+        std::cout << "  " << (index + 1) << ". " << candidate.text;
+        if (!candidate.comment.empty()) {
+            std::cout << "  [" << candidate.comment << ']';
+        }
+        std::cout << '\n';
+    }
+    if (!committed.empty()) {
+        std::cout << "committed : " << committed << '\n';
+    }
+    return snapshot.menu.candidates.empty() ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -264,10 +426,16 @@ int main(int argc, char **argv) {
     }
 
     fs::path skinOverride;
+    fs::path sharedOverride;
+    fs::path userOverride;
     std::vector<std::string> positional;
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         if (arguments[i] == "--skin-dir" && i + 1 < arguments.size()) {
             skinOverride = arguments[++i];
+        } else if (arguments[i] == "--shared" && i + 1 < arguments.size()) {
+            sharedOverride = arguments[++i];
+        } else if (arguments[i] == "--user" && i + 1 < arguments.size()) {
+            userOverride = arguments[++i];
         } else {
             positional.push_back(arguments[i]);
         }
@@ -297,6 +465,25 @@ int main(int argc, char **argv) {
             }
         }
         return handleCloudProbe(backend, pinyin);
+    }
+    if (command == "rime") {
+        if (positional.size() < 2) {
+            std::cerr << "superior-config: rime needs 'status' or 'deploy'\n";
+            return 2;
+        }
+        const std::string &action = positional[1];
+        if (action == "status") {
+            return handleRimeStatus(sharedOverride, userOverride);
+        }
+        if (action == "deploy") {
+            return handleRimeDeploy(sharedOverride, userOverride);
+        }
+        if (action == "lookup") {
+            return handleRimeLookup(positional.size() > 2 ? positional[2] : std::string("nihao"),
+                                    sharedOverride, userOverride);
+        }
+        std::cerr << "superior-config: unknown rime action '" << action << "'\n";
+        return 2;
     }
     if (command == "theme") {
         if (positional.size() < 2) {

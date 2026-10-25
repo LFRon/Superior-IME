@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Installs the Fcitx5 pieces into the system directories.
 #
-# Two different things are installed:
+# Three different things are installed:
 #   1. superioragent  - Category=Module observer addon (not an input method)
-#   2. super-ime.conf - the input method entry shown under "Add input method";
+#   2. superiorrime   - Category=InputMethod engine addon (bundled librime)
+#   3. super-ime.conf - the only input method entry, bound to superiorrime;
 #                       the file name is the unique name ("super-ime")
 #
 # Requires root. Nothing is restarted automatically.
@@ -31,10 +32,13 @@ build="$root/build/$preset"
 
 so="$(find "$build" -name 'libsuperioragent.so' -print -quit 2>/dev/null || true)"
 addon_conf="$(find "$build" -name 'superioragent.conf' -print -quit 2>/dev/null || true)"
+rime_so="$(find "$build" -name 'libsuperiorrime.so' -print -quit 2>/dev/null || true)"
+rime_addon_conf="$(find "$build" -name 'superiorrime.conf' -print -quit 2>/dev/null || true)"
 entry_conf="$(find "$build" -name 'super-ime.conf' -print -quit 2>/dev/null || true)"
 icon="$root/backend/platforms/fcitx5/data/icons/org.superior.ime.svg"
 
-if [[ -z "$so" || -z "$addon_conf" || -z "$entry_conf" || ! -f "$icon" ]]; then
+if [[ -z "$so" || -z "$addon_conf" || -z "$rime_so" || -z "$rime_addon_conf" ||
+      -z "$entry_conf" || ! -f "$icon" ]]; then
     echo "install-addon-system: build the fcitx5 target first:" >&2
     echo "  scripts/configure.sh $preset" >&2
     echo "  scripts/build.sh $preset" >&2
@@ -50,6 +54,8 @@ icon_dir="${SUPERIOR_ICON_DIR:-/usr/share/icons/hicolor/scalable/apps}"
 echo "install-addon-system:"
 echo "  $so -> $addon_dir/libsuperioragent.so"
 echo "  $addon_conf -> $data_dir/superioragent.conf"
+echo "  $rime_so -> $addon_dir/libsuperiorrime.so"
+echo "  $rime_addon_conf -> $data_dir/superiorrime.conf"
 echo "  $entry_conf -> $inputmethod_dir/super-ime.conf"
 echo "  $icon -> $icon_dir/org.superior.ime.svg"
 
@@ -60,6 +66,8 @@ fi
 
 sudo install -Dm755 "$so" "$addon_dir/libsuperioragent.so"
 sudo install -Dm644 "$addon_conf" "$data_dir/superioragent.conf"
+sudo install -Dm755 "$rime_so" "$addon_dir/libsuperiorrime.so"
+sudo install -Dm644 "$rime_addon_conf" "$data_dir/superiorrime.conf"
 sudo install -Dm644 "$entry_conf" "$inputmethod_dir/super-ime.conf"
 sudo install -Dm644 "$icon" "$icon_dir/org.superior.ime.svg"
 
@@ -75,6 +83,8 @@ Note: do NOT use the D-Bus method Controller1.ResetIMList for this. It rebuilds
 the input method group from defaults and drops the user's own entries.
 
 The unique name is "super-ime" (derived from the file name). The entry is bound
-to Fcitx5's own pinyin engine (Addon=pinyin); the agent addon only observes and
-never changes the client's preedit path.
+to the bundled engine (Addon=superiorrime); there is no libime entry and no
+second input method to choose from. The schema data still has to be deployed:
+
+  scripts/fetch-rime-data.sh
 MSG

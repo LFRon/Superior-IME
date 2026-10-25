@@ -98,12 +98,6 @@ private:
     ToggleSwitch *statusBarToggle_ = nullptr;
     ToggleSwitch *voiceToggle_ = nullptr;
     ToggleSwitch *cloudToggle_ = nullptr;
-    ToggleSwitch *innerToggle_ = nullptr;
-    /// Mirrors `[Fuzzy] Inner`; kept so opening the page never rewrites it.
-    bool innerSegmentation_ = true;
-    ToggleSwitch *fuzzyToggle_ = nullptr;
-    /// Mirrors the common fuzzy-pinyin set.
-    bool commonFuzzy_ = false;
     QComboBox *cloudBackendCombo_ = nullptr;
     QComboBox *skinCombo_ = nullptr;
     QComboBox *placementCombo_ = nullptr;

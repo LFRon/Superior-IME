@@ -84,18 +84,12 @@ if (instance_->inputMethod(ic) == "super-ime") {
 ## 组合文本由谁绘制
 
 皮肤要统一，组合文本（拼音那一行）就必须由我们画，而不是客户端画。Fcitx5 的
-约定是：引擎同时填两个字段，由 `CapabilityFlag::Preedit` 决定客户端会不会收到
-`clientPreedit`。
+约定是：引擎填 `preedit`，客户端有 `CapabilityFlag::Preedit` 时还会收到
+`clientPreedit` 并用自己的字体画在输入框里。
 
-```
-PinyinEngine::preedit()  ← fcitx5-pinyin/im/pinyin/pinyin.cpp
-  mode = ic->capabilityFlags().test(Preedit) ? config.preeditMode : No
-  ComposingPinyin → 只填 clientPreedit   ← 客户端画，字体颜色不受我们控制
-  No              → 只填 preedit        ← 我们画
-```
-
-所以同一个皮肤在 xterm（无 client preedit）和 VSCode（有 client preedit）里长得不一样：
-VSCode 用它的字体把 `ni hao` 画在编辑器里，我们的窗口只剩候选行。
+所以只要客户端声明了这个能力，同一个皮肤在 xterm（无 client preedit）和 VSCode
+（有 client preedit）里就会长得不一样：VSCode 把 `ni hao` 画进编辑器，我们的窗口
+只剩候选行。
 
 做法（`SuperiorAgent::takePreeditOwnership`）：
 
@@ -158,7 +152,7 @@ Fcitx5 的 action 名。
 | action | 角色 | 呈现 |
 |---|---|---|
 | `punctuation` | `Punctuation` | 月牙（半角）/ 实心圆（全角） |
-| `pinyin-prediction` | 过滤 | 不显示 |
+| `pinyin-prediction` | 过滤 | 不显示（其它引擎的预测开关；当前引擎没有） |
 | 其它 | `Text` | 原样显示 `shortText` |
 
 点击处理：UI 发 `ToggleStatusItem{id}` → agent 在 `StatusArea` 里按名查找 action →
@@ -199,7 +193,7 @@ Fcitx5 的 action 名。
 | 判定"轻按" | `ShiftTapDetector`（`backend/platforms/fcitx5/src/ShiftTap.cpp`） |
 | 拦截点 | `InputContextKeyEvent`，`PreInputMethod` 阶段 |
 | 上屏 | 英文模式下 `commitString(text)`，并 `event.filterAndAccept()` |
-| 中文模式 | 立刻 `return false`，按键原样交给 pinyin 引擎 |
+| 中文模式 | 立刻 `return false`，按键原样交给 Rime 引擎 |
 | 模式归属 | **全局**（`englishMode_`），切窗口不改变，与搜狗一致 |
 | 退出 | `Esc`，或再次轻按 Shift |
 | 关闭 | 设置页「Shift 切换中英文」→ `shiftToggle`，500 ms 内热生效 |

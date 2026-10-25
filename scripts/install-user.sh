@@ -31,8 +31,13 @@ done
 so="$(find "$build" -name 'libsuperioragent.so' -print -quit 2>/dev/null || true)"
 addon_conf="$(find "$build" -name 'superioragent.conf' -print -quit 2>/dev/null || true)"
 entry_conf="$(find "$build" -name 'super-ime.conf' -print -quit 2>/dev/null || true)"
+# The librime engine is optional: a build with SUPERIOR_ENABLE_FCITX5 always
+# produces it, but an older build tree may not, and the agent must still install.
+rime_so="$(find "$build" -name 'libsuperiorrime.so' -print -quit 2>/dev/null || true)"
+rime_addon_conf="$(find "$build" -name 'superiorrime.conf' -print -quit 2>/dev/null || true)"
 ui="$build/frontend/desktop/superior_ui"
 settings="$build/frontend/settings/superior_settings"
+config_cli="$build/tools/superior-config/superior_config_cli"
 staged_skins="$build/stage-skins"
 
 if [[ -z "$so" || -z "$addon_conf" || -z "$entry_conf" || ! -x "$ui" ]]; then
@@ -68,9 +73,12 @@ echo "install-user:"
 echo "  $so            -> $lib_dir/libsuperioragent.so"
 echo "  $addon_conf    -> $addon_dir/superioragent.conf"
 echo "  $entry_conf    -> $im_dir/super-ime.conf"
+[[ -n "$rime_so" ]] && echo "  $rime_so -> $lib_dir/libsuperiorrime.so"
+[[ -n "$rime_addon_conf" ]] && echo "  $rime_addon_conf -> $addon_dir/superiorrime.conf"
 echo "  $ui            -> $bin_dir/superior_ui"
 [[ -x "$settings" ]] && echo "  $settings -> $bin_dir/superior_settings"
-echo "  wrappers       -> $wrapper_dir/{superior_ui,superior_settings}"
+[[ -x "$config_cli" ]] && echo "  $config_cli -> $bin_dir/superior-config"
+echo "  wrappers       -> $wrapper_dir/{superior_ui,superior_settings,superior-config}"
 echo "  skins          -> $skin_dir"
 echo "  env            -> $env_dir/90-superior-ime.conf"
 
@@ -82,11 +90,20 @@ fi
 install -Dm755 "$so" "$lib_dir/libsuperioragent.so"
 install -Dm644 "$addon_conf" "$addon_dir/superioragent.conf"
 install -Dm644 "$entry_conf" "$im_dir/super-ime.conf"
+if [[ -n "$rime_so" && -n "$rime_addon_conf" ]]; then
+    install -Dm755 "$rime_so" "$lib_dir/libsuperiorrime.so"
+    install -Dm644 "$rime_addon_conf" "$addon_dir/superiorrime.conf"
+else
+    echo "install-user: no Rime engine in this build; text input will not work" >&2
+fi
 install -Dm644 backend/platforms/fcitx5/data/icons/org.superior.ime.svg \
     "$icon_dir/org.superior.ime.svg"
 install -Dm755 "$ui" "$bin_dir/superior_ui"
 if [[ -x "$settings" ]]; then
     install -Dm755 "$settings" "$bin_dir/superior_settings"
+fi
+if [[ -x "$config_cli" ]]; then
+    install -Dm755 "$config_cli" "$bin_dir/superior-config"
 fi
 
 # Wrappers keep the commands on PATH (and keep the desktop entry stable) while
@@ -111,6 +128,7 @@ WRAPPEREOF
 }
 write_wrapper superior_ui "$bin_dir/superior_ui"
 [[ -x "$settings" ]] && write_wrapper superior_settings "$bin_dir/superior_settings"
+[[ -x "$config_cli" ]] && write_wrapper superior-config "$bin_dir/superior-config"
 
 # Exec uses the absolute path: a GUI session does not always have
 # ~/.local/bin on PATH.
@@ -124,30 +142,6 @@ rm -rf "$skin_dir"
 mkdir -p "$skin_dir"
 cp -a "$staged_skins/." "$skin_dir/"
 rm -rf "$staged_skins"
-
-# A base word list makes the difference between "works" and "feels like a real
-# IME" for anything outside everyday vocabulary. It is fetched, not bundled: 雾凇
-# is ~46 MB of source and updated weekly, so a snapshot in the repository would
-# either bloat history or rot. On a machine without network (or without curl) the
-# install still succeeds — the engine just keeps using its own dictionary.
-dict_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5/pinyin/dictionaries"
-if [[ ! -f "$dict_dir/rime-ice.dict" ]]; then
-    if command -v curl >/dev/null 2>&1 && command -v libime_pinyindict >/dev/null 2>&1; then
-        echo "install-user: fetching the 雾凇 (rime-ice) word list …"
-        if ! SUPERIOR_PRESET="$preset" "$root/scripts/fetch-dictionary.sh" rime-ice \
-                --minimal; then
-            echo "install-user: word list not installed; run scripts/fetch-dictionary.sh rime-ice later" >&2
-        fi
-        # 205 entries of "words people write under the reading they actually use".
-        # Cheap, and it is the only typo tolerance libime cannot derive itself.
-        if ! SUPERIOR_PRESET="$preset" "$root/scripts/fetch-dictionary.sh" wanxiang-cuoyin; then
-            echo "install-user: 错音词表 not installed; run scripts/fetch-dictionary.sh wanxiang-cuoyin later" >&2
-        fi
-    else
-        echo "install-user: skipping the word list (needs curl and libime_pinyindict)"
-        echo "  install them, then run: scripts/fetch-dictionary.sh rime-ice"
-    fi
-fi
 
 # Fcitx5 replaces the compiled-in addon directory when this variable is set, so
 # the system directory must stay in the list or every stock addon disappears.
@@ -171,6 +165,11 @@ is applied automatically.
 
 The overlay starts itself when the agent loads; you can also run it by hand:
   ~/.local/bin/superior_ui            # wrapper -> ~/.local/share/superior-ime/bin/superior_ui
+
+The input method needs its schema data (26 MB download, compiled locally):
+  scripts/fetch-rime-data.sh
+Without it the entry still appears, but typing has no candidates and the log
+says why. There is only one entry: 「先！进！输入法」 (super-ime).
 
 Uninstall everything this script created:
   scripts/uninstall-user.sh
