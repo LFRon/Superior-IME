@@ -14,6 +14,7 @@
 #include <fcitx/text.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <cstdlib>
@@ -468,13 +469,22 @@ void SuperiorAgent::ensureOverlay() {
         std::vector<char *> argv{program.data(), nullptr};
         if (::posix_spawnp(&pid, program.c_str(), nullptr, nullptr, argv.data(), environ) == 0) {
             overlaySpawned_ = true;
-            // Reap the child so a short-lived overlay does not stay a zombie
-            // for the lifetime of Fcitx5.
-            std::thread([pid] {
-                int status = 0;
-                while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+            // Reap the child so a crashed overlay does not stay a zombie for the
+            // lifetime of Fcitx5.
+            //
+            // The reaper is joinable, not detached: Fcitx5 may unload this addon,
+            // and a detached thread executing code inside a dlclose'd library
+            // would crash. The destructor stops and joins it first.
+            reapers_.emplace_back([this, pid] {
+                while (!reaperStop_.load(std::memory_order_relaxed)) {
+                    int status = 0;
+                    const pid_t result = ::waitpid(pid, &status, WNOHANG);
+                    if (result != 0) {
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 }
-            }).detach();
+            });
             SUPERIOR_INFO(diag::categories::Fcitx5)
                 .field("binary", binary)
                 << "started the Superior overlay";
