@@ -27,7 +27,16 @@ struct Settings {
     /// hidden entry point cannot do that.
     bool speechRecognitionEnabled = true;
     /// Which catalogue model the capability should load and the panel offers.
-    std::string speechRecognitionModelId = "qwen3-asr-0.6b";
+    ///
+    /// Must stay in sync with the speech catalog's default entry (there is a test
+    /// for that): a model id that does not exist makes the panel highlight
+    /// nothing and the capability load nothing.
+    std::string speechRecognitionModelId = "paraformer-zh";
+    /// Version of the settings *file* this came from, or the current version for
+    /// an object that was never loaded. `saveSettings` always writes the current
+    /// version, so a one-time migration (the model default changed in v2) runs
+    /// exactly once and a deliberate choice afterwards survives.
+    int settingsVersion = 2;
     /// A bare tap of the right Ctrl key starts and stops dictation.
     ///
     /// On by default, like `shiftToggle`: a tap with no other key held has no

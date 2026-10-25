@@ -390,6 +390,86 @@ void testBackendAndPunctuationArgs() {
     }
 }
 
+/// The default has to be a model that exists *and* a backend the engine knows:
+/// the id is written into settings and the backend into the engine command line,
+/// so a typo in either one only shows up as "recognition returns nothing".
+void testCatalogDefault() {
+    CHECK(!modelCatalog().empty());
+    const ModelEntry &defaults = defaultModel();
+    CHECK(defaults.id == "paraformer-zh");
+    CHECK(defaults.backend == "paraformer");
+    // Non-autoregressive: one forward pass, no token loop. This is the reason it
+    // is the default on a laptop; FireRed stays available for accuracy.
+    CHECK(defaults.bytes > 0 && defaults.bytes < 300000000u);
+    CHECK(modelCatalog().size() >= 3);
+
+    // FireRed is still offered, just no longer first.
+    const ModelEntry *firered = findModel("firered-asr2-aed");
+    CHECK(firered != nullptr);
+    if (firered != nullptr) {
+        CHECK(firered->backend == "firered-asr");
+    }
+
+    // Ids are directory names: duplicates would make two entries share a file.
+    std::vector<std::string> ids;
+    for (const auto &entry : modelCatalog()) {
+        CHECK(!entry.id.empty());
+        CHECK(!entry.file.empty());
+        CHECK(entry.file.find('/') == std::string::npos);
+        CHECK(!entry.backend.empty());
+        for (const auto &seen : ids) {
+            CHECK(seen != entry.id);
+        }
+        ids.push_back(entry.id);
+    }
+}
+
+/// A stored model id is not always a model that exists any more.
+void testResolveStoredModel() {
+    // Nothing stored: the default.
+    CHECK(resolveStoredModel("", 2).id == "paraformer-zh");
+
+    // The v1 default, from a v1 file: migrated once, and flagged so it is logged.
+    const ModelChoice legacy = resolveStoredModel("firered-asr2-aed", 1);
+    CHECK(legacy.id == "paraformer-zh");
+    CHECK(legacy.migrated);
+
+    // The same id in a v2 file is a deliberate choice: keep it.
+    const ModelChoice chosen = resolveStoredModel("firered-asr2-aed", 2);
+    CHECK(chosen.id == "firered-asr2-aed");
+    CHECK(!chosen.migrated);
+
+    // A model that was dropped (Qwen3-ASR-0.6B) must not survive as a dead id.
+    const ModelChoice dropped = resolveStoredModel("qwen3-asr-0.6b", 2);
+    CHECK(dropped.id == "paraformer-zh");
+    CHECK(dropped.unknown);
+    CHECK(!dropped.migrated);
+}
+
+/// The non-autoregressive model must reach the engine with its own backend.
+void testParaformerBackendArgs() {
+    EngineConfig config;
+    config.enginePath = "/usr/bin/crispasr";
+    config.modelPath = "/models/paraformer-zh/paraformer-zh-q4_k.gguf";
+    config.backend = defaultModel().backend;
+    config.language = "zh";
+    std::string error;
+
+    const auto streamed = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(streamed.has_value());
+    if (streamed) {
+        CHECK(contains(streamed->args, "paraformer"));
+        CHECK(contains(streamed->args, "--stream"));
+        CHECK(contains(streamed->args, "/models/paraformer-zh/paraformer-zh-q4_k.gguf"));
+    }
+
+    const auto batch = buildEngineCommand(config, "/tmp/a.wav", error);
+    CHECK(batch.has_value());
+    if (batch) {
+        CHECK(contains(batch->args, "paraformer"));
+    }
+}
+
 /// Continuous dictation: a mid-sentence pause must not end the session, and the
 /// cap must be visible before it arrives.
 void testContinuousModeNeverEndsOnSilence() {
@@ -430,6 +510,9 @@ int main() {
     testContinuousModeNeverEndsOnSilence();
     testTranscriptCleaning();
     testBackendAndPunctuationArgs();
+    testCatalogDefault();
+    testResolveStoredModel();
+    testParaformerBackendArgs();
     testDefaultSourceRestoreRules();
     testLevelMath();
     testSilenceWatchEndsUtterance();

@@ -19,6 +19,10 @@ using Json = nlohmann::json;
 
 constexpr std::string_view kSchema = "superior.settings/1";
 
+/// Bumped when a stored value has to be reinterpreted. `schema` stays the same:
+/// the file layout did not change, only the meaning of one default.
+constexpr int kSettingsVersion = 2;
+
 std::string readText(const fs::path &path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -81,6 +85,9 @@ SettingsLoad loadSettings(const fs::path &path) {
                        document.value("voiceEnabled", settings.speechRecognitionEnabled));
     settings.speechRecognitionModelId =
         document.value("speechRecognitionModelId", settings.speechRecognitionModelId);
+    // Missing in every file written before v2 — those are exactly the files whose
+    // model default has to be migrated.
+    settings.settingsVersion = document.value("settingsVersion", 1);
     settings.speechRecognitionHotkey =
         document.value("speechRecognitionHotkey", settings.speechRecognitionHotkey);
     settings.logLevel = document.value("logLevel", settings.logLevel);
@@ -130,6 +137,7 @@ bool saveSettings(const fs::path &path, const Settings &settings, std::string &e
     document["uiScale"] = settings.uiScale;
     document["speechRecognitionEnabled"] = settings.speechRecognitionEnabled;
     document["speechRecognitionModelId"] = settings.speechRecognitionModelId;
+    document["settingsVersion"] = kSettingsVersion;
     document["speechRecognitionHotkey"] = settings.speechRecognitionHotkey;
     document["logLevel"] = settings.logLevel;
     document["cloudPinyinEnabled"] = settings.cloudPinyinEnabled;

@@ -520,9 +520,24 @@ void SuperiorAgent::reloadSettings() {
     const bool previousSpeech = speechRecognitionEnabled_;
     speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
     speechRecognitionHotkey_ = loaded.settings.speechRecognitionHotkey;
-    speechModelId_ = loaded.settings.speechRecognitionModelId.empty()
-                         ? std::string{"qwen3-asr-0.6b"}
-                         : loaded.settings.speechRecognitionModelId;
+    // A stored id can be stale (a model that was dropped, or the *old* default
+    // that the user never chose). Resolving it here keeps a dead id from turning
+    // into "nothing is selected" in the panel and "nothing loads" in the engine.
+    const auto choice = speech_recognition::resolveStoredModel(
+        loaded.settings.speechRecognitionModelId, loaded.settings.settingsVersion);
+    if (choice.unknown) {
+        SUPERIOR_WARN(diag::categories::SpeechRecognition)
+            .field("stored", loaded.settings.speechRecognitionModelId)
+            .field("using", choice.id)
+            << "stored speech model is not in the catalog";
+    }
+    if (choice.migrated) {
+        SUPERIOR_INFO(diag::categories::SpeechRecognition)
+            .field("from", loaded.settings.speechRecognitionModelId)
+            .field("to", choice.id)
+            << "migrated the speech model default";
+    }
+    speechModelId_ = choice.id;
     if (previousSpeech != speechRecognitionEnabled_) {
         SUPERIOR_INFO(diag::categories::SpeechRecognition)
             .field("enabled", speechRecognitionEnabled_)

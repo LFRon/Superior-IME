@@ -165,6 +165,35 @@ void testSettingsRejectsBadValues() {
     CHECK(loaded.warnings.size() == 2);
 }
 
+/// The file version decides whether the model default is migrated, so it has to
+/// survive a round trip and a v1 file has to be recognisable as v1.
+void testSettingsVersionStamps() {
+    TempTree tree;
+    const fs::path file = tree.root() / "config/superior-ime/settings.json";
+
+    // Written before v2: no `settingsVersion` at all, and it names the old default.
+    tree.write("config/superior-ime/settings.json",
+               R"({"schema":"superior.settings/1","speechRecognitionModelId":"firered-asr2-aed"})");
+    const auto legacy = superior::config::loadSettings(file);
+    CHECK(legacy.settings.settingsVersion == 1);
+    CHECK(legacy.settings.speechRecognitionModelId == "firered-asr2-aed");
+
+    // Saving stamps the current version, which is what makes the migration once-only.
+    std::string error;
+    CHECK(superior::config::saveSettings(file, legacy.settings, error));
+    const auto after = superior::config::loadSettings(file);
+    CHECK(after.settings.settingsVersion == 2);
+    // `dump(2)` pretty-prints, so the separator is ": " and not ":".
+    CHECK(tree.read("config/superior-ime/settings.json").find("\"settingsVersion\": 2") !=
+          std::string::npos);
+
+    // A fresh Settings object already claims the current version: a new install
+    // has nothing to migrate.
+    superior::config::Settings fresh;
+    CHECK(fresh.settingsVersion == 2);
+    CHECK(fresh.speechRecognitionModelId == "paraformer-zh");
+}
+
 void testSkinRootsPriority() {
     const auto roots = superior::config::skinRoots("/home/u/.local/share", {"/usr/share"});
     CHECK(roots.size() == 2);
@@ -182,6 +211,7 @@ int main() {
     testInspectState();
     testSettingsRoundTrip();
     testSettingsRejectsBadValues();
+    testSettingsVersionStamps();
     testSkinRootsPriority();
     return superior::test::finish("config tests");
 }
