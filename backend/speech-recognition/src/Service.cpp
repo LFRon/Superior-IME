@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <utility>
@@ -12,11 +13,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "superior/diagnostics/Log.hpp"
 #include "superior/speech_recognition/Capture.hpp"
 #include "superior/speech_recognition/Engine.hpp"
 #include "superior/speech_recognition/Layout.hpp"
 
 namespace superior::speech_recognition {
+
+namespace diag = ::superior::diagnostics;
 
 namespace {
 
@@ -47,6 +51,13 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
     // The tool exited (device busy, unplugged, killed). Say so: without this the
     // service would keep "recording" silence until the no-speech timeout.
     ended.store(true, std::memory_order_relaxed);
+}
+
+/// `SUPERIOR_KEEP_DEFAULT_SOURCE=1` leaves the desktop's audio policy alone:
+/// no pinning, no restore, exactly the behaviour before this was added.
+bool restoreDefaultSourceEnabled() {
+    const char *value = std::getenv("SUPERIOR_KEEP_DEFAULT_SOURCE");
+    return value == nullptr || std::strcmp(value, "1") != 0;
 }
 
 /// The recogniser's reasons are technical and English; the panel shows the
@@ -97,7 +108,21 @@ void Service::startCaptureThread() {
     lastLevelMs_ = 0;
     revoked_.store(false);
 
-    const CaptureCommand command = defaultCaptureCommand();
+    // Remember the user's own choice before the stream exists: the desktop
+    // re-elects the default input a couple of seconds after the stream closes,
+    // and only we know what it was. While a restore is still pending the value
+    // is kept instead of re-read, so a second sentence spoken inside that window
+    // does not adopt the flipped default as "the user's choice".
+    if (restoreDefaultAtMs_ == 0 || defaultSourceBefore_.empty()) {
+        defaultSourceBefore_ =
+            restoreDefaultSourceEnabled() ? defaultSourceName() : std::string{};
+    }
+    restoreDefaultAtMs_ = 0;
+
+    // Pinning the stream to that device keeps the *audio* on the right
+    // microphone even if the flip happens before this call.
+    const CaptureCommand command =
+        defaultCaptureCommand(restoreDefaultSourceEnabled() ? defaultSourceBefore_ : std::string{});
 
     int pipeFd[2] = {-1, -1};
     if (::pipe(pipeFd) != 0) {
@@ -190,6 +215,47 @@ void Service::stopCapture() {
         capturePid_ = -1;
     }
     capturing_ = false;
+    // The desktop flips the default ~2 s after the last stream closes, so the
+    // restore has to wait for it; doing it now would restore nothing.
+    if (!defaultSourceBefore_.empty()) {
+        // The flip happens 2.0–2.6 s after the stream closes, so the check opens
+        // just before that and keeps looking until it is well past due. A single
+        // check at a guessed instant was measured to miss it.
+        restoreDefaultAtMs_ = nowMs() + 1800;
+        restoreGiveUpAtMs_ = nowMs() + 6000;
+        lastRestoreCheckMs_ = 0;
+    }
+}
+
+void Service::pollDefaultSourceRestore(std::uint64_t nowMs) {
+    if (restoreDefaultAtMs_ == 0 || nowMs < restoreDefaultAtMs_) {
+        return;
+    }
+    if (capturing_) {
+        // A new utterance owns the microphone now; its own restore is queued.
+        restoreDefaultAtMs_ = 0;
+        return;
+    }
+    // `pactl` costs a few milliseconds, so it is not polled at command rate.
+    if (lastRestoreCheckMs_ != 0 && nowMs - lastRestoreCheckMs_ < 250) {
+        return;
+    }
+    lastRestoreCheckMs_ = nowMs;
+
+    const std::string current = defaultSourceName();
+    if (shouldRestoreDefaultSource(defaultSourceBefore_, current, availableSources())) {
+        restoreDefaultAtMs_ = 0;
+        if (setDefaultSource(defaultSourceBefore_)) {
+            SUPERIOR_INFO(diag::categories::SpeechRecognition)
+                .field("source", defaultSourceBefore_)
+                .field("was", current)
+                << "default input restored after recording";
+        }
+        return;
+    }
+    if (nowMs >= restoreGiveUpAtMs_) {
+        restoreDefaultAtMs_ = 0;
+    }
 }
 
 void Service::stop() {
@@ -252,6 +318,7 @@ void Service::cancel() {
 
 void Service::poll() {
     const std::uint64_t now = nowMs();
+    pollDefaultSourceRestore(now);
     if (capturing_) {
         double level = 0.0;
         {

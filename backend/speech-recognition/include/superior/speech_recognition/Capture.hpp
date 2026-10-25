@@ -18,12 +18,18 @@ struct CaptureCommand {
 };
 
 /// Picks `pw-record`, then `parec`, then `arecord`, whichever is installed.
-[[nodiscard]] CaptureCommand defaultCaptureCommand();
+/// `target` is honoured when the tool can name a device.
+[[nodiscard]] CaptureCommand defaultCaptureCommand(std::string_view target = {});
 
 /// Builds the argv for one named tool. Exposed so the argument contract can be
 /// tested without a sound server.
+///
+/// `target` pins the stream to one device. That matters because the desktop
+/// re-elects the default input in the middle of a session: without a target we
+/// would follow the flip and record from the wrong microphone.
 [[nodiscard]] CaptureCommand buildCaptureCommand(std::string_view tool, int rate = 16000,
-                                                 int channels = 1);
+                                                 int channels = 1,
+                                                 std::string_view target = {});
 
 /// True when at least one capture tool exists on PATH.
 [[nodiscard]] bool captureAvailable();
@@ -79,6 +85,34 @@ private:
     std::uint64_t voicedMs_ = 0;
     bool begun_ = false;
 };
+
+/// Name of the sound server's current default input, or an empty string when it
+/// cannot be read (no sound server, no `pactl`, a restricted sandbox).
+[[nodiscard]] std::string defaultSourceName();
+
+/// Names of every input the sound server currently offers.
+[[nodiscard]] std::vector<std::string> availableSources();
+
+/// Points the sound server's default input at `name`. False when the command
+/// failed, which is only ever logged.
+bool setDefaultSource(std::string_view name);
+
+/// Should the default input be put back after a recording?
+///
+/// WirePlumber re-elects the default input about two seconds after *any* capture
+/// stream ends: with the headset selected it has been observed flipping to the
+/// internal microphone and, with the internal microphone selected, flipping to
+/// the headset. It happens for `parec` and for `pw-record --target=…` alike, and
+/// it ignores `default.configured.audio.source`, so it is the desktop's policy,
+/// not our choice of device. Restoring the user's own selection afterwards is the
+/// only thing an input method can do about it.
+///
+/// The rules are deliberately conservative: nothing is restored unless the name
+/// is known, the device still exists, and the value actually changed. A user who
+/// switches device *during* a recording therefore keeps their new choice.
+[[nodiscard]] bool shouldRestoreDefaultSource(const std::string &remembered,
+                                              const std::string &current,
+                                              const std::vector<std::string> &available);
 
 /// Writes a mono 16-bit PCM buffer as a `.wav` file. Returns false on any I/O
 /// error; the caller reports it instead of feeding the engine a broken file.

@@ -49,6 +49,9 @@ private:
     void stopCapture();
     void startCaptureThread();
     void finishRecognition(std::uint64_t generation, std::vector<std::int16_t> audio);
+    /// Puts the sound server's default input back once the desktop's own
+    /// re-election has settled. See `shouldRestoreDefaultSource`.
+    void pollDefaultSourceRestore(std::uint64_t nowMs);
     void emitPhase(const std::string &phase);
 
     Emit emit_;
@@ -68,6 +71,13 @@ private:
     /// Ends the utterance when the user stops talking, so the panel does not
     /// require a second click after every sentence.
     SilenceWatch silence_;
+    /// Default input as it was when recording started, and when to put it back.
+    /// Restoring is scheduled rather than immediate because the desktop flips it
+    /// ~2 s after the stream closes, i.e. *after* we are done.
+    std::string defaultSourceBefore_;
+    std::uint64_t restoreDefaultAtMs_ = 0;
+    std::uint64_t restoreGiveUpAtMs_ = 0;
+    std::uint64_t lastRestoreCheckMs_ = 0;
 
     // Recognition
     bool workerBusy_ = false;

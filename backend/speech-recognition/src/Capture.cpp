@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "superior/speech_recognition/Capture.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -65,14 +67,19 @@ std::vector<std::string> splitCaptureLine(std::string_view line) {
 
 } // namespace
 
-CaptureCommand buildCaptureCommand(std::string_view tool, int rate, int channels) {
+CaptureCommand buildCaptureCommand(std::string_view tool, int rate, int channels,
+                                   std::string_view target) {
     const std::string rateText = std::to_string(rate);
     const std::string channelsText = std::to_string(channels);
     if (tool == "parec") {
         // PulseAudio; also works through pipewire-pulse.
-        return CaptureCommand{"parec",
-                              {"--format=s16le", "--rate=" + rateText,
-                               "--channels=" + channelsText, "--raw"}};
+        CaptureCommand command{"parec",
+                               {"--format=s16le", "--rate=" + rateText,
+                                "--channels=" + channelsText, "--raw"}};
+        if (!target.empty()) {
+            command.args.insert(command.args.begin(), "--device=" + std::string(target));
+        }
+        return command;
     }
     if (tool == "arecord") {
         // ALSA fallback, for machines without a sound server.
@@ -81,12 +88,16 @@ CaptureCommand buildCaptureCommand(std::string_view tool, int rate, int channels
                                channelsText}};
     }
     // PipeWire default. "-" means stdout, which pw-cat keeps headerless.
-    return CaptureCommand{"pw-record",
-                          {"--format=s16", "--rate=" + rateText, "--channels=" + channelsText,
-                           "-"}};
+    CaptureCommand command{"pw-record",
+                           {"--format=s16", "--rate=" + rateText, "--channels=" + channelsText,
+                            "-"}};
+    if (!target.empty()) {
+        command.args.insert(command.args.begin(), "--target=" + std::string(target));
+    }
+    return command;
 }
 
-CaptureCommand defaultCaptureCommand() {
+CaptureCommand defaultCaptureCommand(std::string_view target) {
     // A custom command keeps the capability testable and lets a user plug in a
     // different audio stack without rebuilding.
     if (const char *custom = std::getenv("SUPERIOR_CAPTURE_CMD");
@@ -100,11 +111,13 @@ CaptureCommand defaultCaptureCommand() {
         }
     }
     if (existsInPath("pw-record")) {
-        return buildCaptureCommand("pw-record");
+        return buildCaptureCommand("pw-record", 16000, 1, target);
     }
     if (existsInPath("parec")) {
-        return buildCaptureCommand("parec");
+        return buildCaptureCommand("parec", 16000, 1, target);
     }
+    // arecord wants an ALSA device name, which is not what the sound server
+    // reports, so it deliberately stays on the system default.
     return buildCaptureCommand("arecord");
 }
 
@@ -116,6 +129,89 @@ bool captureAvailable() {
         return true;
     }
     return existsInPath("pw-record") || existsInPath("parec") || existsInPath("arecord");
+}
+
+/// Runs a command and returns its first line of stdout, trimmed.
+///
+/// `pactl` is the one tool every sound server on Linux accepts (PipeWire keeps a
+/// pulse-compatible layer), it is what the desktop's own mixer uses, and the
+/// commands below are read-only. A machine without it simply has no default to
+/// restore, which the empty return value expresses.
+std::string runAndReadLine(const char *command) {
+    FILE *pipe = ::popen(command, "r");
+    if (pipe == nullptr) {
+        return {};
+    }
+    std::string line;
+    char buffer[256];
+    if (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        line = buffer;
+    }
+    ::pclose(pipe);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+        line.pop_back();
+    }
+    return line;
+}
+
+std::string defaultSourceName() {
+    std::string name = runAndReadLine("pactl get-default-source 2>/dev/null");
+    if (name.empty()) {
+        // Very old pulse servers predate `get-default-source`.
+        name = runAndReadLine("pactl info 2>/dev/null | sed -n 's/^Default Source: //p'");
+    }
+    return name;
+}
+
+std::vector<std::string> availableSources() {
+    // `short` output: index, name, driver, spec, state.
+    FILE *pipe = ::popen("pactl list short sources 2>/dev/null", "r");
+    std::vector<std::string> names;
+    if (pipe == nullptr) {
+        return names;
+    }
+    char buffer[1024];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        std::string line(buffer);
+        std::size_t pos = line.find('\t');
+        if (pos == std::string::npos) {
+            continue;
+        }
+        const std::size_t start = pos + 1;
+        const std::size_t end = line.find('\t', start);
+        if (end == std::string::npos) {
+            continue;
+        }
+        names.push_back(line.substr(start, end - start));
+    }
+    ::pclose(pipe);
+    return names;
+}
+
+bool setDefaultSource(std::string_view name) {
+    if (name.empty()) {
+        return false;
+    }
+    // Only ever called with a name that came from the sound server itself, so
+    // quoting is about spaces, not about escaping.
+    std::string command = "pactl set-default-source '";
+    for (const char ch : name) {
+        if (ch == '\'') {
+            command += "'\\''";
+        } else {
+            command.push_back(ch);
+        }
+    }
+    command += "' >/dev/null 2>&1";
+    return std::system(command.c_str()) == 0;
+}
+
+bool shouldRestoreDefaultSource(const std::string &remembered, const std::string &current,
+                                const std::vector<std::string> &available) {
+    if (remembered.empty() || remembered == current) {
+        return false;
+    }
+    return std::find(available.begin(), available.end(), remembered) != available.end();
 }
 
 double rmsLevel(const std::int16_t *samples, std::size_t count) noexcept {
