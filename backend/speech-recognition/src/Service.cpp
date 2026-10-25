@@ -49,6 +49,23 @@ void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
     ended.store(true, std::memory_order_relaxed);
 }
 
+/// The recogniser's reasons are technical and English; the panel shows the
+/// message verbatim, so the user-facing sentence is chosen here. The raw reason
+/// is logged, so a diagnosis never gets lost in translation.
+std::string describeEngineFailure(const std::string &reason) {
+    if (reason == "no speech recognized") {
+        // The common case: silence, or a microphone nobody spoke into.
+        return "没有听清，请再说一次";
+    }
+    if (reason == "the recogniser engine is not installed" || reason == "no recogniser engine") {
+        return "语音识别引擎未安装";
+    }
+    if (reason == "the recogniser engine failed") {
+        return "语音识别引擎出错";
+    }
+    return "语音识别失败，请重试";
+}
+
 } // namespace
 
 Service::Service(Emit emit) : emit_(std::move(emit)) {}
@@ -204,12 +221,12 @@ void Service::stop() {
             std::string error;
             const auto command = buildEngineCommand(config_, wav, error);
             if (!command) {
-                outcome.error = error;
+                outcome.error = describeEngineFailure(error);
             } else if (const auto text = runEngine(*command, error)) {
                 outcome.ok = true;
                 outcome.text = *text;
             } else {
-                outcome.error = error;
+                outcome.error = describeEngineFailure(error);
             }
         }
 

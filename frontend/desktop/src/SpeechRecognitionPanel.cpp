@@ -4,25 +4,30 @@
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QDir>
+#include <QFile>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QLabel>
+#include <QLocale>
 #include <QMouseEvent>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QPainter>
 #include <QPalette>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QStyledItemDelegate>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QUrl>
+
+#ifdef SUPERIOR_HAVE_QT_SVG
+#include <QSvgRenderer>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -65,9 +70,41 @@ QString styleFor(const SkinTheme &theme) {
                // The palette is set in applyPopupPalette() instead, where it
                // actually takes effect.
                "QComboBox::drop-down { border: none; width: 18px; }"
+               "QProgressBar { background: rgba(255,255,255,14); border: none;"
+               " border-radius: 6px; text-align: center; color: %1; font-size: 11px; }"
+               "QProgressBar::chunk { background: %3; border-radius: 5px; }"
                "QLabel { color: %1; background: transparent; }")
         .arg(theme.text.name(QColor::HexArgb), theme.comment.name(QColor::HexArgb),
              theme.selection.name(QColor::HexArgb), theme.selectionText.name(QColor::HexArgb));
+}
+
+/// Last resort when Qt was built without SVG: the same microphone the toolbar
+/// draws, plus a slash when listening is not possible.
+void paintFallbackMic(QPainter &painter, const QPointF &center, const QColor &color, bool available,
+                      bool active) {
+    const double bodyWidth = 12.0;
+    const double bodyHeight = 20.0;
+
+    painter.save();
+    painter.translate(center);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawRoundedRect(QRectF(-bodyWidth / 2.0, -bodyHeight / 2.0 - 2, bodyWidth, bodyHeight),
+                            bodyWidth / 2.0, bodyWidth / 2.0);
+
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap));
+    painter.drawArc(QRectF(-9, -6, 18, 16), 200 * 16, 140 * 16);
+    painter.drawLine(QPointF(0, 10), QPointF(0, 14));
+    painter.drawLine(QPointF(-4, 14), QPointF(4, 14));
+
+    if (!available) {
+        // Same slash as the Tabler icon, at the same angle.
+        painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(-10, -10), QPointF(10, 10));
+    }
+    painter.restore();
+    Q_UNUSED(active);
 }
 
 } // namespace
@@ -159,8 +196,6 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     model_->view()->installEventFilter(this);
     applyPopupPalette();
 
-    primary_ = new QPushButton(QStringLiteral("开始说话"), this);
-    primary_->setObjectName(QStringLiteral("primary"));
     discard_ = new QPushButton(QStringLiteral("丢弃"), this);
     close_ = new QPushButton(QStringLiteral("✕"), this);
     close_->setObjectName(QStringLiteral("close"));
@@ -171,23 +206,13 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
             command_(api::ToggleStatusItem{"speech"});
         }
     });
-    connect(primary_, &QPushButton::clicked, this, [this] {
-        if (!command_) {
-            return;
-        }
-        if (scene_.phase == api::SpeechPhase::Recording) {
-            command_(api::SpeechStop{session_, true});
-        } else {
-            command_(api::SpeechStart{session_, std::string{}, std::string{}});
-        }
-    });
     connect(discard_, &QPushButton::clicked, this, [this] {
         if (command_) {
             command_(api::SpeechCancel{session_});
         }
     });
     connect(model_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (index < 0 || reply_ != nullptr) {
+        if (index < 0 || downloader_.running()) {
             return;
         }
         const std::string id = model_->currentData().toString().toStdString();
@@ -197,11 +222,24 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
         saveModelChoice(id);
     });
     connect(download_, &QPushButton::clicked, this, [this] {
-        if (reply_ != nullptr) {
+        if (downloader_.running()) {
             cancelDownload();
         } else {
             beginDownload();
         }
+    });
+
+    // Hops back from the worker thread. The counters are only stored here; the
+    // bar is repainted by `progressTimer_`, so a fast mirror cannot turn into a
+    // repaint storm.
+    downloader_.setProgressHandler([this](qint64 received, qint64 total) {
+        received_ = received;
+        total_ = total;
+    });
+    downloader_.setFinishedHandler([this](ModelDownloader::Status status) {
+        downloaded_ = status == ModelDownloader::Status::Ok;
+        cancelled_ = status == ModelDownloader::Status::Cancelled;
+        finishDownload();
     });
 
     // Real layouts, not hand-computed geometry: a translated sentence wraps to a
@@ -210,7 +248,10 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     // when the positions were computed by hand.
     mic_ = new QWidget(this);
     mic_->setFixedHeight(kMicDiameter + 12);
-    mic_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // Deliberately *not* transparent to the mouse: the microphone replaced the
+    // "开始说话" button, so it must receive the click. The rest of the panel still
+    // drags the window; a button that also drags is a surprise, not a feature.
+    mic_->installEventFilter(this);
 
     auto *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
@@ -222,11 +263,13 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     setupRow->addWidget(model_, 1);
     setupRow->addWidget(download_, 0);
 
-    auto *actionRow = new QHBoxLayout();
-    actionRow->setContentsMargins(0, 0, 0, 0);
-    actionRow->addWidget(discard_, 0);
-    actionRow->addStretch(1);
-    actionRow->addWidget(primary_, 0);
+    progress_ = new QProgressBar(this);
+    progress_->setRange(0, 100);
+    progress_->setValue(0);
+    progress_->setTextVisible(true);
+    // Tall enough for the caption ("45% · 285 MiB / 602 MiB") to sit inside it.
+    progress_->setFixedHeight(18);
+    progress_->hide();
 
     root_ = new QVBoxLayout(this);
     root_->setContentsMargins(kMargin, 10, kMargin, kMargin);
@@ -236,7 +279,17 @@ SpeechRecognitionPanel::SpeechRecognitionPanel(QWidget *parent) : QWidget(parent
     root_->addWidget(message_);
     root_->addWidget(partial_);
     root_->addLayout(setupRow);
-    root_->addLayout(actionRow);
+    // Directly under the model choice: that is the row the progress belongs to.
+    root_->addWidget(progress_);
+    root_->addWidget(discard_, 0, Qt::AlignLeft);
+
+    progressTimer_ = new QTimer(this);
+    progressTimer_->setInterval(120);
+    connect(progressTimer_, &QTimer::timeout, this, [this] { updateDownloadProgress(); });
+
+    animationTimer_ = new QTimer(this);
+    animationTimer_->setInterval(16); // 60 fps
+    connect(animationTimer_, &QTimer::timeout, this, [this] { tickAnimation(); });
 
     setFixedWidth(speechPanelWidth(1.0));
     updateActions();
@@ -360,6 +413,27 @@ void SpeechRecognitionPanel::mouseDoubleClickEvent(QMouseEvent *event) {
 /// light even after the rows were fixed. It does not exist until the list is
 /// opened, hence a fix-up on every show rather than one in the constructor.
 bool SpeechRecognitionPanel::eventFilter(QObject *watched, QEvent *event) {
+    // The microphone is the button. Clicks are taken here instead of by the
+    // panel so they cannot start a window drag on the way.
+    if (mic_ != nullptr && watched == mic_) {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton && micActionable() &&
+                mic_->rect().contains(mouse->position().toPoint()) && command_) {
+                if (scene_.phase == api::SpeechPhase::Recording) {
+                    command_(api::SpeechStop{session_, true});
+                } else {
+                    command_(api::SpeechStart{session_, std::string{}, std::string{}});
+                }
+                return true;
+            }
+        }
+        if (event->type() == QEvent::MouseButtonPress) {
+            // Swallow the press as well, otherwise the panel would see it and
+            // treat a click on the microphone as the start of a drag.
+            return true;
+        }
+    }
     if (event->type() == QEvent::Show && model_ != nullptr && watched == model_->view()) {
         QWidget *popup = model_->view()->window();
         if (popup != nullptr && popup != this) {
@@ -443,6 +517,7 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
 
     if (!scene.visible) {
         pendingModelChoice_.reset();
+        stopAnimation();
         hide();
         return;
     }
@@ -450,7 +525,6 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     title_->setText(scene.modelName.empty()
                         ? QStringLiteral("语音输入")
                         : QStringLiteral("语音输入 · %1").arg(QString::fromStdString(scene.modelName)));
-    message_->setText(QString::fromStdString(scene.message));
     level_ = scene.phase == api::SpeechPhase::Recording ? scene.level : 0.0;
     // `partial` is the recogniser's draft: it may be revised downwards while the
     // user keeps talking, so it is replaced wholesale rather than appended.
@@ -465,7 +539,7 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
     }
     if (!scene.modelId.empty() && !pendingModelChoice_.has_value()) {
         const int index = model_->findData(QString::fromStdString(scene.modelId));
-        if (index >= 0 && index != model_->currentIndex() && reply_ == nullptr) {
+        if (index >= 0 && index != model_->currentIndex() && !downloader_.running()) {
             QSignalBlocker blocker(model_);
             model_->setCurrentIndex(index);
         }
@@ -473,6 +547,13 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
 
     updateActions();
     Q_UNUSED(wasSetup);
+    // The animation exists only while the microphone is live: an idle panel must
+    // not hold a 60 Hz timer.
+    if (scene.phase == api::SpeechPhase::Recording) {
+        startAnimation();
+    } else {
+        stopAnimation();
+    }
     relayout();
     update();
     if (!isVisible()) {
@@ -492,46 +573,60 @@ void SpeechRecognitionPanel::updateActions() {
     // button already visible.
     model_->setVisible(setup || scene_.phase == api::SpeechPhase::Ready);
     download_->setVisible(setup);
-    message_->setVisible(setup || scene_.phase == api::SpeechPhase::Failed ||
-                         !scene_.message.empty());
+    download_->setEnabled(true);
+    download_->setText(downloader_.running() ? QStringLiteral("取消下载") : QStringLiteral("下载模型"));
+    progress_->setVisible(downloader_.running());
+    message_->setVisible(!hintText().isEmpty());
+    message_->setText(hintText());
     partial_->setVisible(recording || transcribing);
 
-    switch (scene_.phase) {
-    case api::SpeechPhase::NeedsSetup:
-        // Requested behaviour: the big button stays disabled until the model is
-        // there; the download row below is the only action that can help.
-        primary_->setText(QStringLiteral("开始说话"));
-        primary_->setEnabled(false);
-        download_->setEnabled(true);
-        download_->setText(reply_ != nullptr ? QStringLiteral("取消下载")
-                                            : QStringLiteral("下载模型"));
-        break;
-    case api::SpeechPhase::Ready:
-        primary_->setText(QStringLiteral("开始说话"));
-        primary_->setEnabled(true);
-        break;
-    case api::SpeechPhase::Recording:
-        primary_->setText(QStringLiteral("✓ 完成"));
-        primary_->setEnabled(true);
-        break;
-    case api::SpeechPhase::Transcribing:
-        primary_->setText(QStringLiteral("识别中…"));
-        primary_->setEnabled(false);
-        break;
-    case api::SpeechPhase::Cancelling:
-        primary_->setText(QStringLiteral("正在取消…"));
-        primary_->setEnabled(false);
-        break;
-    case api::SpeechPhase::Failed:
-        primary_->setText(QStringLiteral("重试"));
-        primary_->setEnabled(true);
-        break;
-    case api::SpeechPhase::Hidden:
-        break;
+    // The microphone is the button. The cursor says so before the click does.
+    if (mic_ != nullptr) {
+        mic_->setCursor(micActionable() ? Qt::PointingHandCursor : Qt::ArrowCursor);
     }
-
     discard_->setVisible(recording || transcribing);
     discard_->setEnabled(recording || transcribing);
+}
+
+bool SpeechRecognitionPanel::micActionable() const {
+    switch (scene_.phase) {
+    case api::SpeechPhase::Ready:
+    case api::SpeechPhase::Failed:
+    case api::SpeechPhase::Recording:
+        // Recording counts: the same spot stops it. Everywhere else the toggle
+        // would either be a no-op or race the capability process.
+        return !downloader_.running();
+    case api::SpeechPhase::NeedsSetup:
+    case api::SpeechPhase::Transcribing:
+    case api::SpeechPhase::Cancelling:
+    case api::SpeechPhase::Hidden:
+        return false;
+    }
+    return false;
+}
+
+QString SpeechRecognitionPanel::hintText() const {
+    // The state machine writes the setup and failure sentences; the rest is pure
+    // presentation and stays here, so "which words does the panel use" has one
+    // answer per state.
+    if (!scene_.message.empty()) {
+        return QString::fromStdString(scene_.message);
+    }
+    switch (scene_.phase) {
+    case api::SpeechPhase::Ready:
+        return QStringLiteral("点击麦克风开始说话");
+    case api::SpeechPhase::Recording:
+        return QStringLiteral("正在聆听…再次点击麦克风结束");
+    case api::SpeechPhase::Transcribing:
+        return QStringLiteral("正在识别…");
+    case api::SpeechPhase::Cancelling:
+        return QStringLiteral("正在取消…");
+    case api::SpeechPhase::Failed:
+    case api::SpeechPhase::NeedsSetup:
+    case api::SpeechPhase::Hidden:
+        return {};
+    }
+    return {};
 }
 
 void SpeechRecognitionPanel::paintEvent(QPaintEvent *event) {
@@ -546,15 +641,12 @@ void SpeechRecognitionPanel::paintEvent(QPaintEvent *event) {
     painter.setPen(QPen(theme_.border, 1.0));
     painter.drawPath(path);
 
-    // Microphone: a filled capsule, an arc handle and a stem. Drawn instead of
-    // loaded so the panel needs no SVG dependency and stays crisp at any scale.
     const QRectF band = mic_ != nullptr ? QRectF(mic_->geometry()) : QRectF();
     const QPointF center(band.center());
-    const double bodyWidth = 12.0;
-    const double bodyHeight = 20.0;
     const bool active = scene_.phase == api::SpeechPhase::Recording;
+    const bool available = micActionable();
     QColor micColor = theme_.text;
-    if (setupPhase()) {
+    if (!available) {
         micColor = theme_.comment;
     } else if (active) {
         micColor = theme_.firstText;
@@ -563,42 +655,149 @@ void SpeechRecognitionPanel::paintEvent(QPaintEvent *event) {
     painter.save();
     painter.translate(center);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(micColor.red(), micColor.green(), micColor.blue(), active ? 46 : 28));
+    // While listening the disc brightens with the voice, which is what makes the
+    // animation read as "hearing you" rather than as a static badge.
+    const int discAlpha = active ? static_cast<int>(34 + 52 * smoothedLevel_) : 28;
+    painter.setBrush(QColor(micColor.red(), micColor.green(), micColor.blue(), discAlpha));
     painter.drawEllipse(QPointF(0, 0), kMicDiameter / 2.0, kMicDiameter / 2.0);
-
-    painter.setBrush(micColor);
-    painter.drawRoundedRect(QRectF(-bodyWidth / 2.0, -bodyHeight / 2.0 - 2, bodyWidth, bodyHeight),
-                            bodyWidth / 2.0, bodyWidth / 2.0);
-
-    painter.setBrush(Qt::NoBrush);
-    QPen pen(micColor, 2.0, Qt::SolidLine, Qt::RoundCap);
-    painter.setPen(pen);
-    painter.drawArc(QRectF(-9, -6, 18, 16), 200 * 16, 140 * 16);
-    painter.drawLine(QPointF(0, 10), QPointF(0, 14));
-    painter.drawLine(QPointF(-4, 14), QPointF(4, 14));
-
     painter.restore();
 
-    if (scene_.phase == api::SpeechPhase::Recording) {
-        // The ring is the only feedback that the microphone is actually being
-        // read, so its arc length tracks the measured level instead of being a
-        // decorative constant. A floor keeps it visible during quiet passages.
-        const double level = std::clamp(level_, 0.0, 1.0);
-        const double grow = 2.0 + 6.0 * level;
-        const QRectF ring(center.x() - kMicDiameter / 2.0 - grow,
-                          center.y() - kMicDiameter / 2.0 - grow, kMicDiameter + 2.0 * grow,
-                          kMicDiameter + 2.0 * grow);
-        const int span = static_cast<int>((30.0 + 300.0 * level) * 16);
+    // The microphone itself comes from the two SVGs the product ships
+    // (`microphone.svg`, and `tabler-microphone-off-outline.svg` for "cannot
+    // listen"). Drawing them here as well keeps the panel working on a Qt build
+    // without Qt6Svg, which is a supported configuration.
+    const int iconSize = static_cast<int>(kMicDiameter - 18);
+    const QPixmap icon = available
+                             ? iconPixmap(QStringLiteral(":/icons/microphone.svg"), micColor, iconSize)
+                             : iconPixmap(QStringLiteral(":/icons/tabler-microphone-off-outline.svg"),
+                                          micColor, iconSize);
+    if (!icon.isNull()) {
+        painter.drawPixmap(QPointF(center.x() - iconSize / 2.0, center.y() - iconSize / 2.0), icon);
+    } else {
+        paintFallbackMic(painter, center, micColor, available, active);
+    }
+
+    if (active) {
+        // Listening animation, three cheap layers:
+        //   1. a full track, so the ring exists even in complete silence;
+        //   2. a halo that breathes at a fixed cadence — life that does not
+        //      depend on the microphone, so the panel never looks frozen when the
+        //      room is quiet;
+        //   3. the level arc, smoothed (see tickAnimation) so it follows
+        //      syllables instead of flickering on every RMS sample.
+        const double radius = kMicDiameter / 2.0 + 7.0;
+        const double breath = 1.0 + 0.04 * std::sin(pulsePhase_);
+        const QRectF ring(center.x() - radius * breath, center.y() - radius * breath,
+                          radius * breath * 2.0, radius * breath * 2.0);
+
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(QColor(micColor.red(), micColor.green(), micColor.blue(), 60), 2.0));
+        QColor track = micColor;
+        track.setAlpha(46);
+        painter.setPen(QPen(track, 3.0, Qt::SolidLine, Qt::RoundCap));
         painter.drawEllipse(ring);
-        painter.setPen(QPen(theme_.firstText, 2.0));
-        painter.drawArc(ring, 90 * 16, span);
+
+        QColor halo = micColor;
+        halo.setAlpha(static_cast<int>(16 + 44 * smoothedLevel_));
+        painter.setPen(QPen(halo, 7.0, Qt::SolidLine, Qt::RoundCap));
+        painter.drawEllipse(ring);
+
+        // The arc is *only* the measured level: drawn from twelve o'clock
+        // clockwise. Below the threshold it is not painted at all — a rounded cap
+        // at 2 degrees reads as a stray dot on the ring, which is noise, not
+        // feedback. Silence still looks alive because the halo keeps breathing.
+        // Speech RMS sits around 0.02–0.25, so a linear arc would barely move at
+        // normal volume. The 0.6 power curve spreads that range over the whole
+        // ring, which is what makes the arc readable as loudness.
+        constexpr double kAudible = 0.02;
+        if (smoothedLevel_ > kAudible) {
+            const double span = 330.0 * std::pow(smoothedLevel_, 0.6);
+            QColor arc = theme_.firstText;
+            arc.setAlpha(235);
+            painter.setPen(QPen(arc, 3.0, Qt::SolidLine, Qt::RoundCap));
+            painter.drawArc(ring, 90 * 16, -static_cast<int>(span * 16));
+        }
+    }
+}
+
+QPixmap SpeechRecognitionPanel::iconPixmap(const QString &resource, const QColor &color, int size) {
+    if (size <= 0) {
+        return {};
+    }
+    const std::string key =
+        resource.toStdString() + '|' + color.name(QColor::HexArgb).toStdString() + '|' +
+        std::to_string(size);
+    if (const auto it = iconCache_.find(key); it != iconCache_.end()) {
+        return it->second;
+    }
+
+    QPixmap pixmap;
+#ifdef SUPERIOR_HAVE_QT_SVG
+    QSvgRenderer renderer(resource);
+    if (renderer.isValid()) {
+        // Tinted through a mask so the SVG's own `currentColor` never matters.
+        QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter paint(&image);
+        paint.setRenderHint(QPainter::Antialiasing, true);
+        renderer.render(&paint);
+        paint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        paint.fillRect(image.rect(), color);
+        paint.end();
+        pixmap = QPixmap::fromImage(image);
+    }
+#endif
+    iconCache_.emplace(key, pixmap);
+    return pixmap;
+}
+
+void SpeechRecognitionPanel::startAnimation() {
+    if (animationTimer_ == nullptr || animationTimer_->isActive()) {
+        return;
+    }
+    smoothedLevel_ = 0.0;
+    pulsePhase_ = 0.0;
+    animationTimer_->start();
+}
+
+void SpeechRecognitionPanel::stopAnimation() {
+    if (animationTimer_ == nullptr || !animationTimer_->isActive()) {
+        return;
+    }
+    animationTimer_->stop();
+    smoothedLevel_ = 0.0;
+    update();
+}
+
+void SpeechRecognitionPanel::tickAnimation() {
+    constexpr double kTwoPi = 6.28318530717958647692;
+    if (scene_.phase == api::SpeechPhase::Recording) {
+        // Attack is quick and release slow: the ring snaps to a syllable and eases
+        // back. A symmetric filter would either lag behind speech or flicker.
+        const double target = std::clamp(level_, 0.0, 1.0);
+        const double rate = target > smoothedLevel_ ? 0.42 : 0.09;
+        smoothedLevel_ += (target - smoothedLevel_) * rate;
+    } else {
+        smoothedLevel_ = 0.0;
+    }
+
+    // One revolution in 1.33 s: used as the breathing phase while recording and
+    // as the spinner angle while the recogniser works.
+    pulsePhase_ += kTwoPi * 0.75 / 60.0;
+    if (pulsePhase_ > kTwoPi) {
+        pulsePhase_ -= kTwoPi;
+    }
+
+    // Only the microphone area changes, so only that area is repainted. The whole
+    // panel at 60 Hz would be visible in the X server's CPU use for no reason.
+    if (mic_ != nullptr) {
+        update(mic_->geometry().adjusted(-18, -18, 18, 18));
+    } else {
+        update();
     }
 }
 
 void SpeechRecognitionPanel::beginDownload() {
-    if (reply_ != nullptr) {
+    if (downloader_.running()) {
         return;
     }
     const std::string id = model_->currentData().toString().toStdString();
@@ -615,76 +814,79 @@ void SpeechRecognitionPanel::beginDownload() {
     finalPath_ = QString::fromStdString(target.string());
     partPath_ = finalPath_ + QStringLiteral(".part");
     QFile::remove(partPath_);
-
-    const QString url = QStringLiteral("https://hf-mirror.com/%1/resolve/main/%2")
-                            .arg(QString::fromStdString(entry->repo),
-                                 QString::fromStdString(entry->file));
-    QNetworkRequest request{QUrl(url)};
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                         QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    network_ = new QNetworkAccessManager(this);
-    reply_ = network_->get(request);
+    downloadingId_ = entry->id;
     received_ = 0;
     total_ = 0;
-    downloadingId_ = entry->id;
 
-    connect(reply_, &QNetworkReply::readyRead, this, [this] {
-        if (reply_ == nullptr) {
-            return;
+    progress_->setRange(0, 0); // indeterminate until the size is known
+    progress_->setValue(0);
+    progress_->setFormat(QStringLiteral("%p%"));
+    progressTimer_->start();
+    // The transfer runs on a worker thread. See ModelDownload.hpp: Qt's TLS
+    // setup is synchronous inside `get()` and walks the CA directory, which took
+    // 40+ seconds here — long enough to look like a dead input method.
+    downloader_.start(QUrl(QStringLiteral("https://hf-mirror.com/%1/resolve/main/%2")
+                               .arg(QString::fromStdString(entry->repo),
+                                    QString::fromStdString(entry->file))),
+                      partPath_);
+    updateActions();
+    relayout();
+}
+
+void SpeechRecognitionPanel::updateDownloadProgress() {
+    if (!downloader_.running()) {
+        stopProgressTimer();
+        return;
+    }
+    if (total_ > 0) {
+        if (progress_->maximum() != 100) {
+            progress_->setRange(0, 100);
         }
-        const QByteArray chunk = reply_->readAll();
-        QFile file(partPath_);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Append)) {
-            file.write(chunk);
-        }
-        received_ += chunk.size();
-        if (total_ <= 0) {
-            total_ = reply_->header(QNetworkRequest::ContentLengthHeader).toLongLong();
-        }
-        message_->setText(total_ > 0
-                              ? QStringLiteral("正在下载模型… %1%")
-                                    .arg(static_cast<int>(received_ * 100 / total_))
-                              : QStringLiteral("正在下载模型…"));
-        updateActions();
-    });
-    connect(reply_, &QNetworkReply::downloadProgress, this,
-            [this](qint64 received, qint64 total) {
-                received_ = received;
-                total_ = total;
-            });
-    connect(reply_, &QNetworkReply::finished, this, [this] { finishDownload(); });
+        const int percent = static_cast<int>(received_ * 100 / total_);
+        progress_->setValue(percent);
+        progress_->setFormat(QStringLiteral("%1% · %2 / %3")
+                                 .arg(QString::number(percent),
+                                      QLocale().formattedDataSize(received_, 1),
+                                      QLocale().formattedDataSize(total_, 1)));
+    } else {
+        progress_->setRange(0, 0);
+    }
+}
+
+void SpeechRecognitionPanel::stopProgressTimer() {
+    progressTimer_->stop();
+    progress_->setRange(0, 100);
+    progress_->setValue(0);
 }
 
 void SpeechRecognitionPanel::cancelDownload() {
-    if (reply_ == nullptr) {
-        return;
-    }
-    reply_->abort();
+    downloader_.cancel();
 }
 
 void SpeechRecognitionPanel::finishDownload() {
-    if (reply_ == nullptr) {
+    stopProgressTimer();
+
+    if (cancelled_) {
+        QFile::remove(partPath_);
+        message_->setText(QStringLiteral("已取消下载"));
+        updateActions();
+        relayout();
         return;
     }
-    const QNetworkReply::NetworkError error = reply_->error();
-    const bool ok = error == QNetworkReply::NoError;
-    const bool cancelled = error == QNetworkReply::OperationCanceledError;
-    reply_->deleteLater();
-    reply_ = nullptr;
 
-    if (!ok) {
+    if (!downloaded_) {
         QFile::remove(partPath_);
-        message_->setText(cancelled ? QStringLiteral("已取消下载。")
-                                    : QStringLiteral("下载失败，请重试。"));
+        message_->setText(QStringLiteral("下载失败，请重试"));
         updateActions();
+        relayout();
         return;
     }
 
     QFile::remove(finalPath_);
     if (!QFile::rename(partPath_, finalPath_)) {
-        message_->setText(QStringLiteral("无法保存模型文件。"));
+        message_->setText(QStringLiteral("无法保存模型文件"));
         updateActions();
+        relayout();
         return;
     }
 
@@ -698,14 +900,16 @@ void SpeechRecognitionPanel::finishDownload() {
     if (check != speech_recognition::ModelFileCheck::Ok) {
         QFile::remove(finalPath_);
         message_->setText(check == speech_recognition::ModelFileCheck::TooSmall
-                              ? QStringLiteral("下载不完整，请重试。")
-                              : QStringLiteral("下载到的不是模型文件，请换个镜像重试。"));
+                              ? QStringLiteral("下载不完整，请重试")
+                              : QStringLiteral("下载到的不是模型文件，请换个镜像重试"));
         updateActions();
+        relayout();
         return;
     }
 
-    message_->setText(QStringLiteral("模型已就绪。"));
+    message_->setText(QStringLiteral("模型已就绪"));
     updateActions();
+    relayout();
     if (command_) {
         command_(api::SpeechReload{});
     }

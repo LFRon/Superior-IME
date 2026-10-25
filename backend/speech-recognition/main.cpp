@@ -79,7 +79,7 @@ int main() {
     if (!enginePresent()) {
         emitError("engine_missing", "没有找到语音识别引擎。");
     } else if (!customEngineConfigured() && !modelPresent(defaultModel().id)) {
-        emitError("model_missing", "还没有下载语音识别模型。");
+        emitError("model_missing", "还没有下载语音识别模型");
     } else {
         Event ready;
         ready.kind = Event::Kind::Ready;
@@ -126,7 +126,7 @@ int main() {
                     }
                     if (!customEngineConfigured() && !modelPresent(defaultModel().id) &&
                         config.modelPath.empty()) {
-                        emitError("model_missing", "还没有下载语音识别模型。");
+                        emitError("model_missing", "还没有下载语音识别模型");
                         break;
                     }
                     service.start();

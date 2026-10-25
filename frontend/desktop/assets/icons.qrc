@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file>microphone.svg</file>
+        <file>tabler-microphone-off-outline.svg</file>
+    </qresource>
+</RCC>

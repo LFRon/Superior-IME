@@ -11,11 +11,10 @@ namespace diag = ::superior::diagnostics;
 
 namespace {
 
-// Short and actionable. The privacy note ("audio never leaves the device") used
-// to be appended here; it is true, but it repeated on every panel opening and
-// pushed the actual next step out of the first glance.
-constexpr std::string_view kEngineMissing = "还没有安装语音识别引擎。";
-constexpr std::string_view kModelMissing = "还没有下载语音识别模型。";
+// Short and actionable, with no trailing full stop: these read as labels inside
+// the panel, not as sentences in a document.
+constexpr std::string_view kEngineMissing = "还没有安装语音识别引擎";
+constexpr std::string_view kModelMissing = "还没有下载语音识别模型";
 
 } // namespace
 
