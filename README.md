@@ -193,6 +193,57 @@ fcitx5-remote -e && fcitx5 -d
 `ToggleStatusItem{inline-mode}` 发给 agent，agent 校验后改状态并回一帧场景。
 浮层本身永远不持输入状态，也不抢焦点。
 
+### 组合文本（输入框）也是自己画的
+
+搜狗 Linux 版的输入框是它自己绘制的，所以拼音、下划线、光标都长在皮肤里。
+先！进！在 `super-ime` 上下文里做同样的事：
+
+| 环节 | 做法 |
+|---|---|
+| 让引擎把组合文本交给我们 | 取走 `CapabilityFlag::Preedit`，引擎于是写 `InputPanel::preedit` 而不是 `clientPreedit` |
+| 绘制 | 候选窗顶行：拼音 + 下划线 + 光标（`PreeditLayout.cpp`） |
+| 归还 | 切到别的输入法 / 浮层断开时把 capability 加回去，客户端恢复内联预编辑 |
+| 兜底 | 引擎仍只写 `clientPreedit` 时也照样显示（`PreeditSource.cpp`） |
+
+这就是「在 xterm 里皮肤正常、在 VSCode 里皮肤不一样」的根因：VSCode 自己渲染
+client preedit（用它的字体和颜色），我们的皮肤只能覆盖候选行。取走 capability 后
+两处完全一致。
+
+只移除 `Preedit` 一个 flag，归还时也只加回这一个 —— 不会覆盖别人在此期间改过的
+`Password` / `Disable`。
+
+### 候选窗
+
+每个候选带序号（`1. 你好`）。序号优先用引擎自己的 label（因此 ①②③ 之类的
+编号会保留），label 为空时用「位置 + 1」兜底；Fcitx5 只给了 label 没给文本时不会
+渲染成 `1. 1`。格式化逻辑是纯函数：`frontend/desktop/src/CandidateLabel.cpp`，
+单测 `tests/candidate_label_tests.cpp`。
+
+- **点击候选**上屏：UI 发 `ActivateCandidate{session, candidateId}`，agent 用
+  `candidateIndexFor` 把 id 换算成索引并**重新校验**（超出当前页就丢弃，不猜）。
+  过期的帧点了也不会选中别的词。
+- **滚轮翻页**：一格一页（`PageCandidates{delta}`），`hasNext`/`hasPrev` 为假时
+  不动，不循环。触摸板的小 delta 被忽略，否则一次手势会翻过好几页。
+- 悬停高亮来自点击热区的实测矩形，换了新场景就重置，不会高亮到别的词上。
+
+命令只在 `session` 属于**当前聚焦**的输入上下文时才执行，所以窗口失焦后到达的
+点击不会打到新窗口里。
+
+### 拖动与位置记忆
+
+状态栏只有**左侧的圆点**（拖动手柄）能拖：从「中」「全角标点」上按下永远只是点击，
+不会误拖动。手柄在悬停时会高亮，光标变成手形。
+
+松开鼠标时位置写入 `~/.config/superior-ime/statusbar.json`，下次启动直接还原：
+
+```json
+{ "schema": "superior.statusbar/1", "x": 600, "y": 395, "placement": "bottomRight" }
+```
+
+- 位置会被夹在屏幕可用区域内，多屏时按落点所在的屏幕计算；
+- 在设置页重新选「位置」会**丢弃**拖动坐标（文件同时删除），否则那次选择看起来没有效果；
+- 单独一个文件而不是塞进 `settings.json`：设置页写设置、浮层写坐标，互不覆盖。
+
 窗口位置与缩放的纯计算在 `frontend/desktop/src/LayoutRules.{hpp,cpp}`，
 单测见 `tests/layout_rules_tests.cpp`。
 

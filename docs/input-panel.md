@@ -81,6 +81,74 @@ if (instance_->inputMethod(ic) == "super-ime") {
 并夹在屏幕可用区域内。X11 下这是全局坐标；Wayland 原生客户端可能拿不到坐标，
 此时回退到右下角。状态栏始终固定在屏幕角落。
 
+## 组合文本由谁绘制
+
+皮肤要统一，组合文本（拼音那一行）就必须由我们画，而不是客户端画。Fcitx5 的
+约定是：引擎同时填两个字段，由 `CapabilityFlag::Preedit` 决定客户端会不会收到
+`clientPreedit`。
+
+```
+PinyinEngine::preedit()  ← fcitx5-pinyin/im/pinyin/pinyin.cpp
+  mode = ic->capabilityFlags().test(Preedit) ? config.preeditMode : No
+  ComposingPinyin → 只填 clientPreedit   ← 客户端画，字体颜色不受我们控制
+  No              → 只填 preedit        ← 我们画
+```
+
+所以同一个皮肤在 xterm（无 client preedit）和 VSCode（有 client preedit）里长得不一样：
+VSCode 用它的字体把 `ni hao` 画在编辑器里，我们的窗口只剩候选行。
+
+做法（`SuperiorAgent::takePreeditOwnership`）：
+
+1. 接管面板时取走当前上下文的 `Preedit` capability → 引擎改走 `No` 分支，
+   组合文本进 `InputPanel::preedit`；
+2. `CandidateWindow` 顶行绘制：正文、整行下划线、光标（`PreeditLayout.cpp`
+   按 UTF-8 边界切分）；
+3. 切到其他输入法、浮层断开、上下文销毁时 `releasePreeditOwnership`，
+   只把 `Preedit` 加回去；
+4. 引擎若仍只写 `clientPreedit`，`choosePreedit` 会兜底使用它，绝不让组合文本消失。
+
+归还时只加回 `Preedit` 而不是恢复整份快照：期间 `Password` / `Disable` 这类 flag
+可能被别人改过，整体覆盖会把预编辑泄漏到密码框。
+
+代价与边界：
+
+- 我们不支持 inline 组合的应用（多数终端、VSCode 等）现在统一由浮层显示，
+  这正是搜狗 Linux 版的行为；
+- 输入法切走时立刻恢复，Rime 等继续使用它们自己的 client preedit 行为；
+- 浮层没连上时（`server_.clientCount() == 0`）不接管 capability，用户仍能看到
+  客户端自己的预编辑。
+
+---
+
+## 候选窗交互
+
+候选窗是可点的，但每一次点击都会回到 agent 做校验：
+
+| 交互 | UI 侧 | agent 侧 |
+|---|---|---|
+| 点击候选 | `ActivateCandidate{session, candidateId}` | `candidateIndexFor(id, size)` → `candidate(index).select(ic)` |
+| 滚轮 | `PageCandidates{session, ±1}` | `toPageable()`；`hasNext`/`hasPrev` 后才 `next()`/`prev()` |
+| 悬停 | 本地高亮，不发命令 | — |
+
+两条硬规则：
+
+1. **id 不是索引**。场景里的 `candidateId` 是 `index + 1`，agent 用实时列表重新
+   换算；超出范围就丢弃并记日志。过期帧上的点击不会选中「现在正好在那个位置」的词。
+2. **session 必须属于当前聚焦的输入上下文**。`contextFor()` 同时校验 epoch 与
+   context id，窗口失焦后才到达的点击不会打进新窗口。
+
+`CandidateList::size()` 仍然是**当前页**的数量，所以 `candidateIndexFor` 只在本页
+内换算——翻页本身由 `PageCandidates` 完成，不靠 id 越界。
+
+### 候选序号
+
+渲染为 `1. 你好`。优先使用引擎给 `CandidateList::label(index)` 的值（所以 ①、
+a.、自定义编号都保留），仅在此值为空时用「位置 + 1」；引擎只给 label 不给 text 时
+不编号，避免出现 `1. 1`。格式化是纯函数，见
+`frontend/desktop/src/CandidateLabel.cpp`。
+
+---
+
 ## 内联英文模式（Shift 切换中英文）
 
 搜狗的 Shift 是**输入法内部**的中英文切换，不是切换输入法、也不是加载英文键盘

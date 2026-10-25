@@ -30,6 +30,9 @@ struct CandidateEntry {
 struct PanelFacts {
     std::string preedit;
     std::size_t preeditCursor = 0;
+    /// True when `preedit` came from the client preedit (engine only filled
+    /// that field). Observability only.
+    bool preeditFromClient = false;
     std::vector<TextRun> preeditRuns;
 
     std::vector<CandidateEntry> candidates;

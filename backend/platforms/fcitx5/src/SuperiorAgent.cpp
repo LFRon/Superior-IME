@@ -176,6 +176,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         fcitx::EventWatcherPhase::PostInputMethod, [this](fcitx::Event &event) {
             auto *inputContext = static_cast<fcitx::InputContextEvent &>(event).inputContext();
             inputContext->inputPanel().setCustomInputPanelCallback({});
+            releasePreeditOwnership(inputContext);
         }));
 
     handlers_.emplace_back(instance_->watchEvent(
@@ -209,6 +210,9 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             auto *inputContext = static_cast<fcitx::InputContextEvent &>(event).inputContext();
             SUPERIOR_DEBUG(diag::categories::Fcitx5) << "input context destroyed";
             inputContext->inputPanel().setCustomInputPanelCallback({});
+            // The context is going away; dropping the entry is enough, its
+            // capability flags die with it.
+            preeditOwnership_.erase(inputContext);
             shiftTaps_.erase(inputContext);
             if (activeContext_ == inputContext) {
                 activeContext_ = nullptr;
@@ -258,9 +262,19 @@ PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
     facts.cursorValid = inputContext->hasFocus();
 
     const auto &panel = inputContext->inputPanel();
-    const auto &preedit = panel.preedit();
-    facts.preedit = preedit.toString();
-    facts.preeditCursor = byteCursor(preedit);
+    // The composition row is drawn by us, but which field carries the text
+    // depends on the engine and on the client's capabilities: pinyin writes
+    // clientPreedit for "show actual pinyin" mode, which the application would
+    // render inline in its own style. Taking the panel preedit first and
+    // falling back to the client preedit keeps one look everywhere.
+    const auto &panelPreedit = panel.preedit();
+    const auto &clientPreedit = panel.clientPreedit();
+    const PreeditView preedit = choosePreedit(panelPreedit.toString(), byteCursor(panelPreedit),
+                                              clientPreedit.toString(),
+                                              byteCursor(clientPreedit));
+    facts.preedit = preedit.text;
+    facts.preeditCursor = preedit.cursor;
+    facts.preeditFromClient = preedit.fromClient;
 
     if (auto candidateList = panel.candidateList()) {
         const int size = candidateList->size();
@@ -316,6 +330,7 @@ PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
         .field("program", facts.program)
         .field("im", facts.inputMethod)
         .redacted("preedit", facts.preedit)
+        .field("preeditSource", facts.preeditFromClient ? "client" : "panel")
         .field("candidates", static_cast<std::uint64_t>(facts.candidates.size()))
         .field("pageSize", static_cast<std::int64_t>(facts.pageSize))
         .field("cursorIndex", static_cast<std::int64_t>(facts.cursorIndex))
@@ -446,6 +461,53 @@ void SuperiorAgent::ensureOverlay() {
         << "cannot start the overlay; run superior_ui manually or set SUPERIOR_UI_AUTOSTART=0";
 }
 
+void SuperiorAgent::takePreeditOwnership(fcitx::InputContext *inputContext) {
+    PreeditOwnership &state = preeditOwnership_[inputContext];
+    if (state.owned) {
+        return;
+    }
+    const auto flags = inputContext->capabilityFlags();
+    // Remember only whether the client could display preedit at all, so
+    // releasing restores exactly what the frontend announced instead of
+    // clobbering flags someone else changed in the meantime (Password, Disable).
+    state.clientShowedPreedit = flags.test(fcitx::CapabilityFlag::Preedit);
+    if (!state.clientShowedPreedit) {
+        // Nothing to take away: the client never drew inline preedit, so the
+        // engine already fills the panel preedit.
+        state.owned = true;
+        return;
+    }
+
+    // Dropping the capability makes engines put the composition into
+    // `InputPanel::preedit` (which we draw) instead of `clientPreedit` (which
+    // the application draws inline in its own font and colour). This is how the
+    // Sogou Linux build behaves, and it is why the panel looked different in
+    // VSCode: VSCode renders client preedit itself.
+    inputContext->setCapabilityFlags(flags.unset(fcitx::CapabilityFlag::Preedit));
+    state.owned = true;
+    SUPERIOR_INFO(diag::categories::Fcitx5)
+        .field("program", inputContext->program())
+        .field("im", instance_->inputMethod(inputContext))
+        << "drawing the composition ourselves; client preedit disabled for this context";
+}
+
+void SuperiorAgent::releasePreeditOwnership(fcitx::InputContext *inputContext) {
+    const auto it = preeditOwnership_.find(inputContext);
+    if (it == preeditOwnership_.end()) {
+        return;
+    }
+    if (it->second.owned && it->second.clientShowedPreedit) {
+        // Add the capability back rather than restoring a snapshot: other flags
+        // may have changed while we owned the panel.
+        inputContext->setCapabilityFlags(inputContext->capabilityFlags() |
+                                         fcitx::CapabilityFlag::Preedit);
+        SUPERIOR_INFO(diag::categories::Fcitx5)
+            .field("program", inputContext->program())
+            << "releasing the composition back to the client";
+    }
+    preeditOwnership_.erase(it);
+}
+
 void SuperiorAgent::syncPanelOwnership(fcitx::InputContext *inputContext) {
     if (instance_ == nullptr || inputContext == nullptr) {
         return;
@@ -453,15 +515,28 @@ void SuperiorAgent::syncPanelOwnership(fcitx::InputContext *inputContext) {
 
     const std::string inputMethod = instance_->inputMethod(inputContext);
     const bool ours = inputMethod == "super-ime";
-    if (!ours) {
-        return;
-    }
     const bool hasUi = server_.clientCount() > 0;
     auto &panel = inputContext->inputPanel();
 
-    if (ours && !hasUi) {
+    if (!ours) {
+        // Another input method took over this context: hand the composition
+        // back so Rime & friends keep their own client-side preedit.
+        releasePreeditOwnership(inputContext);
+        if (panel.customInputPanelCallback()) {
+            panel.setCustomInputPanelCallback({});
+            SUPERIOR_INFO(diag::categories::Fcitx5)
+                .field("program", inputContext->program())
+                .field("im", inputMethod)
+                << "releasing the input panel back to Fcitx5's UI";
+        }
+        return;
+    }
+
+    if (!hasUi) {
         // No overlay to draw for us: fall back to Classic UI instead of leaving
-        // the user with no candidates at all.
+        // the user with no candidates at all, and hand the composition back to
+        // the client so nothing disappears.
+        releasePreeditOwnership(inputContext);
         if (panel.customInputPanelCallback()) {
             panel.setCustomInputPanelCallback({});
             inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
@@ -469,27 +544,17 @@ void SuperiorAgent::syncPanelOwnership(fcitx::InputContext *inputContext) {
         return;
     }
 
-    if (ours) {
-        if (!panel.customInputPanelCallback()) {
-            // Replaces Classic UI for this context only. Fcitx5 still routes
-            // update batching through the same path, so the callback simply
-            // forwards the latest state to our UI process.
-            panel.setCustomInputPanelCallback(
-                [this](fcitx::InputContext *context) { refresh(context); });
-            SUPERIOR_INFO(diag::categories::Fcitx5)
-                .field("program", inputContext->program())
-                .field("im", inputMethod)
-                << "taking over the input panel for this context";
-        }
-        return;
-    }
-
-    if (panel.customInputPanelCallback()) {
-        panel.setCustomInputPanelCallback({});
+    takePreeditOwnership(inputContext);
+    if (!panel.customInputPanelCallback()) {
+        // Replaces Classic UI for this context only. Fcitx5 still routes
+        // update batching through the same path, so the callback simply
+        // forwards the latest state to our UI process.
+        panel.setCustomInputPanelCallback(
+            [this](fcitx::InputContext *context) { refresh(context); });
         SUPERIOR_INFO(diag::categories::Fcitx5)
             .field("program", inputContext->program())
             .field("im", inputMethod)
-            << "releasing the input panel back to Fcitx5's UI";
+            << "taking over the input panel for this context";
     }
 }
 

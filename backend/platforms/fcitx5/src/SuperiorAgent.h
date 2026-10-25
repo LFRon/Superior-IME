@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "superior/api/Commands.hpp"
@@ -85,6 +86,31 @@ private:
     void handleCommand(std::string bytes);
     /// Applies a validated semantic command from the UI.
     void applyCommand(const api::UiCommand &command);
+
+    /// Resolves the session a command claims to act on.
+    ///
+    /// Returns null unless the session belongs to the currently active input
+    /// context, so a click delivered after focus moved elsewhere cannot type
+    /// into the wrong application.
+    fcitx::InputContext *contextFor(const api::SessionKey &session);
+
+    /// Per-context composition ownership.
+    ///
+    /// Drawing the composition ourselves means the client must stop drawing it,
+    /// which is expressed through the `Preedit` capability: engines then fill
+    /// `InputPanel::preedit` instead of `clientPreedit`.
+    struct PreeditOwnership {
+        bool owned = false;
+        bool clientShowedPreedit = false;
+    };
+    void takePreeditOwnership(fcitx::InputContext *inputContext);
+    void releasePreeditOwnership(fcitx::InputContext *inputContext);
+
+    /// Commits the candidate the user clicked. The id is re-validated against
+    /// the live list, never trusted as an index.
+    void activateCandidate(const api::ActivateCandidate &command);
+    /// Pages the candidate list by one step (`+1` next, `-1` previous).
+    void pageCandidates(const api::PageCandidates &command);
     [[nodiscard]] PanelFacts collect(fcitx::InputContext *inputContext);
     core::ImeSession &sessionFor(fcitx::InputContext *inputContext);
     core::ImeSession *findSession(fcitx::InputContext *inputContext);
@@ -101,9 +127,11 @@ private:
     protocol::SceneServer server_;
     std::map<fcitx::InputContext *, std::unique_ptr<core::ImeSession>> sessions_;
     std::map<fcitx::InputContext *, ShiftTapDetector> shiftTaps_;
+    std::map<fcitx::InputContext *, PreeditOwnership> preeditOwnership_;
     bool overlaySpawned_ = false;
     bool settingsLoaded_ = false;
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;
+    std::unique_ptr<fcitx::EventSourceTime> startupTimer_;
     bool inlineEnglishEnabled_ = true;
     bool englishMode_ = false;
     std::string skinId_ = "org.superior.default";
@@ -112,6 +140,10 @@ private:
     std::filesystem::file_time_type settingsStamp_{};
     std::chrono::steady_clock::time_point lastOverlayAttempt_{};
     std::vector<std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>> handlers_;
+    /// Threads reaping spawned overlay processes. Joined in the destructor before
+    /// Fcitx5 may unload this addon.
+    std::vector<std::thread> reapers_;
+    std::atomic<bool> reaperStop_{false};
     api::Epoch epoch_ = 1;
     api::ContextId nextContext_ = 1;
     api::FrameId nextFrame_ = 1;
