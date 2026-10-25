@@ -42,6 +42,12 @@ struct ModelEntry {
     static const std::vector<ModelEntry> catalog = {
         // The default: light enough for a laptop that is also running a browser
         // and an IDE, and fast enough to keep up in real time.
+        //
+        // Upstream is Alibaba's `funasr/paraformer-zh` (Apache-2.0, ~220M,
+        // Mandarin + English): https://huggingface.co/funasr/paraformer-zh — it
+        // ships PyTorch weights only. `repo` below is its GGUF conversion for the
+        // crispasr `paraformer` backend, which is what we can actually load; that
+        // conversion carries the FunASR model licence (not Apache-2.0).
         {"paraformer-zh", "Paraformer-zh（推荐·中文·轻量）", "cstr/paraformer-zh-GGUF",
          "paraformer-zh-q4_k.gguf", 128687104, "", "paraformer", "zh,en"},
         {"firered-asr2-aed", "FireRedASR2-AED（高精度·中文）", "cstr/firered-asr2-aed-GGUF",
