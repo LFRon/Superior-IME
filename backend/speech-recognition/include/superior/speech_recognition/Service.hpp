@@ -130,6 +130,12 @@ private:
     std::atomic<std::uint64_t> capturedBytes_{0};
     /// Set by the reader thread when the recogniser's stdout reached EOF.
     std::atomic<bool> asrReaderDone_{false};
+    /// Asked by `reapStreamingRecogniser` so the reader thread can leave a
+    /// blocking `read()`. Without it a recogniser that dies while something else
+    /// still holds its stdout open kept the reader (and the whole command loop,
+    /// which joins it) blocked forever: the capability stayed alive but stopped
+    /// answering, which is indistinguishable from "the input method is dead".
+    std::atomic<bool> asrReaderStopping_{false};
     /// True between "stop requested" and "recogniser flushed".
     bool awaitingStreamingExit_ = false;
     /// Set when we killed the recogniser on purpose (cancel/shutdown). Its

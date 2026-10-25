@@ -644,6 +644,7 @@ bool Service::startStreamingRecogniser() {
     asrClosing_.store(false, std::memory_order_relaxed);
     asrProducedOutput_.store(false, std::memory_order_relaxed);
     asrReaderDone_.store(false, std::memory_order_relaxed);
+    asrReaderStopping_.store(false, std::memory_order_relaxed);
     asrKilledOnPurpose_.store(false, std::memory_order_relaxed);
     awaitingStreamingExit_ = false;
     asrThread_ = std::thread([this] { pumpRecogniser(); });
@@ -659,7 +660,18 @@ bool Service::startStreamingRecogniser() {
 void Service::pumpRecogniser() {
     std::string buffer;
     std::array<char, 4096> chunk{};
-    while (true) {
+    while (!asrReaderStopping_.load(std::memory_order_relaxed)) {
+        // Never block in `read()`: the fd stays readable only while the
+        // recogniser (or anything that inherited its stdout) is alive, and a
+        // blocking read there was able to freeze the whole process.
+        pollfd readable{asrReadFd_, POLLIN, 0};
+        const int ready = ::poll(&readable, 1, 100);
+        if (ready < 0 && errno != EINTR) {
+            break;
+        }
+        if (ready <= 0) {
+            continue;
+        }
         const ssize_t count = ::read(asrReadFd_, chunk.data(), chunk.size());
         if (count <= 0) {
             break;
@@ -704,12 +716,32 @@ void Service::reapStreamingRecogniser() {
         awaitingStreamingExit_ = false;
         return;
     }
+    // Tell the reader to leave its poll loop, then join: bounded by the 100 ms
+    // poll interval, never by the recogniser's lifetime.
+    asrReaderStopping_.store(true, std::memory_order_relaxed);
     if (asrThread_.joinable()) {
         asrThread_.join();
     }
     if (asrPid_ > 0) {
+        // Bounded too: `waitpid(…, 0)` would block on a recogniser that ignores
+        // SIGTERM, and this runs inside the command loop.
         int status = 0;
-        ::waitpid(asrPid_, &status, 0);
+        bool reaped = false;
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            const pid_t result = ::waitpid(asrPid_, &status, WNOHANG);
+            if (result == asrPid_) {
+                reaped = true;
+                break;
+            }
+            if (result < 0 && errno != EINTR) {
+                break;
+            }
+            ::usleep(50000); // 50 ms
+        }
+        if (!reaped) {
+            ::kill(asrPid_, SIGKILL);
+            ::waitpid(asrPid_, &status, WNOHANG);
+        }
         asrPid_ = -1;
         const bool cleanExit = WIFEXITED(status) && WEXITSTATUS(status) == 0;
         const bool killed = asrKilledOnPurpose_.load(std::memory_order_relaxed);
@@ -721,6 +753,9 @@ void Service::reapStreamingRecogniser() {
             emit_(event);
         }
     }
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("producedOutput", asrProducedOutput_.load(std::memory_order_relaxed))
+        << "streaming recogniser reaped";
     streaming_ = false;
     awaitingStreamingExit_ = false;
 }
