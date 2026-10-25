@@ -87,6 +87,16 @@ target_include_directories(superior_wheel_step_tests PRIVATE
 target_compile_features(superior_wheel_step_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_wheel_step_tests)
 
+add_executable(superior_status_mapping_tests
+    status_mapping_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/StatusGlyph.cpp")
+target_link_libraries(superior_status_mapping_tests PRIVATE Superior::Fcitx5Mapping)
+target_include_directories(superior_status_mapping_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_status_mapping_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_status_mapping_tests)
+
 add_executable(superior_status_bar_state_tests status_bar_state_tests.cpp)
 target_link_libraries(superior_status_bar_state_tests PRIVATE Superior::Config)
 target_include_directories(superior_status_bar_state_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -162,6 +172,7 @@ add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
 add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
 add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)
 add_test(NAME status-bar-state COMMAND superior_status_bar_state_tests)
+add_test(NAME status-mapping COMMAND superior_status_mapping_tests)
 add_test(NAME config COMMAND superior_config_tests)
 add_test(NAME inputmethod COMMAND superior_inputmethod_tests)
 add_test(NAME theme COMMAND superior_theme_tests)

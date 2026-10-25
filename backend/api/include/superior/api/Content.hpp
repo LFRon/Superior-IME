@@ -43,7 +43,18 @@ struct CandidatePage {
     bool hasNext = false;
 };
 
-/// One status-area control. `action` is a semantic action name (for example
+/// How a status item should be drawn.
+///
+/// The UI must not know platform action names, so the adapter maps them to a
+/// role here. `Punctuation` is the half/full-width punctuation toggle: it is
+/// drawn as a glyph (crescent = half width, filled circle = full width) instead
+/// of a word, which is how Sogou presents it.
+enum class StatusRole {
+    Text,
+    Punctuation,
+};
+
+/// One status-area control. `id` is a semantic action name (for example
 /// "toggle-mode"), never a pixel position.
 struct StatusItem {
     std::string id;
@@ -51,6 +62,8 @@ struct StatusItem {
     std::string icon;
     bool active = false;
     bool enabled = true;
+    /// Chosen by the adapter; `Text` is the safe default for an unknown role.
+    StatusRole role = StatusRole::Text;
 };
 
 } // namespace superior::api

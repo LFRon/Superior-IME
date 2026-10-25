@@ -17,6 +17,7 @@
 #include <cmath>
 
 #include "DragHandle.hpp"
+#include "StatusGlyph.hpp"
 #include "Overlay.hpp"
 
 namespace superior::ui {
@@ -36,6 +37,41 @@ QString itemText(const api::StatusItem &item) {
     }
     return QString::fromStdString(item.id);
 }
+
+/// A glyph cell is square-ish and fixed: the moon/circle must not resize the bar
+/// when the punctuation mode flips.
+constexpr int kGlyphCellWidth = 22;
+int itemWidth(const QFontMetrics &metrics, const api::StatusItem &item, double scale) {
+    if (glyphFor(item) != Glyph::None) {
+        return static_cast<int>(std::lround(static_cast<double>(kGlyphCellWidth) * scale));
+    }
+    return std::max(24, metrics.horizontalAdvance(itemText(item)) + 16);
+}
+
+/// Paints the punctuation glyph: crescent for half width, filled circle for
+/// full width.
+void paintGlyph(QPainter &painter, Glyph glyph, const QRect &cell, const QColor &color,
+                const QColor &background, double scale) {
+    painter.save();
+    painter.setPen(Qt::NoPen);
+
+    const double radius = 5.0 * scale;
+    const QPointF center(cell.center().x() + 0.5, cell.center().y() + 0.5);
+    const QRectF outer(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0);
+
+    painter.setBrush(color);
+    painter.drawEllipse(outer);
+    if (glyph == Glyph::Moon) {
+        // Crescent = circle minus an offset circle. The bite is painted in the
+        // bar's own colour instead of clearing to transparent: clearing would
+        // punch a hole through the skin background and show the window behind.
+        painter.setBrush(background);
+        painter.drawEllipse(outer.translated(radius * 0.62, 0.0));
+    }
+
+    painter.restore();
+}
+
 } // namespace
 
 StatusWindow::StatusWindow(QWidget *parent) : QWidget(parent) {
@@ -149,8 +185,7 @@ QSize StatusWindow::sizeHint() const {
         width += metrics.horizontalAdvance(mode_) + scaled(kBaseGap);
     }
     for (const auto &item : items_) {
-        width += std::max(scaled(24), metrics.horizontalAdvance(itemText(item)) + scaled(16)) +
-                 scaled(kBaseGap);
+        width += scaled(itemWidth(metrics, item, scale_)) + scaled(kBaseGap);
     }
     width += scaled(kBasePadding);
     return QSize(std::max(scaled(110), width), scaled(kBaseHeight));
@@ -210,12 +245,14 @@ void StatusWindow::paintEvent(QPaintEvent *event) {
 
     itemRects_.reserve(items_.size());
     for (const auto &item : items_) {
-        const int width =
-            std::max(scaled(24), metrics.horizontalAdvance(itemText(item)) + scaled(16));
+        const int width = scaled(itemWidth(metrics, item, scale_));
         const QRect cell(x, scaled(3), width, height() - scaled(6));
+        const Glyph glyph = glyphFor(item);
 
         QColor textColor = item.enabled ? theme_.text : QColor(120, 124, 130);
-        if (item.active) {
+        // A glyph item carries its state in the shape, so it must not also get
+        // the "active" chip behind it — the moon and the circle are the state.
+        if (item.active && glyph == Glyph::None) {
             textColor = theme_.firstText;
             QColor highlight = theme_.selection;
             highlight.setAlpha(90);
@@ -224,8 +261,12 @@ void StatusWindow::paintEvent(QPaintEvent *event) {
             painter.drawRoundedRect(cell, scaled(5), scaled(5));
         }
 
-        painter.setPen(textColor);
-        painter.drawText(cell, Qt::AlignCenter, itemText(item));
+        if (glyph != Glyph::None) {
+            paintGlyph(painter, glyph, cell, textColor, theme_.surface, scale_);
+        } else {
+            painter.setPen(textColor);
+            painter.drawText(cell, Qt::AlignCenter, itemText(item));
+        }
         itemRects_.push_back(cell);
         x += width + scaled(kBaseGap);
     }

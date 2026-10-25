@@ -11,6 +11,7 @@ add_executable(superior_ui
     src/PreeditLayout.cpp
     src/SceneClient.cpp
     src/SkinTheme.cpp
+    src/StatusGlyph.cpp
     src/StatusWindow.cpp
     src/WheelStep.cpp
     src/main.cpp)

@@ -173,12 +173,27 @@ api::StatusPlacement placementFrom(std::string_view name) {
     return api::StatusPlacement::BottomRight;
 }
 
+const char *statusRoleName(api::StatusRole role) {
+    switch (role) {
+    case api::StatusRole::Punctuation: return "punctuation";
+    case api::StatusRole::Text: break;
+    }
+    return "text";
+}
+
+api::StatusRole statusRoleFrom(std::string_view name) {
+    // Unknown roles degrade to text: a newer agent talking to an older UI must
+    // not make an item disappear or render as an empty box.
+    return name == "punctuation" ? api::StatusRole::Punctuation : api::StatusRole::Text;
+}
+
 Json statusItemJson(const api::StatusItem &item) {
     return Json{{"id", item.id},
                 {"label", item.label},
                 {"icon", item.icon},
                 {"active", item.active},
-                {"enabled", item.enabled}};
+                {"enabled", item.enabled},
+                {"role", statusRoleName(item.role)}};
 }
 
 api::StatusItem statusItemFrom(const Json &json) {
@@ -188,6 +203,7 @@ api::StatusItem statusItemFrom(const Json &json) {
     item.icon = json.value("icon", std::string{});
     item.active = json.value("active", false);
     item.enabled = json.value("enabled", true);
+    item.role = statusRoleFrom(json.value("role", std::string{"text"}));
     return item;
 }
 

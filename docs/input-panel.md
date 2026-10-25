@@ -149,6 +149,41 @@ a.、自定义编号都保留），仅在此值为空时用「位置 + 1」；�
 
 ---
 
+## 工具栏：图形化与可点击
+
+工具栏项来自 Fcitx5 的 `StatusArea`，但**不是照抄**：适配层把 action 名映射成语义
+角色（`backend/platforms/fcitx5/src/StatusMapping.cpp`），UI 只认角色，不认识
+Fcitx5 的 action 名。
+
+| action | 角色 | 呈现 |
+|---|---|---|
+| `punctuation` | `Punctuation` | 月牙（半角）/ 实心圆（全角） |
+| `pinyin-prediction` | 过滤 | 不显示 |
+| 其它 | `Text` | 原样显示 `shortText` |
+
+点击处理：UI 发 `ToggleStatusItem{id}` → agent 在 `StatusArea` 里按名查找 action →
+调用 `action->activate(ic)` → 请求 `StatusArea` 重绘并刷新场景。引擎状态从不被 UI
+直接改写，punctuation / fullwidth 的语义仍留在引擎里。
+
+### 状态从哪里读
+
+`punctuation` 的 `isChecked()` 恒为 false（它是 `ToggleAction`，但没有暴露 checked
+状态），真正的状态在图标名：
+`fcitx-punc-active`（全角）/ `fcitx-punc-inactive`（半角）。
+
+`statusIconIsOn()` 因此按**后缀**判断，且先判 `-inactive`：「inactive」本身包含
+「active」，子串搜索会把半角误判成全角，图标就永远不翻。
+
+### 为什么画图形
+
+「半角标点」4 个字和「全角标点」4 个字宽度不同（前者还更宽），每次切换整条工具栏
+都会跳一下。图形尺寸固定，切换时只换形状。
+
+月牙的绘制是「外圆减去向右偏移的内圆」，缺口用工具栏底色填，而不是
+`CompositionMode_Clear`——抠成透明会在皮肤上留一个洞，露出后面的窗口。
+
+---
+
 ## 内联英文模式（Shift 切换中英文）
 
 搜狗的 Shift 是**输入法内部**的中英文切换，不是切换输入法、也不是加载英文键盘

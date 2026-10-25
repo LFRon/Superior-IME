@@ -106,6 +106,12 @@ private:
     void takePreeditOwnership(fcitx::InputContext *inputContext);
     void releasePreeditOwnership(fcitx::InputContext *inputContext);
 
+    /// Activates a Fcitx5 status-area action by name (`punctuation`, …).
+    ///
+    /// The UI never mutates engine state: it names an action, the engine decides
+    /// what that means, exactly like a click in classicui's tray.
+    void activateStatusItem(const std::string &itemId);
+
     /// Commits the candidate the user clicked. The id is re-validated against
     /// the live list, never trusted as an index.
     void activateCandidate(const api::ActivateCandidate &command);

@@ -215,9 +215,28 @@ fcitx5-remote -e && fcitx5 -d
 | `statusPlacement` | `bottomRight` / `bottomLeft` / `topRight` / `topLeft` |
 | `shiftToggle` | 内联中英文切换总开关 |
 
-状态栏是可点击的：点「中/英」徽标切换中英文，动作以语义命令
-`ToggleStatusItem{inline-mode}` 发给 agent，agent 校验后改状态并回一帧场景。
-浮层本身永远不持输入状态，也不抢焦点。
+状态栏是可点击的。点击只发语义命令 `ToggleStatusItem{id}`，agent 找到 Fcitx5
+里同名的 action 并调用它——引擎状态仍由引擎决定，浮层永远不持输入状态，也不抢焦点。
+
+| 元素 | 含义 | 点击 |
+|---|---|---|
+| 圆点 | 拖动手柄，见下节 | 拖动 |
+| 中 / 英 | 内联中英文 | 切换中英文 |
+| 🌙 月牙 | 半角标点 | 切到全角 |
+| ● 实心圆 | 全角标点 | 切到半角 |
+
+标点项画成图形而不是「半角标点」四个字，原因有两个：字宽会随着切换变化，
+整条工具栏会跟着跳；而且这个状态本就适合用图形表达。形状由
+`StatusGlyph.cpp` 决定，`active`（全角）画实心圆，否则画月牙；月牙是「圆减去
+偏移的圆」，缺口用工具栏底色绘制而不是抠透明，否则会露出后面的窗口。
+
+状态来源要注意：`punctuation` 这个 action 的 `isChecked()` 永远是 false，真正
+的状态在它的图标名 `fcitx-punc-active` / `fcitx-punc-inactive` 里。所以
+`statusIconIsOn()` 先匹配 `-inactive` 再匹配 `-active`——「inactive」本身就包含
+「active」，只做子串搜索会把半角当成全角。
+
+引擎的 `pinyin-prediction`（预测开关）被过滤掉，不出现在工具栏：它是配置项，
+不是打字时要按的按钮。
 
 ### 组合文本（输入框）也是自己画的
 

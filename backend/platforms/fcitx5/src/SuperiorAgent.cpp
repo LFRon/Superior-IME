@@ -30,6 +30,8 @@
 #include "superior/fcitx5/PanelMapper.hpp"
 #include "superior/fcitx5/PreeditSource.hpp"
 #include "superior/fcitx5/PinyinAssets.hpp"
+#include "superior/fcitx5/ShiftTap.hpp"
+#include "superior/fcitx5/StatusMapping.hpp"
 #include "superior/protocol/Wire.hpp"
 
 #include <spawn.h>
@@ -333,11 +335,25 @@ PanelFacts SuperiorAgent::collect(fcitx::InputContext *inputContext) {
         if (action == nullptr || action->name().empty()) {
             continue;
         }
+        if (isStatusActionHidden(action->name())) {
+            // Engine configuration knobs are not toolbar buttons.
+            continue;
+        }
         api::StatusItem item;
         item.id = action->name();
         item.label = action->shortText(inputContext);
         item.icon = action->icon(inputContext);
-        item.active = action->isChecked(inputContext);
+        // `isChecked` is authoritative when an action reports it; otherwise an
+        // `-active`/`-inactive` icon pair carries the state (punctuation does
+        // exactly this, which is why the moon would never turn into a circle).
+        item.active = action->isChecked(inputContext) || statusIconIsOn(item.icon);
+        item.role = statusRoleFor(item.id);
+        SUPERIOR_TRACE(diag::categories::Fcitx5)
+            .field("id", item.id)
+            .field("active", item.active)
+            .field("icon", item.icon)
+            .redacted("label", item.label)
+            << "status action collected";
         facts.statusItems.push_back(std::move(item));
     }
 
@@ -805,9 +821,7 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, api::ToggleStatusItem>) {
             if (value.itemId != "inline-mode") {
-                SUPERIOR_DEBUG(diag::categories::Fcitx5)
-                    .field("item", value.itemId)
-                    << "status item click ignored";
+                activateStatusItem(value.itemId);
                 return;
             }
             if (!inlineEnglishEnabled_) {
@@ -839,6 +853,39 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
         }
     };
     std::visit(handle, command);
+}
+
+void SuperiorAgent::activateStatusItem(const std::string &itemId) {
+    auto *inputContext = activeContext_;
+    if (inputContext == nullptr) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("item", itemId)
+            << "status item click ignored: no active input context";
+        return;
+    }
+
+    // The click is a request, not a state change: find the engine's own action
+    // and let it decide. That keeps punctuation/fullwidth semantics in the
+    // engine instead of reimplementing them here.
+    for (auto *action : inputContext->statusArea().allActions()) {
+        if (action == nullptr || action->name() != itemId) {
+            continue;
+        }
+        SUPERIOR_INFO(diag::categories::Fcitx5)
+            .field("item", itemId)
+            .field("program", inputContext->program())
+            << "activating status action";
+        action->activate(inputContext);
+        // The action may have changed engine state that shows up in the panel
+        // or in the item's own label/checked state.
+        inputContext->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+        refresh(inputContext);
+        return;
+    }
+
+    SUPERIOR_DEBUG(diag::categories::Fcitx5)
+        .field("item", itemId)
+        << "status item click ignored: no such action in this context";
 }
 
 void SuperiorAgent::activateCandidate(const api::ActivateCandidate &command) {
