@@ -174,10 +174,27 @@ constexpr std::uint64_t kDraftDwellMs = 250;
 
 /// How much audio each streaming re-decode sees.
 ///
-/// This is the knob that trades latency for CPU: 2 s is responsive; under load
-/// 3 s costs a third less. Read per session, so a busy hour and an idle one
-/// behave differently without a restart.
+/// This is the knob that trades latency against CPU, and it is not a free knob:
+/// the streaming mode re-encodes the *whole* utterance on every step, so halving
+/// the step roughly doubles the work. Measured on a Ryzen 7 8845HS with
+/// FireRedASR2-AED q4_k (12 s of audio, 8 threads, CPU core-seconds):
+///
+///     2000 ms -> 83-88 s   (1.1x realtime: keeps up)
+///     1500 ms -> 85 s      (1.0x realtime: the edge)
+///     1000 ms -> 147 s     (0.65x realtime: falls behind, audio is lost)
+///
+/// Below ~1.5 s the decoder cannot keep up on this class of CPU, and falling
+/// behind is worse than a coarse step: the capture pipe fills, the sound server
+/// drops audio, and words disappear. The load bands below therefore bottom out at
+/// 1.5 s. `SUPERIOR_SPEECH_STEP_MS` forces a value for experiments (a GPU build or
+/// a smaller model can afford less).
 int streamingStepMs() {
+    if (const char *value = std::getenv("SUPERIOR_SPEECH_STEP_MS"); value != nullptr) {
+        const long parsed = std::atol(value);
+        if (parsed >= 200) {
+            return static_cast<int>(std::min<long>(parsed, 10000));
+        }
+    }
     double load = 0.0;
     if (std::FILE *file = std::fopen("/proc/loadavg", "r"); file != nullptr) {
         if (std::fscanf(file, "%lf", &load) != 1) {
@@ -186,7 +203,13 @@ int streamingStepMs() {
         std::fclose(file);
     }
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    return load > 0.7 * static_cast<double>(cores) ? 3000 : 2000;
+    if (load < 0.35 * static_cast<double>(cores)) {
+        return 1500;
+    }
+    // Only a machine that is really saturated gives up the 2 s cadence: 2000 ms
+    // is the measured "keeps up" value, and a coarser step is a bigger loss for
+    // the user than the extra load is.
+    return load < 0.9 * static_cast<double>(cores) ? 2000 : 3000;
 }
 
 /// The recogniser's reasons are technical and English; the panel shows the

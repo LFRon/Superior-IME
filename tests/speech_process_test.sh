@@ -25,12 +25,15 @@ start_process() {
     local capture="$1"
     local engine="$2"
     local stream_cmd="${3:-}"
+    local extra_env="${4:-}"
     current="$root/session-$(date +%s%N)"
     mkdir -p "$current"
     mkfifo "$current/in"
     if [[ -n "$stream_cmd" ]]; then
         # A short cadence keeps the suite fast; the default is 1000 ms.
-        SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
+        # shellcheck disable=SC2086 # `extra_env` is a deliberate list of assignments.
+        env $extra_env \
+            SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
             SUPERIOR_ASR_STREAM_CMD="$stream_cmd" SUPERIOR_SPEECH_COMMIT_MS=700 \
             "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
     else
@@ -254,6 +257,22 @@ grep -q '"ev":"error"' "$current/out" && fail "a revised draft must not be an er
 grep -q '"ev":"chunk".*一二三' "$current/out" || fail "chunk text missing after the revision"
 echo '{"cmd":"stop"}' >&3
 wait_for '"ev":"final"' || fail "the process did not survive a revised draft"
+stop_process
+
+# --- Scenario 8: the decode step honours SUPERIOR_SPEECH_STEP_MS -----------
+#
+# The step is the latency knob, and the wrong value is invisible: too small and
+# the decoder falls behind real time, too large and text appears in lumps. Making
+# it overridable is only useful if the override actually reaches the engine
+# command, which the startup log proves.
+start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 6"' \
+    'bash -c "echo 不该走批处理"' "$root/quiet-stream.sh" "SUPERIOR_SPEECH_STEP_MS=2500"
+wait_for '"ev":"ready"' || fail "no ready event (step override)"
+echo '{"cmd":"start"}' >&3
+sleep 0.6
+grep -q "stepMs=2500" "$current/err" || fail "SUPERIOR_SPEECH_STEP_MS was ignored"
+echo '{"cmd":"stop"}' >&3
+wait_for '"ev":"final"' || fail "no final event after stop (step override)"
 stop_process
 
 echo "speech process: ok"
