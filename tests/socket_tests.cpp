@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <poll.h>
 #include <sys/socket.h>
@@ -215,11 +218,128 @@ void testRefusesLiveSocket() {
     std::filesystem::remove(path);
 }
 
+/// The socket file is not the server: once somebody removes it, a server that
+/// keeps polling is unreachable, and only an explicit re-listen brings the
+/// panels back. This is the state Fcitx5 was left in when two agents raced.
+void testOwnsSocketFileFollowsThePath() {
+    const std::string path = uniquePath();
+    SceneServer server;
+    std::string error;
+    CHECK(server.listen(path, error));
+    CHECK(server.ownsSocketFile());
+
+    CHECK(std::filesystem::remove(path));
+    CHECK(!server.ownsSocketFile());
+    // Still polling; there is simply nobody who can reach it any more.
+    CHECK(server.listening());
+
+    // Re-listening is how the agent recovers, and it has to work without a
+    // restart: same object, same path, no lock of its own to fight.
+    CHECK(server.listen(path, error));
+    CHECK(error.empty());
+    CHECK(server.ownsSocketFile());
+
+    const int client = connectClient(path);
+    CHECK(client >= 0);
+    if (client >= 0) {
+        ::close(client);
+    }
+    server.close();
+    CHECK(!std::filesystem::exists(path));
+    std::filesystem::remove(path + ".lock");
+}
+
+/// Two agents start at the same moment during an Fcitx5 handover. The loser
+/// must fail instead of taking the socket file over, otherwise both report a
+/// working socket and whichever dies first pulls the path out from under the
+/// survivor.
+void testOwnershipLockSurvivesAStolenPath() {
+    const std::string path = uniquePath();
+    SceneServer first;
+    std::string error;
+    CHECK(first.listen(path, error));
+
+    // What the old racy code did: delete the live server's file behind its back.
+    CHECK(std::filesystem::remove(path));
+
+    SceneServer second;
+    std::string secondError;
+    CHECK(!second.listen(path, secondError));
+    CHECK(!secondError.empty());
+    CHECK(!second.ownsSocketFile());
+
+    // The owner can rebuild; the stranger still cannot.
+    CHECK(first.listen(path, error));
+    CHECK(first.ownsSocketFile());
+    CHECK(!second.listen(path, secondError));
+
+    first.close();
+    // A closed server releases the lock, so a handover works.
+    CHECK(second.listen(path, secondError));
+    CHECK(second.ownsSocketFile());
+    second.close();
+    std::filesystem::remove(path + ".lock");
+}
+
+/// Eight servers starting in the same millisecond, as happens when Fcitx5
+/// replaces another Fcitx5: exactly one may win, and it must be the one holding
+/// the path afterwards. Losing here is normal; losing *after* binding is what
+/// left a live but unreachable socket behind.
+void testConcurrentListenHasOneWinner() {
+    const std::string path = uniquePath();
+    constexpr int kRacers = 8;
+
+    std::vector<std::unique_ptr<SceneServer>> racers;
+    std::vector<std::string> errors(kRacers);
+    std::vector<bool> results(kRacers, false);
+    std::atomic<int> waiting{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kRacers);
+    for (int i = 0; i < kRacers; ++i) {
+        racers.push_back(std::make_unique<SceneServer>());
+        threads.emplace_back([&, i] {
+            waiting.fetch_add(1);
+            while (waiting.load() < kRacers) {
+                std::this_thread::yield();
+            }
+            results[i] = racers[i]->listen(path, errors[i]);
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    int winners = 0;
+    int owner = -1;
+    for (int i = 0; i < kRacers; ++i) {
+        if (results[i]) {
+            ++winners;
+            owner = i;
+        }
+    }
+    CHECK(winners == 1);
+    if (owner >= 0) {
+        CHECK(racers[owner]->ownsSocketFile());
+        const int client = connectClient(path);
+        CHECK(client >= 0);
+        if (client >= 0) {
+            ::close(client);
+        }
+    }
+    for (auto &racer : racers) {
+        racer->close();
+    }
+    std::filesystem::remove(path + ".lock");
+}
+
 int main() {
     testBroadcastToClient();
     testRecoversFromStaleSocketFile();
     testRefusesLiveSocket();
     testClientCommandReachesHandler();
     testRefusesNonSocketPath();
+    testOwnsSocketFileFollowsThePath();
+    testOwnershipLockSurvivesAStolenPath();
+    testConcurrentListenHasOneWinner();
     return superior::test::finish("socket tests");
 }

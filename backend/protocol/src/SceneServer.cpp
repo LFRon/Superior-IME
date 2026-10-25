@@ -17,6 +17,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -79,6 +80,7 @@ struct SceneServer::Impl {
     dev_t pathDevice = 0;
     ino_t pathInode = 0;
     int listenFd = -1;
+    int lockFd = -1;
     int wakeRead = -1;
     int wakeWrite = -1;
 
@@ -275,7 +277,24 @@ struct SceneServer::Impl {
         ready = false;
     }
 
-    void stop() {
+    /// Releases the ownership lock. Only the kernel-side lock matters here: the
+    /// file itself is left in place, an empty 0600 file in the runtime
+    /// directory that the next server reuses.
+    void releaseLock() {
+        closeFd(lockFd);
+    }
+
+    /// True while the socket file at `path` is still the one we bound.
+    [[nodiscard]] bool ownsPath() const {
+        if (path.empty()) {
+            return false;
+        }
+        struct stat status {};
+        return ::lstat(path.c_str(), &status) == 0 && S_ISSOCK(status.st_mode) &&
+               status.st_dev == pathDevice && status.st_ino == pathInode;
+    }
+
+    void stop(bool releaseOwnership = true) {
         if (!running.exchange(false)) {
             // Thread may not have started yet.
         }
@@ -307,6 +326,9 @@ struct SceneServer::Impl {
                 ::unlink(path.c_str());
             }
             path.clear();
+        }
+        if (releaseOwnership) {
+            releaseLock();
         }
     }
 };
@@ -348,44 +370,79 @@ bool socketIsServed(const std::string &path) {
 } // namespace
 
 bool SceneServer::listen(std::string socketPath, std::string &error) {
-    close();
-
     sockaddr_un address{};
+    address.sun_family = AF_UNIX;
     if (socketPath.size() + 1 >= sizeof(address.sun_path)) {
         error = "socket path is too long";
         return false;
     }
 
+    // Arbitration first, teardown second. Two agents do start at the same
+    // moment: `fcitx5 -r` brings the new process up while the old one is still
+    // unloading the addon. The probe below cannot see a server that has bound
+    // its file but not called listen() yet, so the loser used to remove the
+    // winner's file and bind a second socket: both reported success, the older
+    // one kept an inode nobody could reach, and the panels never came back.
+    // With the lock, the loser fails here and retries once the winner is gone.
+    const bool alreadyOwned = impl_->lockFd >= 0;
+    if (!alreadyOwned) {
+        const std::string lockPath = socketPath + ".lock";
+        // O_NOFOLLOW: the fallback path for a session without XDG_RUNTIME_DIR
+        // lives in /tmp, where a planted symlink must not redirect the lock.
+        const int lockFd =
+            ::open(lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (lockFd < 0) {
+            error = std::string("open(lock): ") + std::strerror(errno);
+            return false;
+        }
+        if (::flock(lockFd, LOCK_EX | LOCK_NB) != 0) {
+            const int saved = errno;
+            ::close(lockFd);
+            error = saved == EWOULDBLOCK
+                        ? "another Superior overlay server is already listening"
+                        : std::string("flock(): ") + std::strerror(saved);
+            return false;
+        }
+        impl_->lockFd = lockFd;
+    }
+
+    // The path is ours now, so the previous binding can go. `false` keeps the
+    // lock held: that is what lets a stolen or removed socket be rebuilt
+    // without ever reopening the window another agent could race into.
+    impl_->stop(false);
+
+    // A failed attempt serves nothing — the previous binding is already gone —
+    // so the lock goes back too. Holding it would keep the next agent out while
+    // this one has no socket to offer.
+    const auto fail = [&](std::string message) {
+        error = std::move(message);
+        impl_->releaseLock();
+        return false;
+    };
+
     struct stat status {};
     if (::lstat(socketPath.c_str(), &status) == 0) {
         if (!S_ISSOCK(status.st_mode)) {
-            error = "path exists and is not a socket: " + socketPath;
-            return false;
+            return fail("path exists and is not a socket: " + socketPath);
         }
-        // Only a *dead* socket may be removed. This used to unlink whatever was
-        // there, so a second overlay stole the first one's socket: the older
-        // server kept listening on an orphaned inode while clients connected to
-        // the new one, and neither side could tell.
+        // Only a *dead* socket may be removed: a listener we do not know about
+        // (another build, a simulator) is not ours to steal.
         if (socketIsServed(socketPath)) {
-            error = "another Superior overlay server is already listening";
-            return false;
+            return fail("another Superior overlay server is already listening");
         }
         ::unlink(socketPath.c_str());
     }
 
     const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        error = std::string("socket(): ") + std::strerror(errno);
-        return false;
+        return fail(std::string("socket(): ") + std::strerror(errno));
     }
     SocketGuard guard(fd);
 
     if (!setNonBlocking(fd)) {
-        error = "cannot make the listening socket non-blocking";
-        return false;
+        return fail("cannot make the listening socket non-blocking");
     }
 
-    address.sun_family = AF_UNIX;
     std::memcpy(address.sun_path, socketPath.c_str(), socketPath.size());
 
     if (::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
@@ -397,48 +454,49 @@ bool SceneServer::listen(std::string socketPath, std::string &error) {
         // worked, but every panel fell back to Fcitx5's classic UI, which looks
         // exactly like "the input method is broken".
         if (errno != EADDRINUSE) {
-            error = std::string("bind(): ") + std::strerror(errno);
-            return false;
+            return fail(std::string("bind(): ") + std::strerror(errno));
         }
         if (socketIsServed(socketPath)) {
-            error = "another Superior overlay server is already listening";
-            return false;
+            return fail("another Superior overlay server is already listening");
         }
         if (::unlink(socketPath.c_str()) != 0 && errno != ENOENT) {
-            error = std::string("unlink(stale socket): ") + std::strerror(errno);
-            return false;
+            return fail(std::string("unlink(stale socket): ") + std::strerror(errno));
         }
         SUPERIOR_WARN(diag::categories::Socket)
             .field("path", socketPath)
             << "removed a stale socket left by a previous instance";
         if (::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
-            error = std::string("bind(): ") + std::strerror(errno);
-            return false;
+            return fail(std::string("bind(): ") + std::strerror(errno));
         }
     }
-    if (::chmod(socketPath.c_str(), 0600) != 0) {
-        error = std::string("chmod(): ") + std::strerror(errno);
-        ::unlink(socketPath.c_str());
-        return false;
-    }
+
+    // `bind()` is what creates the file, and it refuses an existing path, so
+    // from here the socket on disk is ours. The inode is remembered for `stop()`
+    // and `ownsPath()`, which must not remove somebody else's file later.
     struct stat bound {};
     if (::lstat(socketPath.c_str(), &bound) != 0) {
-        error = std::string("lstat(): ") + std::strerror(errno);
+        const std::string message = std::string("lstat(): ") + std::strerror(errno);
         ::unlink(socketPath.c_str());
-        return false;
+        return fail(message);
+    }
+
+    if (::chmod(socketPath.c_str(), 0600) != 0) {
+        const std::string message = std::string("chmod(): ") + std::strerror(errno);
+        ::unlink(socketPath.c_str());
+        return fail(message);
     }
 
     if (::listen(fd, 4) != 0) {
-        error = std::string("listen(): ") + std::strerror(errno);
+        const std::string message = std::string("listen(): ") + std::strerror(errno);
         ::unlink(socketPath.c_str());
-        return false;
+        return fail(message);
     }
 
     int pipeFds[2] = {-1, -1};
     if (::pipe2(pipeFds, O_CLOEXEC | O_NONBLOCK) != 0) {
-        error = std::string("pipe2(): ") + std::strerror(errno);
+        const std::string message = std::string("pipe2(): ") + std::strerror(errno);
         ::unlink(socketPath.c_str());
-        return false;
+        return fail(message);
     }
 
     impl_->listenFd = guard.release();
@@ -505,6 +563,10 @@ std::string SceneServer::socketPath() const {
 
 bool SceneServer::listening() const {
     return impl_->listenFd >= 0;
+}
+
+bool SceneServer::ownsSocketFile() const {
+    return impl_->listenFd >= 0 && impl_->ownsPath();
 }
 
 } // namespace superior::protocol

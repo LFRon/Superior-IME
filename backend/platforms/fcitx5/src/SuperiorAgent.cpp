@@ -680,6 +680,24 @@ bool SuperiorAgent::reclaimStaleOverlay() {
 }
 
 void SuperiorAgent::ensureOverlay() {
+    // The overlay can only be reached through our socket. Rebuild it first when
+    // it is gone: another Fcitx5 replacing this one (`fcitx5 -r`) can remove the
+    // file, and respawning the UI against a dead socket just produced the
+    // "started the Superior overlay" / "stopped a stale overlay" loop with no
+    // panel in between.
+    if (!server_.ownsSocketFile()) {
+        std::string error;
+        if (!startSceneServer(protocol::SceneServer::defaultSocketPath(), error)) {
+            // Someone else owns the UI right now. Their agent spawns the
+            // overlay; taking it over here would fight it for the single
+            // instance lock on every focus change.
+            SUPERIOR_DEBUG(diag::categories::Fcitx5)
+                .field("error", error)
+                << "not touching the overlay while another agent owns the UI socket";
+            return;
+        }
+    }
+
     if (server_.clientCount() > 0) {
         overlaySpawned_ = true;
         return;
@@ -1559,13 +1577,16 @@ const superior::speech_recognition::ModelEntry &selectedModel(const std::string 
 } // namespace
 
 bool SuperiorAgent::startSceneServer(const std::string &socketPath, std::string &error) {
-    if (server_.clientCount() > 0 || overlayListening_) {
+    // Ask the server itself, never a cached flag: a flag stays true after the
+    // socket file has been removed or taken over, and then this returned success
+    // for the rest of the session while every panel waited forever for a frame
+    // that could not arrive.
+    if (server_.ownsSocketFile() && server_.socketPath() == socketPath) {
         return true;
     }
     if (!server_.listen(socketPath, error)) {
         return false;
     }
-    overlayListening_ = true;
     // The timer keeps rescheduling itself while it runs; dropping the handle on
     // the next tick is enough, and `reset()` here would delete a live source.
     socketRetryStop_ = true;

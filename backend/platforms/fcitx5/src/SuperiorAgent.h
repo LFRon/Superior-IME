@@ -278,8 +278,6 @@ private:
     std::uint64_t speechPhaseSinceMs_ = 0;
     /// Product switch: show the microphone in the toolbar at all.
     bool speechRecognitionEnabled_ = true;
-    /// True once the overlay socket is bound, so the retry timer can stop.
-    bool overlayListening_ = false;
     std::unique_ptr<fcitx::EventSourceTime> socketRetryTimer_;
     /// Set by `startSceneServer` so the retry callback can stop itself.
     bool socketRetryStop_ = false;

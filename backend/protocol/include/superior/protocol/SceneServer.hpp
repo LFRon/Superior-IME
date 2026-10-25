@@ -28,6 +28,12 @@ public:
     [[nodiscard]] static std::string defaultSocketPath();
 
     /// Binds and starts the poll thread. Refuses to replace a non-socket file.
+    ///
+    /// Ownership of the path is arbitrated with an exclusive lock on
+    /// `<socketPath>.lock`, so two processes that start at the same time cannot
+    /// both end up bound (one to the real path, one to an inode nobody can
+    /// reach). Call it again with the same path to rebuild a socket that was
+    /// stolen or removed underneath us.
     bool listen(std::string socketPath, std::string &error);
 
     void setCommandHandler(std::function<void(std::string)> handler);
@@ -40,6 +46,12 @@ public:
     [[nodiscard]] std::size_t clientCount() const;
     [[nodiscard]] std::string socketPath() const;
     [[nodiscard]] bool listening() const;
+
+    /// True while the socket file at `socketPath()` still belongs to this
+    /// server. A server can keep listening on a file somebody else unlinked —
+    /// then no client can ever reach it again, which looks like "the panel
+    /// stopped appearing" rather than like a socket problem.
+    [[nodiscard]] bool ownsSocketFile() const;
 
 private:
     struct Impl;
