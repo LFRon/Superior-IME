@@ -85,6 +85,33 @@ std::string SpeechProcess::resolveBinary() {
     return onPath.empty() ? std::string{} : onPath.string();
 }
 
+namespace {
+
+/// Where the recogniser's stderr goes: `<state>/superior-ime/speech-recognition.log`.
+///
+/// The capability process cannot log its own failures through our logger (its
+/// stderr is a plain pipe), and the engine writes its reasons to stderr, so this
+/// file is the only place a model-load failure can be read afterwards.
+std::string speechLogPath() {
+    const char *state = std::getenv("XDG_STATE_HOME");
+    std::filesystem::path root;
+    if (state != nullptr && state[0] != '\0') {
+        root = std::filesystem::path(state) / "superior-ime";
+    } else if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+        root = std::filesystem::path(home) / ".local" / "state" / "superior-ime";
+    } else {
+        return {};
+    }
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    if (error) {
+        return {};
+    }
+    return (root / "speech-recognition.log").string();
+}
+
+} // namespace
+
 bool SpeechProcess::start(LineHandler handler, std::string &error) {
     if (running()) {
         handler_ = std::move(handler);
@@ -108,8 +135,16 @@ bool SpeechProcess::start(LineHandler handler, std::string &error) {
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, inPipe[0], STDIN_FILENO);
     posix_spawn_file_actions_adddup2(&actions, outPipe[1], STDOUT_FILENO);
-    // The child's stderr would otherwise land in Fcitx5's log as if it were ours.
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    // The child's stderr goes to our own log file, not to Fcitx5's log and not to
+    // /dev/null. Swallowing it made a real model-load failure undebuggable: the
+    // panel said "check the log" and the log had nothing in it.
+    const std::string speechLog = speechLogPath();
+    if (!speechLog.empty()) {
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, speechLog.c_str(),
+                                         O_WRONLY | O_CREAT | O_APPEND, 0600);
+    } else {
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    }
     posix_spawn_file_actions_addclose(&actions, inPipe[1]);
     posix_spawn_file_actions_addclose(&actions, outPipe[0]);
 

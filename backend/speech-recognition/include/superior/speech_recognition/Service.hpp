@@ -122,6 +122,10 @@ private:
     std::atomic<bool> asrReaderDone_{false};
     /// True between "stop requested" and "recogniser flushed".
     bool awaitingStreamingExit_ = false;
+    /// Set when we killed the recogniser on purpose (cancel/shutdown). Its
+    /// non-zero exit is then expected: reporting "the engine returned nothing"
+    /// after a cancel showed a scary error for a deliberate action.
+    std::atomic<bool> asrKilledOnPurpose_{false};
 
     // Commit cadence for continuous dictation.
     /// Text already emitted as `chunk` for the current utterance.

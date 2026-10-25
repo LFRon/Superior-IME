@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include <poll.h>
@@ -26,8 +27,18 @@ namespace {
 
 using namespace superior::speech_recognition;
 
+/// Guards `stdout`.
+///
+/// Events are produced by the main loop *and* by the recogniser's reader thread.
+/// `std::FILE` keeps its own buffer lock, but two threads calling `fwrite` +
+/// `fflush` independently can interleave a line boundary, which corrupts the
+/// JSON-Lines stream — observed as a `final` arriving after `idle`, and as the
+/// agent rejecting a half-written line.
+std::mutex g_emitMutex;
+
 void emit(const Event &event) {
     const std::string line = encodeEvent(event) + "\n";
+    std::lock_guard<std::mutex> lock(g_emitMutex);
     std::fwrite(line.data(), 1, line.size(), stdout);
     std::fflush(stdout);
 }

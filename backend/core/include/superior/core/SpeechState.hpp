@@ -69,6 +69,9 @@ public:
     /// The capability came back to idle after a cancel.
     void idle();
 
+    /// Records a failure. Ignored while cancelling: the user asked to discard the
+    /// sentence, so "the engine returned nothing" would be an error about the
+    /// action they just took.
     void fail(std::string message);
 
     [[nodiscard]] api::SpeechPhase phase() const noexcept { return phase_; }

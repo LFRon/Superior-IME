@@ -189,6 +189,10 @@ private:
     void handleSpeechEvent(std::string_view line);
     /// Commits a finished transcript to the focused input context.
     void commitSpeechText(std::string_view text);
+    /// Called on focus loss while dictating: keep recording, stop typing.
+    void holdSpeechCommits();
+    /// Called on focus gain: type whatever was said while nothing was focused.
+    void flushHeldSpeech();
     /// Shows the in-flight transcript as preedit so the user sees words appear
     /// while speaking, and keeps the committed text untouched.
     void setSpeechPreedit(std::string_view text);
@@ -267,6 +271,10 @@ private:
     std::unique_ptr<fcitx::EventSourceTime> socketRetryTimer_;
     /// Set by `startSceneServer` so the retry callback can stop itself.
     bool socketRetryStop_ = false;
+    /// Text committed by the capability while no client was focused.
+    std::string heldSpeech_;
+    /// True while dictation continues with no destination for the text.
+    bool speechHolding_ = false;
     /// True while a speech draft is shown as preedit, so it is cleared exactly
     /// once and never left behind in the composition.
     bool speechPreeditActive_ = false;

@@ -171,6 +171,26 @@ void testChunksCommitWhileRecording() {
     CHECK(state.acceptChunk("不该上屏") == false);
 }
 
+/// A cancel is not a failure. The capability reports "the engine returned
+/// nothing" when it kills a recogniser, and showing that after the user pressed
+/// discard is an error message about their own action.
+void testCancelSilencesEngineErrors() {
+    SpeechState state;
+    state.show(true, true);
+    CHECK(state.beginRecording());
+    state.cancel();
+    state.fail("语音识别引擎没有返回结果，请检查日志");
+    CHECK(state.phase() == SpeechPhase::Cancelling);
+    CHECK(state.message().empty());
+    state.idle();
+    CHECK(state.phase() == SpeechPhase::Ready);
+
+    // A failure that is *not* a cancel still shows.
+    CHECK(state.beginRecording());
+    state.fail("麦克风不可用");
+    CHECK(state.phase() == SpeechPhase::Failed);
+}
+
 void testPhaseNamesAreStable() {
     CHECK(std::string(superior::api::speechPhaseName(SpeechPhase::NeedsSetup)) == "needs-setup");
     CHECK(std::string(superior::api::speechPhaseName(SpeechPhase::Recording)) == "recording");
@@ -188,6 +208,7 @@ int main() {
     testFailureCanRetry();
     testSceneCarriesSetupFacts();
     testChunksCommitWhileRecording();
+    testCancelSilencesEngineErrors();
     testPhaseNamesAreStable();
     return superior::test::finish("speech state tests");
 }

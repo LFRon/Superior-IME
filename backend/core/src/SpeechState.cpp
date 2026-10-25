@@ -185,6 +185,10 @@ void SpeechState::idle() {
 }
 
 void SpeechState::fail(std::string message) {
+    if (phase_ == api::SpeechPhase::Cancelling || phase_ == api::SpeechPhase::Hidden) {
+        // A cancel is not a failure, however the capability words it.
+        return;
+    }
     message_ = std::move(message);
     level_ = 0.0;
     partial_.clear();

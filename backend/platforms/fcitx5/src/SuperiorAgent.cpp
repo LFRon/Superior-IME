@@ -193,6 +193,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
                 return;
             }
             refresh(inputContext);
+            flushHeldSpeech();
         }));
 
     handlers_.emplace_back(instance_->watchEvent(
@@ -205,9 +206,13 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             if (!isOurs(inputContext)) {
                 return;
             }
-            // The transcript has no destination once the client is gone, and
-            // typing it into whatever gets focus next would be a surprise.
-            cancelSpeech("focus lost");
+            // Losing focus mid-utterance is normal — clicking the microphone, then
+            // the window you want the text in. Cancelling there threw away
+            // everything the user had just said (and used to show a bogus
+            // "the engine returned nothing" error on top). Instead the session
+            // keeps recording and the text is held until a client is focused
+            // again, so nothing is lost and nothing lands in the wrong place.
+            holdSpeechCommits();
             if (auto *session = findSession(inputContext)) {
                 session->hide();
                 broadcast(inputContext);
@@ -1621,6 +1626,8 @@ bool SuperiorAgent::startSpeech() {
         activeContext_->reset();
         activeContext_->inputPanel().reset();
     }
+    heldSpeech_.clear();
+    speechHolding_ = false;
     if (speech_.beginRecording()) {
         speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start));
     }
@@ -1661,6 +1668,8 @@ void SuperiorAgent::cancelSpeech(std::string_view reason) {
         return;
     }
     setSpeechPreedit({});
+    heldSpeech_.clear();
+    speechHolding_ = false;
     // The decision layer revokes the commit *first*: a `final` that is already
     // on the wire must not be typed after this point.
     speech_.cancel();
@@ -1792,8 +1801,41 @@ void SuperiorAgent::setSpeechPreedit(std::string_view text) {
     inputContext->updatePreedit();
 }
 
+void SuperiorAgent::holdSpeechCommits() {
+    if (!speech_.busy()) {
+        return;
+    }
+    // The draft cannot be drawn anywhere either; drop it and let the next chunk
+    // carry the text once a client is focused again.
+    setSpeechPreedit({});
+    speechHolding_ = true;
+    SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
+        .field("held", static_cast<std::int64_t>(heldSpeech_.size()))
+        << "no focused client; holding the transcript";
+}
+
+void SuperiorAgent::flushHeldSpeech() {
+    if (heldSpeech_.empty()) {
+        speechHolding_ = false;
+        return;
+    }
+    const std::string text = std::move(heldSpeech_);
+    heldSpeech_.clear();
+    speechHolding_ = false;
+    SUPERIOR_INFO(diag::categories::SpeechRecognition)
+        .field("chars", static_cast<std::int64_t>(text.size()))
+        << "flushing the transcript held while nothing was focused";
+    commitSpeechText(text);
+}
+
 void SuperiorAgent::commitSpeechText(std::string_view text) {
-    if (instance_ == nullptr || activeContext_ == nullptr || text.empty()) {
+    if (instance_ == nullptr || text.empty()) {
+        return;
+    }
+    if (activeContext_ == nullptr || speechHolding_) {
+        // Nowhere to type right now. Keep the words instead of losing them; the
+        // next focus-in flushes this buffer.
+        heldSpeech_ += text;
         return;
     }
     fcitx::InputContext *inputContext = activeContext_;

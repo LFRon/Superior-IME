@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <thread>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -503,6 +505,9 @@ bool Service::startStreamingRecogniser() {
     streaming_ = true;
     asrClosing_.store(false, std::memory_order_relaxed);
     asrProducedOutput_.store(false, std::memory_order_relaxed);
+    asrReaderDone_.store(false, std::memory_order_relaxed);
+    asrKilledOnPurpose_.store(false, std::memory_order_relaxed);
+    awaitingStreamingExit_ = false;
     asrThread_ = std::thread([this] { pumpRecogniser(); });
     SUPERIOR_INFO(diag::categories::SpeechRecognition)
         .field("pid", static_cast<std::int64_t>(pid))
@@ -568,7 +573,8 @@ void Service::reapStreamingRecogniser() {
         ::waitpid(asrPid_, &status, 0);
         asrPid_ = -1;
         const bool cleanExit = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-        if (!cleanExit || !asrProducedOutput_.load(std::memory_order_relaxed)) {
+        const bool killed = asrKilledOnPurpose_.load(std::memory_order_relaxed);
+        if (!killed && (!cleanExit || !asrProducedOutput_.load(std::memory_order_relaxed))) {
             Event event;
             event.kind = Event::Kind::Error;
             event.code = "recognition_failed";
@@ -661,6 +667,12 @@ void Service::pollDefaultSourceRestore(std::uint64_t nowMs) {
 }
 
 void Service::stop() {
+    if (awaitingStreamingExit_) {
+        // Already stopping: the recogniser is flushing its last segment, and the
+        // `final` that arrives from that flush must not be pre-empted by an
+        // `idle`. Emitting them out of order used to drop the last thing said.
+        return;
+    }
     if (!capturing_) {
         emitPhase("idle");
         return;
@@ -726,6 +738,7 @@ void Service::cancel() {
         // than flushed: its pending final is exactly what we do not want. Killing
         // also makes the reader hit EOF immediately, so this reap is fast.
         beginStreamingClose();
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
         if (asrPid_ > 0) {
             ::kill(asrPid_, SIGTERM);
         }
@@ -762,7 +775,7 @@ void Service::poll() {
 
         // `capturing_` is still true here, so this EOF came from the tool, not
         // from a stop we asked for.
-        if (captureEnded_.load(std::memory_order_relaxed)) {
+        if (captureEnded_.load(std::memory_order_relaxed) && !awaitingStreamingExit_) {
             // Bytes, not buffer size: streaming keeps no audio at all.
             const std::uint64_t captured = capturedBytes_.load(std::memory_order_relaxed);
             if (captured > 0) {
@@ -837,6 +850,7 @@ void Service::shutdown() {
     if (streaming_) {
         // Shutting down must not wait for a model to flush: kill it and reap.
         beginStreamingClose();
+        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
         if (asrPid_ > 0) {
             ::kill(asrPid_, SIGTERM);
         }
