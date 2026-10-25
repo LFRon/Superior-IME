@@ -5,6 +5,7 @@ add_library(superior_fcitx5_mapping STATIC
     src/PanelMapper.cpp
     src/PinyinAssets.cpp
     src/PreeditSource.cpp
+    src/RimeDict.cpp
     src/ShiftTap.cpp
     src/StatusMapping.cpp)
 

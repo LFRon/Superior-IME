@@ -111,6 +111,23 @@ std::vector<fs::path> libimeModelDirs() {
     return dirs;
 }
 
+/// Writes the whole buffer, retrying on partial writes. A short write here would
+/// quietly truncate the dictionary being imported.
+bool writeAll(int fd, std::string_view data) {
+    std::size_t written = 0;
+    while (written < data.size()) {
+        const ssize_t chunk = ::write(fd, data.data() + written, data.size() - written);
+        if (chunk <= 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        written += static_cast<std::size_t>(chunk);
+    }
+    return true;
+}
+
 std::string quoteForLog(const fs::path &path) {
     return path.string();
 }
@@ -208,7 +225,16 @@ public:
     TempFile(fs::path directory, std::string suffix) {
         std::error_code error;
         fs::create_directories(directory, error);
-        std::string pattern = (directory / ("superior-dict-XXXXXX" + suffix)).string();
+        // mkstemp requires the template to end in exactly six X's. Putting a
+        // suffix after them fails with EINVAL — which it did, silently breaking
+        // every import until the Rime path exercised it.
+        std::string stem = "superior-dict";
+        for (const char character : suffix) {
+            stem.push_back(std::isalnum(static_cast<unsigned char>(character)) != 0
+                               ? character
+                               : '-');
+        }
+        std::string pattern = (directory / (stem + "-XXXXXX")).string();
         std::vector<char> writable(pattern.begin(), pattern.end());
         writable.push_back('\0');
         fd_ = ::mkstemp(writable.data());
@@ -236,6 +262,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return fd_ >= 0; }
     [[nodiscard]] const fs::path &path() const noexcept { return path_; }
+    [[nodiscard]] int fd() const noexcept { return fd_; }
 
     /// mkstemp already created the file; the converter opens it by path.
     void closeFd() {
@@ -402,6 +429,121 @@ fs::path defaultImportTarget(const fs::path &scelFile, const DictionaryLayout &l
         return {};
     }
     return layout.userDictDirectory / (scelFile.stem().string() + ".dict");
+}
+
+ImportResult importTextDictionary(std::string_view text, std::string stem,
+                                   const ImportOptions &options) {
+    ImportResult result;
+
+    if (stem.empty() || stem.find('/') != std::string::npos ||
+        stem.find("..") != std::string::npos) {
+        // The stem becomes a file name; a separator would let a crafted input
+        // write outside the dictionary directory.
+        result.error = ImportError::BadName;
+        result.detail = "dictionary name must be a plain file name";
+        return result;
+    }
+
+    const DictionaryLayout layout = detectDictionaryLayout();
+    // The extra-dictionary directory is `pkgdata/pinyin/dictionaries`; the layout
+    // already resolved the user's `pkgdata` root for us.
+    const fs::path targetDirectory =
+        options.targetDirectory.empty() && !layout.pkgDataRoots.empty()
+            ? layout.pkgDataRoots.front() / "pinyin" / "dictionaries"
+            : options.targetDirectory;
+    if (targetDirectory.empty()) {
+        result.error = ImportError::TargetUnwritable;
+        result.detail = "cannot resolve the dictionary directory";
+        return result;
+    }
+
+    std::error_code error;
+    fs::create_directories(targetDirectory, error);
+    if (error) {
+        result.error = ImportError::TargetUnwritable;
+        result.detail = "cannot create '" + targetDirectory.string() + "': " + error.message();
+        return result;
+    }
+
+    const fs::path finalPath = targetDirectory / (stem + ".dict");
+    if (!options.overwrite && fs::exists(finalPath, error)) {
+        result.error = ImportError::TargetExists;
+        result.detail = finalPath.string() + " already exists; pass --overwrite";
+        return result;
+    }
+
+    if (text.empty()) {
+        result.error = ImportError::OutputEmpty;
+        result.detail = "converted text dictionary is empty";
+        return result;
+    }
+    if (text.size() > kMaxTextBytes) {
+        result.error = ImportError::OutputTooLarge;
+        result.detail = "converted text dictionary exceeds the size limit";
+        return result;
+    }
+    result.textBytes = text.size();
+
+    TempFile textFile(targetDirectory, ".txt");
+    if (!textFile.valid()) {
+        result.error = ImportError::TargetUnwritable;
+        result.detail = std::string("cannot create a temporary file: ") + std::strerror(errno);
+        return result;
+    }
+    if (!writeAll(textFile.fd(), text)) {
+        result.error = ImportError::TargetUnwritable;
+        result.detail = std::string("cannot write the text dictionary: ") + std::strerror(errno);
+        return result;
+    }
+    textFile.closeFd();
+
+    TempFile dictFile(targetDirectory, ".dict");
+    if (!dictFile.valid()) {
+        result.error = ImportError::TargetUnwritable;
+        result.detail = std::string("cannot create a temporary file: ") + std::strerror(errno);
+        return result;
+    }
+    dictFile.closeFd();
+
+    const std::vector<std::string> buildArgv{"libime_pinyindict", textFile.path().string(),
+                                             dictFile.path().string()};
+    const ToolRun build = runTool(buildArgv);
+    if (!build.started || build.exitCode != 0) {
+        result.error = ImportError::DictionaryBuildFailed;
+        result.detail = "libime_pinyindict failed";
+        if (!build.captured.empty()) {
+            result.detail += ": " + tail(build.captured, 512);
+        }
+        return result;
+    }
+
+    const auto dictBytes = fs::file_size(dictFile.path(), error);
+    if (error || dictBytes == 0) {
+        result.error = ImportError::OutputEmpty;
+        result.detail = "libime_pinyindict produced an empty dictionary";
+        return result;
+    }
+    if (dictBytes > kMaxDictBytes) {
+        result.error = ImportError::OutputTooLarge;
+        result.detail = "binary dictionary exceeds the size limit";
+        return result;
+    }
+    result.dictBytes = dictBytes;
+
+    fs::rename(dictFile.path(), finalPath, error);
+    if (error) {
+        result.error = ImportError::RenameFailed;
+        result.detail = "cannot move the dictionary into place: " + error.message();
+        return result;
+    }
+
+    result.output = finalPath;
+    result.converter = "libime_pinyindict";
+    SUPERIOR_INFO(diag::categories::Pinyin)
+        .field("dict", finalPath.string())
+        .field("bytes", static_cast<std::uint64_t>(dictBytes))
+        << "text dictionary imported";
+    return result;
 }
 
 ImportResult importSogouScel(const fs::path &scelFile, const ImportOptions &options) {

@@ -89,6 +89,10 @@ enum class ImportError {
     OutputEmpty,
     OutputTooLarge,
     RenameFailed,
+    /// A dictionary with that name already exists and `overwrite` is false.
+    TargetExists,
+    /// The requested name is empty or contains a path separator.
+    BadName,
 };
 
 struct ImportResult {
@@ -116,6 +120,14 @@ struct ImportResult {
 /// removed on every failure path.
 [[nodiscard]] ImportResult importSogouScel(const std::filesystem::path &scelFile,
                                            const ImportOptions &options = {});
+
+/// Compiles an already-converted text dictionary (one `词<TAB>pin'yin<TAB>weight`
+/// per line) into a libime binary dictionary under `<pkgdata>/pinyin/dictionaries`.
+///
+/// Shared by the Sogou path and the Rime path: the text format is libime's, so
+/// the conversion front-ends differ but the build step must not.
+[[nodiscard]] ImportResult importTextDictionary(std::string_view text, std::string stem,
+                                                const ImportOptions &options = {});
 
 /// Path that `importSogouScel` would write for a given input.
 [[nodiscard]] std::filesystem::path defaultImportTarget(const std::filesystem::path &scelFile,
