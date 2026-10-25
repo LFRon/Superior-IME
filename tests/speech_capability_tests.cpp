@@ -199,6 +199,9 @@ void testEngineCommandDefault() {
     EngineConfig config;
     config.enginePath = "/opt/crispasr";
     config.modelPath = "/models/qwen.gguf";
+    // An explicit backend wins; an *empty* one must come from the catalog rather
+    // than a hard-coded guess, which is what made a FireRed GGUF load as qwen3.
+    config.backend = "qwen3";
     config.threads = 6;
     config.language = "zh";
 
@@ -334,8 +337,63 @@ void testDefaultSourceRestoreRules() {
     CHECK(!shouldRestoreDefaultSource("gone", "alsa_input.mic", available));
 }
 
+/// The recogniser speaks in vocabulary artefacts; the document must not.
+void testTranscriptCleaning() {
+    // CTC silence token; the real FireRedASR2 decode of a silent clip returned
+    // exactly this, and it would have been typed into the editor.
+    CHECK(cleanTranscript("<sil>").empty());
+    CHECK(cleanTranscript("<sil> hello").empty() == false);
+    CHECK(cleanTranscript("<sil> hello") == "hello");
+    CHECK(cleanTranscript("你好 <sil> 世界") == "你好 世界");
+    CHECK(cleanTranscript("[noise] 测试") == "测试");
+    CHECK(cleanTranscript("  multiple   spaces  ") == "multiple spaces");
+    // Punctuation-only output says nothing.
+    CHECK(cleanTranscript("?").empty());
+    CHECK(cleanTranscript("。？！").empty());
+    CHECK(cleanTranscript("你好，世界。") == "你好，世界。");
+    CHECK(cleanTranscript("").empty());
+}
+
+/// Every model is loaded with its own backend, and punctuation is either ours or
+/// switched off — never auto-downloaded by the engine.
+void testBackendAndPunctuationArgs() {
+    EngineConfig config;
+    config.enginePath = "/usr/bin/crispasr";
+    config.modelPath = "/models/firered.gguf";
+    config.backend = "firered-asr";
+    std::string error;
+
+    const auto batch = buildEngineCommand(config, "/tmp/a.wav", error);
+    CHECK(batch.has_value());
+    if (batch) {
+        CHECK(contains(batch->args, "firered-asr"));
+        CHECK(contains(batch->args, "--punc-model"));
+        CHECK(contains(batch->args, "off"));
+    }
+
+    const auto streamed = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(streamed.has_value());
+    if (streamed) {
+        CHECK(contains(streamed->args, "firered-asr"));
+        CHECK(contains(streamed->args, "--stream-json"));
+        CHECK(contains(streamed->args, "--punc-model"));
+        CHECK(contains(streamed->args, "off"));
+    }
+
+    // A downloaded punctuation model is passed through by path.
+    config.puncPath = "/models/punctuation/fireredpunc-q4_k.gguf";
+    const auto withPunc = buildStreamingEngineCommand(config, error, 2000);
+    CHECK(withPunc.has_value());
+    if (withPunc) {
+        CHECK(contains(withPunc->args, "/models/punctuation/fireredpunc-q4_k.gguf"));
+        CHECK(!contains(withPunc->args, "off"));
+    }
+}
+
 int main() {
     testCaptureArgv();
+    testTranscriptCleaning();
+    testBackendAndPunctuationArgs();
     testDefaultSourceRestoreRules();
     testLevelMath();
     testSilenceWatchEndsUtterance();

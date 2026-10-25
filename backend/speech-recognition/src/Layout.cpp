@@ -102,6 +102,19 @@ fs::path modelPath(std::string_view id) {
     return root / entry->id / entry->file;
 }
 
+fs::path punctuationModelPath() {
+    const fs::path root = modelsRoot();
+    if (root.empty()) {
+        return {};
+    }
+    const fs::path candidate = root / "punctuation" / "fireredpunc-q4_k.gguf";
+    std::error_code error;
+    if (!fs::is_regular_file(candidate, error)) {
+        return {};
+    }
+    return candidate;
+}
+
 bool customEngineConfigured() {
     const char *custom = std::getenv("SUPERIOR_ASR_CMD");
     return custom != nullptr && custom[0] != '\0';

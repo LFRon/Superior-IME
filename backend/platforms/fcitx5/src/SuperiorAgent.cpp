@@ -1576,8 +1576,12 @@ void SuperiorAgent::configureSpeechProcess() {
     configure.kind = Command::Kind::Configure;
     configure.config.enginePath = resolveEngine();
     configure.config.modelPath = resolvedModel;
+    configure.config.backend = model.backend;
+    // Optional punctuation model: FireRedASR is a CTC model and emits no
+    // punctuation at all, so a downloaded FireRedPunc is used when present.
+    configure.config.puncPath = punctuationModelPath();
     configure.config.language = "zh";
-    configure.config.threads = 4;
+    configure.config.threads = 0; // 0 = let the capability size it to the machine
     speechProcess_->send(encodeCommand(configure));
 }
 

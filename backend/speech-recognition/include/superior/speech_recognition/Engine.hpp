@@ -51,6 +51,15 @@ struct EngineCommand {
 [[nodiscard]] std::optional<std::string> runEngine(const EngineCommand &command,
                                                    std::string &error);
 
+/// Cleans one recogniser transcript.
+///
+/// CTC backends emit special tokens literally — a silence-only decode came back
+/// as `<sil>` — and the same model can return a lone `?` once punctuation is
+/// restored. Either would be committed into the document as if the user had typed
+/// it, so they are removed here, at the boundary, for batch and streaming alike.
+/// Returns an empty string when nothing worth committing is left.
+[[nodiscard]] std::string cleanTranscript(std::string_view raw);
+
 /// Splits a command line on spaces, honouring double quotes.
 [[nodiscard]] std::vector<std::string> splitCommandLine(std::string_view line);
 

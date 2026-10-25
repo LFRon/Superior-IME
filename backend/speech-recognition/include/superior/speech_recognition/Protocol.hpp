@@ -11,6 +11,13 @@ namespace superior::speech_recognition {
 struct EngineConfig {
     std::string enginePath;
     std::string modelPath;
+    /// crispasr backend name for the selected model ("firered-asr", "qwen3"…).
+    /// It is part of the *model* description, not a user preference: a GGUF only
+    /// loads with the backend it was converted for.
+    std::string backend;
+    /// Optional punctuation model; CTC backends (FireRedASR) emit no punctuation
+    /// of their own.
+    std::string puncPath;
     std::string language = "zh";
     int threads = 4;
 };

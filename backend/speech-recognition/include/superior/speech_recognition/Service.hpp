@@ -89,6 +89,10 @@ private:
     /// Set when the session is closing: the recogniser's next `final` is the end
     /// of the utterance, not a segment to commit mid-flight.
     std::atomic<bool> asrClosing_{false};
+    /// Did the recogniser say anything at all? A model that fails to load exits
+    /// silently, and "no events" is the only signal we get; without this the panel
+    /// would go back to Ready as if the user had said nothing.
+    std::atomic<bool> asrProducedOutput_{false};
 
     /// Default input as it was when recording started, and when to put it back.
     /// Restoring is scheduled rather than immediate because the desktop flips it

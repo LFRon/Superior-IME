@@ -22,6 +22,13 @@ namespace superior::speech_recognition {
 /// `<dataRoot>/models/<id>/<file>`; empty when the id is unknown.
 [[nodiscard]] std::filesystem::path modelPath(std::string_view id);
 
+/// Optional punctuation model (`models/punctuation/fireredpunc-q4_k.gguf`).
+///
+/// Empty when it was not downloaded. It is never fetched automatically: a CTC
+/// recogniser works without punctuation, and a second surprise download is worse
+/// than a missing comma.
+[[nodiscard]] std::filesystem::path punctuationModelPath();
+
 /// True when `SUPERIOR_ASR_CMD` replaces the whole engine invocation.
 [[nodiscard]] bool customEngineConfigured();
 

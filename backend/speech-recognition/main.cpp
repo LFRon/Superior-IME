@@ -8,6 +8,7 @@
 // the input-method process is what makes a 600 MB decode harmless to typing.
 
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -47,6 +48,10 @@ EngineConfig defaults() {
     const ModelEntry &model = defaultModel();
     const std::filesystem::path path = modelPath(model.id);
     config.modelPath = path.string();
+    // The backend belongs to the model. Leaving it empty made the engine fall
+    // back to "qwen3" and load a FireRed GGUF with it, which fails with a wall of
+    // "required tensor … not found" instead of saying what is wrong.
+    config.backend = model.backend;
     return config;
 }
 
@@ -71,6 +76,11 @@ SilencePolicy policyFromEnvironment() {
 } // namespace
 
 int main() {
+    // Writing to a child's stdin is part of this program's job. If that child
+    // dies (model load failure, OOM kill), the next write must return EPIPE and
+    // be handled — not terminate us with SIGPIPE, which is what a default action
+    // does and how a broken recogniser took the whole capability down silently.
+    ::signal(SIGPIPE, SIG_IGN);
     Service service(emit);
     EngineConfig config = defaults();
     service.configure(config);

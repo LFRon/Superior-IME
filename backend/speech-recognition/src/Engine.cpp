@@ -70,7 +70,10 @@ std::optional<EngineCommand> buildEngineCommand(const EngineConfig &config,
         return std::nullopt;
     }
     const std::string threads = std::to_string(config.threads > 0 ? config.threads : 4);
-    const std::string backend = findModel({}) != nullptr ? defaultModel().backend : "qwen3";
+    // The model decides the backend; guessing "qwen3" for a FireRed GGUF would
+    // fail at load time with a message about tensors, not about the mix-up.
+    const std::string backend =
+        config.backend.empty() ? std::string(defaultModel().backend) : config.backend;
 
     if (const char *custom = std::getenv("SUPERIOR_ASR_CMD");
         custom != nullptr && custom[0] != '\0') {
@@ -100,11 +103,73 @@ std::optional<EngineCommand> buildEngineCommand(const EngineConfig &config,
     command.program = config.enginePath;
     command.args = {"--backend", backend, "-m", config.modelPath, "-f", wav.string(),
                     "-t", threads, "--no-timestamps"};
+    // Same `off` rule as the streaming form: never let the engine fetch a second
+    // model on its own.
+    command.args.push_back("--punc-model");
+    command.args.push_back(config.puncPath.empty() ? "off" : config.puncPath);
     if (!config.language.empty() && config.language != "auto") {
         command.args.push_back("-l");
         command.args.push_back(config.language);
     }
     return command;
+}
+
+std::string cleanTranscript(std::string_view raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (std::size_t index = 0; index < raw.size();) {
+        const char ch = raw[index];
+        // `<sil>`, `<unk>`, `<blank>`, `<s>`, `</s>` … anything in angle brackets
+        // is a vocabulary artefact, never dictated text.
+        if (ch == '<') {
+            const std::size_t close = raw.find('>', index);
+            if (close != std::string_view::npos && close - index <= 12) {
+                index = close + 1;
+                continue;
+            }
+        }
+        // `[sil]`, `[noise]` and friends use the same convention.
+        if (ch == '[') {
+            const std::size_t close = raw.find(']', index);
+            if (close != std::string_view::npos && close - index <= 12) {
+                index = close + 1;
+                continue;
+            }
+        }
+        out.push_back(ch);
+        ++index;
+    }
+
+    // Collapse the whitespace the removals leave behind.
+    std::string collapsed;
+    collapsed.reserve(out.size());
+    bool lastSpace = true;
+    for (const char ch : out) {
+        const bool space = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+        if (space) {
+            if (!lastSpace) {
+                collapsed.push_back(' ');
+            }
+            lastSpace = true;
+            continue;
+        }
+        collapsed.push_back(ch);
+        lastSpace = false;
+    }
+    while (!collapsed.empty() && collapsed.back() == ' ') {
+        collapsed.pop_back();
+    }
+    while (!collapsed.empty() && collapsed.front() == ' ') {
+        collapsed.erase(collapsed.begin());
+    }
+
+    // A result that is only punctuation says nothing: committing "?" into the
+    // user's document is worse than showing "没有听清".
+    const std::string_view punctuation = "?!.,;:。？！、，；：…～~\"'-";
+    if (collapsed.find_first_not_of(punctuation) == std::string::npos) {
+        return {};
+    }
+    return collapsed;
 }
 
 std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &config,
@@ -114,7 +179,8 @@ std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &con
         return std::nullopt;
     }
     const std::string threads = std::to_string(config.threads > 0 ? config.threads : 4);
-    const std::string backend = "qwen3";
+    const std::string backend =
+        config.backend.empty() ? std::string(defaultModel().backend) : config.backend;
 
     if (const char *custom = std::getenv("SUPERIOR_ASR_STREAM_CMD");
         custom != nullptr && custom[0] != '\0') {
@@ -146,6 +212,8 @@ std::optional<EngineCommand> buildStreamingEngineCommand(const EngineConfig &con
     command.args = {"--backend", backend, "-m", config.modelPath, "--stream", "--stream-json",
                     "-t", threads, "--stream-step", std::to_string(stepMs),
                     "--stream-final-on-silence-ms", "800"};
+    command.args.push_back("--punc-model");
+    command.args.push_back(config.puncPath.empty() ? "off" : config.puncPath);
     if (!config.language.empty() && config.language != "auto") {
         command.args.push_back("-l");
         command.args.push_back(config.language);
@@ -213,7 +281,7 @@ std::optional<std::string> runEngine(const EngineCommand &command, std::string &
         return std::nullopt;
     }
 
-    const std::string text = trimmed(output);
+    const std::string text = cleanTranscript(trimmed(output));
     if (text.empty()) {
         error = "no speech recognized";
         return std::nullopt;

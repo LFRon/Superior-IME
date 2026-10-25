@@ -264,6 +264,12 @@ bool Service::startStreamingRecogniser() {
     if (streaming.threads <= 0) {
         streaming.threads = autoThreads();
     }
+    if (streaming.puncPath.empty()) {
+        // Without this, a CTC backend silently downloads FireRedPunc into
+        // ~/.cache on first use. Our rule is that nothing is fetched behind the
+        // user's back; `off` keeps the CTC output as-is (no punctuation).
+        streaming.puncPath = "off";
+    }
     const int step = streamingStepMs();
     std::string error;
     const auto command = buildStreamingEngineCommand(streaming, error, step);
@@ -306,10 +312,9 @@ bool Service::startStreamingRecogniser() {
     if (pid == 0) {
         ::dup2(toChild[0], STDIN_FILENO);
         ::dup2(fromChild[1], STDOUT_FILENO);
-        const int devNull = ::open("/dev/null", O_WRONLY);
-        if (devNull >= 0) {
-            ::dup2(devNull, STDERR_FILENO);
-        }
+        // stderr stays connected on purpose: when a 900 MB model fails to load,
+        // the reason is the only thing that makes the failure diagnosable, and
+        // silencing it once cost an hour of guessing.
         ::close(toChild[0]);
         ::close(toChild[1]);
         ::close(fromChild[0]);
@@ -325,6 +330,7 @@ bool Service::startStreamingRecogniser() {
     asrReadFd_ = fromChild[0];
     streaming_ = true;
     asrClosing_.store(false, std::memory_order_relaxed);
+    asrProducedOutput_.store(false, std::memory_order_relaxed);
     asrThread_ = std::thread([this] { pumpRecogniser(); });
     SUPERIOR_INFO(diag::categories::SpeechRecognition)
         .field("pid", static_cast<std::int64_t>(pid))
@@ -352,6 +358,8 @@ void Service::pumpRecogniser() {
             if (!decodeStreamEvent(line, kind, text)) {
                 continue;
             }
+            asrProducedOutput_.store(true, std::memory_order_relaxed);
+            text = cleanTranscript(text);
             Event event;
             if (kind == "partial") {
                 if (text.empty()) {
@@ -360,9 +368,9 @@ void Service::pumpRecogniser() {
                 event.kind = Event::Kind::Partial;
                 event.text = text;
             } else if (kind == "final") {
-                if (text.empty()) {
-                    continue;
-                }
+                // An empty final is still news: it is how "I heard nothing"
+                // reaches the panel. Only *chunks* need text to be worth
+                // committing.
                 // A final while the session is still open is a *segment*: the
                 // user paused, so what was said so far becomes real text and the
                 // microphone keeps listening.
@@ -397,6 +405,14 @@ void Service::finishStreamingRecogniser() {
         int status = 0;
         ::waitpid(asrPid_, &status, 0);
         asrPid_ = -1;
+        const bool cleanExit = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        if (!cleanExit || !asrProducedOutput_.load(std::memory_order_relaxed)) {
+            Event event;
+            event.kind = Event::Kind::Error;
+            event.code = "recognition_failed";
+            event.message = "语音识别引擎没有返回结果，请检查日志";
+            emit_(event);
+        }
     }
     streaming_ = false;
 }

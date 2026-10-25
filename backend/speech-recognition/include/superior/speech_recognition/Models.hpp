@@ -11,6 +11,11 @@ namespace superior::speech_recognition {
 
 /// One downloadable recognition model.
 ///
+/// Picking between them is a *language* decision, not a size decision:
+/// FireRedASR2-AED is much better at Mandarin (and its dialects), Qwen3-ASR
+/// 1.7B at English. Both are marked accordingly in `displayName`, because the
+/// panel has no room for a second line of explanation.
+///
 /// The catalog is the single source of truth shared by the panel, the settings
 /// page and (later) the first-run guide: "what can be downloaded" must not be
 /// duplicated, or the downloader and the loader will disagree about file names.
@@ -28,10 +33,11 @@ struct ModelEntry {
 /// Ordered: the recommended model first.
 [[nodiscard]] inline const std::vector<ModelEntry> &modelCatalog() {
     static const std::vector<ModelEntry> catalog = {
-        {"qwen3-asr-0.6b", "Qwen3-ASR-0.6B（推荐）", "cstr/qwen3-asr-0.6b-GGUF",
-         "qwen3-asr-0.6b-q4_k.gguf", 631000000, "", "qwen3", "zh,en,…"},
-        {"qwen3-asr-1.7b", "Qwen3-ASR-1.7B（高精度）", "cstr/qwen3-asr-1.7b-GGUF",
-         "qwen3-asr-1.7b-q4_k.gguf", 1150000000, "", "qwen3", "zh,en,…"},
+        // Chinese first: it is the default and the reason this feature exists.
+        {"firered-asr2-aed", "FireRedASR2-AED（推荐·中文）", "cstr/firered-asr2-aed-GGUF",
+         "firered-asr2-aed-q4_k.gguf", 963000000, "", "firered-asr", "zh,en,粤语等"},
+        {"qwen3-asr-1.7b", "Qwen3-ASR-1.7B（推荐·英语）", "cstr/qwen3-asr-1.7b-GGUF",
+         "qwen3-asr-1.7b-q4_k.gguf", 1491000000, "", "qwen3", "en,zh,…"},
     };
     return catalog;
 }

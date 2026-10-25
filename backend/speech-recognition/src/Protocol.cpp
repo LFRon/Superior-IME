@@ -76,6 +76,8 @@ std::string encodeCommand(const Command &command) {
     if (command.kind == Command::Kind::Configure) {
         json["config"] = {{"engine", command.config.enginePath},
                           {"model", command.config.modelPath},
+                          {"backend", command.config.backend},
+                          {"punc", command.config.puncPath},
                           {"language", command.config.language},
                           {"threads", command.config.threads}};
     }
@@ -102,6 +104,8 @@ std::optional<Command> decodeCommand(std::string_view line) {
         const auto &config = json.at("config");
         command.config.enginePath = config.value("engine", std::string{});
         command.config.modelPath = config.value("model", std::string{});
+        command.config.backend = config.value("backend", std::string{});
+        command.config.puncPath = config.value("punc", std::string{});
         command.config.language = config.value("language", std::string{"zh"});
         command.config.threads = config.value("threads", 4);
     }
