@@ -1093,10 +1093,11 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         return;
     }
     if (state.insertIndex >= 0 && !slotHolds(state.insertIndex, state.text)) {
-        // Same rebuild case as above, for the placeholder.
+        // The engine rebuilt the list and our row is gone; a later frame for the
+        // same pinyin would otherwise return early and never re-insert.
         state.insertIndex = -1;
         state.text.clear();
-        state.pending = false;
+        state.queried = false;
     }
     if (state.insertIndex >= 0) {
         return; // already spliced in and still where we put it
@@ -1111,8 +1112,9 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         return;
     }
 
-    // If the upstream cloudpinyin addon is installed, it already owns a
-    // placeholder. Adding a second one would show two cloud rows.
+    // If the upstream cloudpinyin addon is installed and already showing its
+    // placeholder, it owns cloud candidates for this context. Two providers
+    // would mean two cloud rows.
     const int total = modifiable->totalSize();
     for (int index = 0; index < total; ++index) {
         if (modifiable->candidateFromAll(index).text().toString() == kCloudPlaceholder) {
@@ -1123,43 +1125,38 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
         }
     }
 
-    // The learned word (if any) already occupies index 0, so the configured
-    // position is measured from the engine's own list.
-    const int offset = state.learnedIndex >= 0 ? 1 : 0;
-    const int insertAt = std::clamp(cloudIndex_ - 1 + offset, 0, total);
-
     if (const auto cached = cloudCache_.find(state.pinyin)) {
-        if (containsText(*cached)) {
-            // Already offered by the engine: do not add a duplicate row.
+        if (!containsText(*cached)) {
+            // A cached answer is instant: insert it now, at the configured slot.
+            const int offset = state.learnedIndex >= 0 ? 1 : 0;
+            const int insertAt = std::clamp(cloudIndex_ - 1 + offset, 0, modifiable->totalSize());
+            modifiable->insert(
+                insertAt, std::make_unique<CloudCandidateWord>(
+                              fcitx::Text(*cached), *cached,
+                              [this](fcitx::InputContext *context, std::string_view text) {
+                                  commitCloudText(context, text);
+                              }));
+            state.insertIndex = insertAt;
+            state.text = *cached;
+            state.queried = true;
             SUPERIOR_TRACE(diag::categories::Cloud)
-                << "cloud candidate skipped: engine already offers this word";
-            return;
+                .field("index", static_cast<std::int64_t>(insertAt))
+                .field("length", static_cast<std::int64_t>(state.pinyin.size()))
+                << "cloud candidate served from cache";
         }
-        modifiable->insert(
-            insertAt, std::make_unique<CloudCandidateWord>(
-                          fcitx::Text(*cached), *cached,
-                          [this](fcitx::InputContext *context, std::string_view text) {
-                              commitCloudText(context, text);
-                          }));
-        state.insertIndex = insertAt;
-        state.pending = false;
-        state.text = *cached;
-        SUPERIOR_TRACE(diag::categories::Cloud)
-            .field("index", static_cast<std::int64_t>(insertAt))
-            .field("length", static_cast<std::int64_t>(state.pinyin.size()))
-            << "cloud candidate served from cache";
         return;
     }
 
-    modifiable->insert(insertAt, std::make_unique<fcitx::DisplayOnlyCandidateWord>(
-                                     fcitx::Text(std::string(kCloudPlaceholder))));
-    state.insertIndex = insertAt;
-    state.pending = true;
-    state.text = std::string(kCloudPlaceholder);
+    if (state.queried) {
+        return; // already asking; the answer inserts itself when it arrives
+    }
+    state.queried = true;
 
-    // Hand the query to the debounce; `pumpCloud` decides when it is safe to ask.
-    // Restarting it on every keystroke is the point: only a settled composition
-    // is worth sending.
+    // **No placeholder.** Reserving a slot while the request is in flight made
+    // the list jump: the row you were about to press (2) was a cloud that said
+    // nothing yet, and everything behind it shifted by one. The candidate now
+    // appears only when there is a word to show — until then the list is exactly
+    // what the engine produced.
     cloudPendingContext_ = inputContext;
     cloudPendingPinyin_ = state.pinyin;
     cloudPendingSince_ = std::chrono::steady_clock::now();
@@ -1216,7 +1213,7 @@ void SuperiorAgent::pumpCloud() {
         }
 
         for (auto &[context, state] : cloudContexts_) {
-            if (!state.pending || state.pinyin != result.pinyin) {
+            if (!state.queried || state.pinyin != result.pinyin) {
                 continue;
             }
             if (result.ok && !result.text.empty()) {
@@ -1257,60 +1254,51 @@ void SuperiorAgent::applyCloudResult(fcitx::InputContext *inputContext,
         return;
     }
     CloudContext &state = it->second;
-    if (!state.pending || state.pinyin != pinyin) {
+    if (state.pinyin != pinyin) {
         return;
     }
 
     const auto candidateList = inputContext->inputPanel().candidateList();
     if (!candidateList || state.list != candidateList.get()) {
-        // The user typed on; the placeholder is part of a list nobody shows any
-        // more. The answer is already cached, so the next frame picks it up.
+        // The user typed on. The answer is cached already, so the next frame for
+        // this pinyin picks it up without another request.
         state = CloudContext{};
         return;
     }
     auto *modifiable = candidateList->toModifiable();
-    if (modifiable == nullptr || state.insertIndex < 0 ||
-        state.insertIndex >= modifiable->totalSize()) {
+    if (modifiable == nullptr) {
         state = CloudContext{};
         return;
     }
 
-    // Only fill the slot if our placeholder is still the one sitting there: if
-    // the engine rebuilt the list, replacing by index would overwrite a real
-    // candidate with the cloud answer.
-    if (modifiable->candidateFromAll(state.insertIndex).text().toString() != state.text) {
-        state = CloudContext{};
-        return;
-    }
-
-    // The engine may have produced the same word in a later frame. Filling the
-    // placeholder then would show the same entry twice, so drop our row instead.
     const int total = modifiable->totalSize();
+    // Nothing was reserved while loading, so a word the engine produced in the
+    // meantime must not be duplicated.
     for (int index = 0; index < total; ++index) {
-        if (index == state.insertIndex) {
-            continue;
-        }
         if (modifiable->candidateFromAll(index).text().toString() == text) {
             SUPERIOR_DEBUG(diag::categories::Cloud)
                 << "cloud candidate dropped: engine already offers this word";
-            dropCloudCandidate(inputContext);
+            state = CloudContext{};
             return;
         }
     }
 
-    modifiable->replace(
-        state.insertIndex,
-        std::make_unique<CloudCandidateWord>(
-            fcitx::Text(text), text,
-            [this](fcitx::InputContext *context, std::string_view value) {
-                commitCloudText(context, value);
-            }));
-    state.pending = false;
+    // Insert at the configured slot. The learned word (if any) already sits at
+    // index 0, so the engine's own order has to be offset by one.
+    const int offset = state.learnedIndex >= 0 ? 1 : 0;
+    const int insertAt = std::clamp(cloudIndex_ - 1 + offset, 0, total);
+    modifiable->insert(
+        insertAt, std::make_unique<CloudCandidateWord>(
+                      fcitx::Text(text), text,
+                      [this](fcitx::InputContext *context, std::string_view value) {
+                          commitCloudText(context, value);
+                      }));
+    state.insertIndex = insertAt;
     state.text = text;
     SUPERIOR_DEBUG(diag::categories::Cloud)
-        .field("index", static_cast<std::int64_t>(state.insertIndex))
+        .field("index", static_cast<std::int64_t>(insertAt))
         .field("length", static_cast<std::int64_t>(text.size()))
-        << "cloud candidate filled";
+        << "cloud candidate inserted";
     inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
@@ -1320,18 +1308,24 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
         return;
     }
     CloudContext &state = it->second;
-    const auto candidateList = inputContext->inputPanel().candidateList();
-    if (candidateList && state.list == candidateList.get() && state.insertIndex >= 0) {
-        if (auto *modifiable = candidateList->toModifiable();
-            modifiable != nullptr && state.insertIndex < modifiable->totalSize() &&
-            modifiable->candidateFromAll(state.insertIndex).text().toString() == state.text) {
-            // Remove the placeholder: leaving a cloud that never fills up looks
-            // like a bug to the user.
-            modifiable->remove(state.insertIndex);
+
+    // Nothing is reserved while a request is in flight, so normally there is
+    // nothing to remove here — this only fires when an answer that had already
+    // been inserted has to go, which happens if the engine later produces the
+    // same word itself.
+    if (state.insertIndex >= 0) {
+        const auto candidateList = inputContext->inputPanel().candidateList();
+        if (candidateList && state.list == candidateList.get()) {
+            if (auto *modifiable = candidateList->toModifiable();
+                modifiable != nullptr && state.insertIndex < modifiable->totalSize() &&
+                modifiable->candidateFromAll(state.insertIndex).text().toString() ==
+                    state.text) {
+                modifiable->remove(state.insertIndex);
+                inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+            }
         }
     }
     state = CloudContext{};
-    inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
 void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::string_view text) {

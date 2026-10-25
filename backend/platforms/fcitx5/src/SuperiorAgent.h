@@ -131,9 +131,11 @@ private:
         /// Slot holding the learned word (index 0) and its text.
         int learnedIndex = -1;
         std::string learnedText;
-        /// Slot holding the cloud candidate / placeholder.
+        /// Slot the cloud candidate ended up in, once it arrived.
         int insertIndex = -1;
-        bool pending = false;
+        /// The request for this pinyin was already handed to the debounce; the
+        /// answer inserts itself when it comes back.
+        bool queried = false;
         /// Text currently sitting at `insertIndex` because we put it there. Used
         /// to tell "our row is still there" from "the engine rebuilt the list and
         /// that position now holds a real candidate".
