@@ -521,9 +521,9 @@ void SpeechRecognitionPanel::apply(const api::SpeechScene &scene,
         return;
     }
 
-    title_->setText(scene.modelName.empty()
-                        ? QStringLiteral("语音输入")
-                        : QStringLiteral("语音输入 · %1").arg(QString::fromStdString(scene.modelName)));
+    // Just "语音输入": the combo 60 px below already names the model, and the
+    // combined line was wider than the panel, so it was cut mid-word.
+    title_->setText(QStringLiteral("语音输入"));
     level_ = scene.phase == api::SpeechPhase::Recording ? scene.level : 0.0;
     // Follow the scene, but not *against* the user: a frame can still be in
     // flight from before the choice was saved. The pending id is dropped as
