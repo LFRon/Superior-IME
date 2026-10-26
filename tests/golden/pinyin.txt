@@ -9,7 +9,7 @@
 # Lines starting with '#' and blank lines are ignored.
 #
 # The test skips (exit 0) when no schema is deployed, so a fresh clone can run
-# the suite before running scripts/fetch-rime-data.sh.
+# the suite before running scripts/fetch-wanxiang-schema.sh.
 
 yubianyi    预编译
 yuanshen    原神

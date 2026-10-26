@@ -9,7 +9,7 @@
 //
 // It is deliberately tolerant about the environment: no librime, no deployed
 // schema, or an unreadable golden file all mean "skipped", because a fresh
-// clone must be able to run `ctest` before `scripts/fetch-pinyin-data.sh`.
+// clone must be able to run `ctest` before `scripts/fetch-wanxiang-schema.sh`.
 //
 // The session runs against a **private** user directory that contains only the
 // compiled artifacts. The real one also holds the user's `userdb`, and learned

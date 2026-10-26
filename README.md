@@ -127,13 +127,14 @@ setsid fcitx5 -d
 | `libsuperiorpinyin.so` + `superiorpinyin.conf` | `Category=InputMethod` 的引擎 addon（内置 librime） |
 | `super-ime.conf` | **唯一**输入法条目，uniqueName = `super-ime`，绑定 `Addon=superiorpinyin` |
 
-Rime 条目的方案数据不在安装包里，需要单独下载并编译（约 26 MB，一次即可）：
+方案数据（万象拼音 Pure）随仓库提供，安装脚本会解压并编译一次；
+手动重跑（幂等）：
 
 ```bash
-scripts/fetch-pinyin-data.sh
+scripts/fetch-wanxiang-schema.sh
 ```
 
-没下载时条目仍然存在，但打字没有候选，日志会说明缺什么。
+没部署时条目仍然存在，但打字没有候选，日志会说明缺什么。
 只有一个条目，没有需要二选一的“兼容模式”，详见 [docs/pinyin-engine.md](docs/pinyin-engine.md)。
 
 新增条目必须**重启** Fcitx5 才会出现在“添加输入法”里；`fcitx5-remote -r` 不够，
@@ -179,14 +180,14 @@ SUPERIOR_LOG_VIA_QT=1 QT_LOGGING_RULES="superior.*=true" ./superior_ui
 
 ## 词库
 
-方案数据不在仓库里，由脚本下载并部署到独立目录：
+方案数据随仓库提供（`data/wanxiang/`，26 MB 归档），由脚本解压并编译到独立目录：
 
 ```bash
-scripts/fetch-pinyin-data.sh
+scripts/fetch-wanxiang-schema.sh
 superior-config pinyin lookup nihao   # 端到端自检
 ```
 
-- 方案：万象拼音 Pure（版本固定在脚本里，SHA-256 校验）
+- 方案：万象拼音 Pure（版本固定在脚本里，部署前校验 SHA-256）
 - 位置：`$XDG_DATA_HOME/superior-ime/pinyin/{shared,user}`
 - 与 `~/.config/fcitx5/rime` 完全隔离，不读取也不修改系统的 Rime 配置
 - 用户词频由 Rime 的 `userdb` 维护；云端选词由 `learning.json` 维护
@@ -407,6 +408,7 @@ GPL-3.0-or-later，见 [LICENSE](LICENSE)。
 
 内置皮肤为本项目自绘，不含任何第三方输入法的素材、字体或图标。
 
-可选下载的万象拼音方案/词库不随仓库分发，由 `scripts/fetch-pinyin-data.sh`
-按需获取，其许可为 CC-BY-4.0（作者 amzxyz），详见
+随仓库分发的万象拼音方案/词库（`data/wanxiang/`）许可为 CC-BY-4.0
+（作者 amzxyz），署名、许可链接与改动说明见
+[data/wanxiang/README.md](data/wanxiang/README.md)，来源与版本详见
 [docs/pinyin-engine.md](docs/pinyin-engine.md)。

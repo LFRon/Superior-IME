@@ -84,7 +84,8 @@ the input method group from defaults and drops the user's own entries.
 
 The unique name is "super-ime" (derived from the file name). The entry is bound
 to the bundled engine (Addon=superiorpinyin); there is no libime entry and no
-second input method to choose from. The schema data still has to be deployed:
+second input method to choose from. The 万象拼音 schema ships in data/wanxiang
+and is not deployed by this script (it writes to the user's data directory):
 
-  scripts/fetch-pinyin-data.sh
+  scripts/fetch-wanxiang-schema.sh
 MSG

@@ -51,10 +51,11 @@ librime **不会**自动编译方案：没有 `user/build/*.bin` 时 `create_ses
 但 `schema_id` 为空，输入没有候选。因此部署是显式的一步：
 
 ```bash
-scripts/fetch-pinyin-data.sh          # 下载万象 Pure 并部署
-scripts/fetch-pinyin-data.sh --no-deploy
-scripts/fetch-pinyin-data.sh --gram   # 额外下载 399 MB 语法模型
-scripts/fetch-pinyin-data.sh --force  # 强制重新下载/解压
+scripts/fetch-wanxiang-schema.sh          # 解压随仓库的万象 Pure 并部署
+scripts/fetch-wanxiang-schema.sh --no-deploy
+scripts/fetch-wanxiang-schema.sh --gram   # 额外下载 399 MB 语法模型
+scripts/fetch-wanxiang-schema.sh --force  # 忽略随附归档，重新下载上游
+scripts/fetch-wanxiang-schema.sh --offline  # 绝不联网（归档不可用就报错）
 
 superior-config pinyin status         # 库版本、目录、产物是否存在
 superior-config pinyin deploy
@@ -111,7 +112,7 @@ patch:
     Control_R: noop
 ```
 
-- 文件由 `scripts/fetch-pinyin-data.sh` 写入，随后自动重新部署；升级代码后需要
+- 文件由 `scripts/fetch-wanxiang-schema.sh` 写入，随后自动重新部署；升级代码后需要
   再跑一次，否则旧部署里仍是 `commit_code`。
 - `default.custom.yaml` 属于内置引擎自己的数据目录，不要复制到
   `~/.config/fcitx5/rime`。
@@ -167,7 +168,7 @@ patch:
 需要语法模型时：
 
 ```bash
-scripts/fetch-pinyin-data.sh --gram
+scripts/fetch-wanxiang-schema.sh --gram
 ```
 
 它会把 `wanxiang-lts-zh-hans.gram` 放到 **`user/`**（librime 是按 user 目录找这个
@@ -186,9 +187,10 @@ scripts/fetch-pinyin-data.sh --gram
 
 - 引擎代码：GPL-3.0-or-later（本仓库）。
 - `third_party/rime/rime_api.h`：BSD-3-Clause，版权归 RIME Developers。
-- 万象拼音方案与词库（**不随仓库分发**，由 `fetch-pinyin-data.sh` 下载）：
-  CC-BY-4.0，作者 amzxyz，来源
-  <https://github.com/amzxyz/rime-wanxiang>。
+- 万象拼音方案与词库（**随仓库分发**于 `data/wanxiang/rime-wanxiang-pure.zip`，
+  由 `fetch-wanxiang-schema.sh` 解压部署）：CC-BY-4.0，作者 amzxyz，来源
+  <https://github.com/amzxyz/rime-wanxiang>。署名、许可链接与我们的改动说明见
+  [../data/wanxiang/README.md](../data/wanxiang/README.md)。
 
 ## 测试
 

@@ -162,6 +162,18 @@ cat > "$env_dir/90-superior-ime.conf" <<ENVEOF
 FCITX_ADDON_DIRS=$lib_dir:$system_addon_dir
 ENVEOF
 
+# Deploying the schema is part of "the install works": without it the engine
+# loads, every keystroke yields an empty candidate list, and the install looks
+# broken. The archive ships in data/wanxiang, so this needs no network.
+if [[ $dry_run -eq 0 ]]; then
+    echo "install-user: deploying the bundled 万象拼音 schema"
+    if ! SUPERIOR_PRESET="$preset" bash "$root/scripts/fetch-wanxiang-schema.sh" --offline; then
+        echo "install-user: schema deploy failed; run scripts/fetch-wanxiang-schema.sh by hand" >&2
+    fi
+fi
+
+# Unquoted heredoc, so $HOME and $lib_dir below are expanded: a backtick or a
+# dollar-parenthesis in the text would execute as a command. Keep it plain.
 cat <<MSG
 
 Installed into \$HOME/.local.
@@ -176,10 +188,10 @@ is applied automatically.
 The overlay starts itself when the agent loads; you can also run it by hand:
   ~/.local/bin/superior_ui            # wrapper -> ~/.local/share/superior-ime/bin/superior_ui
 
-The input method needs its schema data (26 MB download, compiled locally):
-  scripts/fetch-pinyin-data.sh
-Without it the entry still appears, but typing has no candidates and the log
-says why. There is only one entry: 「先！进！输入法」 (super-ime).
+The 万象拼音 schema ships with the source and was deployed above. Re-run the
+deployer after a git pull that changes it (it is idempotent):
+  scripts/fetch-wanxiang-schema.sh
+There is only one entry: 「先！进！输入法」 (super-ime).
 
 Uninstall everything this script created:
   scripts/uninstall-user.sh

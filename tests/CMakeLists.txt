@@ -299,6 +299,12 @@ add_test(
     NAME boundaries
     COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/check-boundaries.sh" "${PROJECT_SOURCE_DIR}")
 
+# The schema archive is committed, so the pinned checksum and the bytes in the
+# tree can drift apart. This keeps "vendored" from becoming a second truth.
+add_test(
+    NAME bundled-schema
+    COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/check-bundled-schema.sh")
+
 if(TARGET skin_lint)
     add_test(NAME skin-lint-default
         COMMAND skin_lint "${PROJECT_SOURCE_DIR}/skins/default" --strict)

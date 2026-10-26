@@ -409,7 +409,7 @@ int handleRimeStatus(const fs::path &sharedOverride, const fs::path &userOverrid
     std::cout << "artifacts : " << (artifacts ? "present" : "missing (run: superior-config pinyin deploy)")
               << '\n';
     if (!shared) {
-        std::cout << "verdict   : no schema data; run scripts/fetch-pinyin-data.sh first\n";
+        std::cout << "verdict   : no schema data; run scripts/fetch-wanxiang-schema.sh first\n";
         return 1;
     }
     return artifacts ? 0 : 1;
@@ -425,7 +425,7 @@ int handleRimeDeploy(const fs::path &sharedOverride, const fs::path &userOverrid
     std::error_code error;
     if (!fs::is_directory(paths.sharedData, error)) {
         std::cerr << "superior-config: no shared data at " << paths.sharedData
-                  << "; run scripts/fetch-pinyin-data.sh first\n";
+                  << "; run scripts/fetch-wanxiang-schema.sh first\n";
         return 1;
     }
 
@@ -480,7 +480,7 @@ int handleRimeLookup(const std::string &word, const fs::path &sharedOverride,
         return 1;
     }
     if (engine.needsDeploy()) {
-        std::cerr << "superior-config: no schema is deployed; run 'rime deploy' first\n";
+        std::cerr << "superior-config: no schema is deployed; run 'pinyin deploy' first\n";
         return 1;
     }
 

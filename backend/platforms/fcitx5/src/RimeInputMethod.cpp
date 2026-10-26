@@ -255,7 +255,7 @@ RimeInputMethod::Session *RimeInputMethod::sessionFor(fcitx::InputContext *input
         SUPERIOR_WARN(diag::categories::Pinyin)
             .field("shared", paths_.sharedData.string())
             .field("user", paths_.userData.string())
-            << "rime has no compiled schema yet; run scripts/fetch-pinyin-data.sh, then restart";
+            << "rime has no compiled schema yet; run scripts/fetch-wanxiang-schema.sh, then restart";
     }
 
     Session *raw = session.get();

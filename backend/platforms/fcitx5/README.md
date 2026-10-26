@@ -50,5 +50,5 @@ sudo cmake --install build/linux-system
 安装后还需要方案数据（不属于仓库）：
 
 ```bash
-scripts/fetch-pinyin-data.sh
+scripts/fetch-wanxiang-schema.sh
 ```

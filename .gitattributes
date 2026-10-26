@@ -1,0 +1,4 @@
+# Third-party schema archives are opaque binaries: never diff, merge or
+# re-encode them. A real change replaces the file and bumps the pin in
+# scripts/fetch-wanxiang-schema.sh (guarded by the `bundled-schema` test).
+data/wanxiang/*.zip binary -diff -merge -text
