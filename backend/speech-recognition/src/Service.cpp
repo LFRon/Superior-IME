@@ -38,81 +38,6 @@ std::uint64_t nowMs() {
 
 constexpr std::uint64_t kLevelIntervalMs = 50;
 
-/// Reads the capture stream, keeping the samples for the level meter and (when
-/// streaming) forwarding them to the recogniser's stdin.
-///
-/// The write happens *outside* the lock: a slow recogniser must never stall the
-/// level meter, or the panel's ring would freeze while the model is busy.
-void pumpCapture(int fd, std::vector<std::int16_t> &audio, std::mutex &mutex,
-                 double &level, std::atomic<bool> &stopping, std::atomic<bool> &ended,
-                 int teeFd, bool keepAudio, std::atomic<std::uint64_t> &capturedBytes,
-                 std::atomic<std::uint64_t> &teeStallMs,
-                 const std::atomic<bool> &recogniserProduced) {
-    std::vector<std::int16_t> chunk(1600); // 100 ms at 16 kHz
-    while (!stopping.load(std::memory_order_relaxed)) {
-        const ssize_t bytes = ::read(fd, chunk.data(), chunk.size() * sizeof(std::int16_t));
-        if (bytes <= 0) {
-            break;
-        }
-        const auto samples = static_cast<std::size_t>(bytes) / sizeof(std::int16_t);
-        capturedBytes.fetch_add(static_cast<std::uint64_t>(bytes), std::memory_order_relaxed);
-        const double measured = rmsLevel(chunk.data(), samples);
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (keepAudio) {
-                audio.insert(audio.end(), chunk.begin(),
-                             chunk.begin() + static_cast<std::ptrdiff_t>(samples));
-            }
-            level = measured;
-        }
-        if (teeFd >= 0) {
-            const auto *pcm = reinterpret_cast<const char *>(chunk.data());
-            const std::size_t total = samples * sizeof(std::int16_t);
-            std::size_t written = 0;
-            const auto writeStart = std::chrono::steady_clock::now();
-            while (written < total) {
-                const ssize_t result = ::write(teeFd, pcm + written, total - written);
-                if (result > 0) {
-                    written += static_cast<std::size_t>(result);
-                    continue;
-                }
-                if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                    // The recogniser is decoding behind us; wait for room, but
-                    // stay responsive to a stop. Blocking here is what made
-                    // "stop" take as long as the model's backlog.
-                    pollfd writable{teeFd, POLLOUT, 0};
-                    if (stopping.load(std::memory_order_relaxed)) {
-                        break;
-                    }
-                    ::poll(&writable, 1, 100);
-                    continue;
-                }
-                // The recogniser is gone; stop feeding it and let the reader
-                // report the failure.
-                teeFd = -1;
-                break;
-            }
-            // 100 ms of audio needed more than a second of waiting, so the
-            // recogniser is not just busy with one decode: its queue is growing
-            // and the sound server will start dropping audio. This is the only
-            // honest "this machine cannot keep up" signal there is, and
-            // `StepTuning` uses it to pick a coarser step next time. Ignored
-            // until the engine has produced something, because loading a 130 MB
-            // model legitimately fills the pipe for a second or two.
-            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now() - writeStart)
-                                    .count();
-            if (waited > 1000 && recogniserProduced.load(std::memory_order_relaxed)) {
-                teeStallMs.fetch_add(static_cast<std::uint64_t>(waited),
-                                     std::memory_order_relaxed);
-            }
-        }
-    }
-    // The tool exited (device busy, unplugged, killed). Say so: without this the
-    // service would keep "recording" silence until the no-speech timeout.
-    ended.store(true, std::memory_order_relaxed);
-}
-
 /// Splits one JSON line from the recogniser into (kind, text).
 bool decodeStreamEvent(const std::string &line, std::string &kind, std::string &text) {
     const auto parsed = nlohmann::json::parse(line, nullptr, false);
@@ -286,7 +211,8 @@ std::string describeEngineFailure(const std::string &reason) {
 
 } // namespace
 
-Service::Service(Emit emit) : emit_(std::move(emit)) {}
+Service::Service(Emit emit, api::AudioSource &audio)
+    : emit_(std::move(emit)), audioPort_(audio) {}
 
 Service::~Service() {
     shutdown();
@@ -307,19 +233,12 @@ void Service::emitPhase(const std::string &phase) {
     emit_(event);
 }
 
-void Service::startCaptureThread() {
-    capturePid_ = -1;
-    captureFd_ = -1;
+void Service::startCapture() {
     audio_.clear();
     pendingLevel_ = 0.0;
     lastLevelMs_ = 0;
     revoked_.store(false);
 
-    // Remember the user's own choice before the stream exists: the desktop
-    // re-elects the default input a couple of seconds after the stream closes,
-    // and only we know what it was. While a restore is still pending the value
-    // is kept instead of re-read, so a second sentence spoken inside that window
-    // does not adopt the flipped default as "the user's choice".
     // Continuous dictation: the microphone stays open until the user stops it.
     // The pause rule is off and the only limit is the announced cap, so thinking
     // mid-sentence cannot end the session.
@@ -341,97 +260,118 @@ void Service::startCaptureThread() {
         sessionStartMs_ = nowMs();
     }
 
+    // Remember the user's own choice before the stream exists: the desktop
+    // re-elects the default input a couple of seconds after the stream closes,
+    // and only we know what it was. While a restore is still pending the value
+    // is kept instead of re-read, so a second sentence spoken inside that window
+    // does not adopt the flipped default as "the user's choice".
     if (restoreDefaultAtMs_ == 0 || defaultSourceBefore_.empty()) {
         defaultSourceBefore_ =
-            restoreDefaultSourceEnabled() ? defaultSourceName() : std::string{};
+            restoreDefaultSourceEnabled() ? audioPort_.defaultDevice() : std::string{};
     }
     restoreDefaultAtMs_ = 0;
 
+    api::AudioRequest request;
     // Pinning the stream to that device keeps the *audio* on the right
-    // microphone even if the flip happens before this call.
-    const CaptureCommand command =
-        defaultCaptureCommand(restoreDefaultSourceEnabled() ? defaultSourceBefore_ : std::string{});
-
-    // Both early returns below leave the recogniser we just started with nothing to
-    // feed it: it would sit on a model in RAM until the next session. End it here.
-    const auto abandonRecogniser = [this] {
-        if (!streaming_) {
-            return;
-        }
-        beginStreamingClose();
-        asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
-        if (asrPid_ > 0) {
-            ::kill(asrPid_, SIGTERM);
-        }
-        reapStreamingRecogniser();
-    };
-
-    int pipeFd[2] = {-1, -1};
-    if (::pipe(pipeFd) != 0) {
-        Event event;
-        event.kind = Event::Kind::Error;
-        event.code = "capture_failed";
-        event.message = std::string("cannot create a pipe: ") + std::strerror(errno);
-        emit_(event);
-        abandonRecogniser();
-        return;
-    }
-
-    std::vector<std::string> argvStorage;
-    argvStorage.push_back(command.program);
-    argvStorage.insert(argvStorage.end(), command.args.begin(), command.args.end());
-    std::vector<char *> argv;
-    argv.reserve(argvStorage.size() + 1);
-    for (auto &item : argvStorage) {
-        argv.push_back(item.data());
-    }
-    argv.push_back(nullptr);
-
-    const pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(pipeFd[0]);
-        ::close(pipeFd[1]);
-        Event event;
-        event.kind = Event::Kind::Error;
-        event.code = "capture_failed";
-        event.message = std::string("cannot fork: ") + std::strerror(errno);
-        emit_(event);
-        abandonRecogniser();
-        return;
-    }
-    if (pid == 0) {
-        ::dup2(pipeFd[1], STDOUT_FILENO);
-        // Capture tools are chatty; keep their stderr away from our protocol.
-        const int devNull = ::open("/dev/null", O_WRONLY);
-        if (devNull >= 0) {
-            ::dup2(devNull, STDERR_FILENO);
-        }
-        ::close(pipeFd[0]);
-        ::close(pipeFd[1]);
-        ::execvp(command.program.c_str(), argv.data());
-        ::_exit(127);
-    }
-
-    ::close(pipeFd[1]);
-    capturePid_ = pid;
-    captureFd_ = pipeFd[0];
-    capturing_ = true;
-
+    // microphone even if the desktop's flip happens before this call.
+    request.device = restoreDefaultSourceEnabled() ? defaultSourceBefore_ : std::string{};
+    std::string error;
     captureEnded_.store(false, std::memory_order_relaxed);
-    captureStopping_.store(false, std::memory_order_relaxed);
-    const int teeFd = streaming_ ? asrWriteFd_ : -1;
-    // Streaming does not keep the audio: batch fallback is the only consumer, and
-    // an hour of dictation would otherwise sit in RAM (32 KB/s ≈ 115 MB/h).
-    const bool keepAudio = !streaming_;
-    captureThread_ = std::thread([this, teeFd, keepAudio] {
-        pumpCapture(captureFd_, audio_, captureMutex_, pendingLevel_, captureStopping_,
-                    captureEnded_, teeFd, keepAudio, capturedBytes_, teeStallMs_,
-                    asrProducedOutput_);
-    });
+    capturing_ = true;
+    if (!audioPort_.start(request, *this, error)) {
+        capturing_ = false;
+        Event event;
+        event.kind = Event::Kind::Error;
+        event.code = "capture_failed";
+        event.message = std::move(error);
+        emit_(event);
+        // The recogniser we just started has nothing to feed it: it would sit on
+        // a model in RAM until the next session. End it here.
+        abandonRecogniser();
+        return;
+    }
     // The clock starts when capture starts: time spent waiting for the panel to
     // open is not part of the utterance.
     silence_.begin(nowMs());
     emitPhase("recording");
+}
+
+void Service::abandonRecogniser() {
+    if (!streaming_) {
+        return;
+    }
+    beginStreamingClose();
+    asrKilledOnPurpose_.store(true, std::memory_order_relaxed);
+    if (asrPid_ > 0) {
+        ::kill(asrPid_, SIGTERM);
+    }
+    reapStreamingRecogniser();
+}
+
+void Service::onAudio(std::span<const std::int16_t> samples) {
+    if (samples.empty()) {
+        return;
+    }
+    capturedBytes_.fetch_add(samples.size() * sizeof(std::int16_t), std::memory_order_relaxed);
+    const double measured = rmsLevel(samples.data(), samples.size());
+    {
+        std::lock_guard<std::mutex> lock(captureMutex_);
+        // Streaming does not keep the audio: batch fallback is the only consumer,
+        // and an hour of dictation would otherwise sit in RAM (32 KB/s ≈ 115 MB/h).
+        if (!streaming_) {
+            audio_.insert(audio_.end(), samples.begin(), samples.end());
+        }
+        pendingLevel_ = measured;
+    }
+    if (!streaming_ || asrWriteFd_ < 0) {
+        return;
+    }
+    // The write happens *outside* the lock: a slow recogniser must never stall
+    // the level meter, or the panel's ring would freeze while the model is busy.
+    const auto *pcm = reinterpret_cast<const char *>(samples.data());
+    const std::size_t total = samples.size() * sizeof(std::int16_t);
+    std::size_t written = 0;
+    const auto writeStart = std::chrono::steady_clock::now();
+    while (written < total) {
+        const ssize_t result = ::write(asrWriteFd_, pcm + written, total - written);
+        if (result > 0) {
+            written += static_cast<std::size_t>(result);
+            continue;
+        }
+        if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // The recogniser is decoding behind us; wait for room, but stay
+            // responsive to a stop. Blocking here is what made "stop" take as
+            // long as the model's backlog.
+            if (captureEnded_.load(std::memory_order_relaxed)) {
+                break;
+            }
+            pollfd writable{asrWriteFd_, POLLOUT, 0};
+            ::poll(&writable, 1, 100);
+            continue;
+        }
+        // The recogniser is gone; stop feeding it and let the reader report the
+        // failure.
+        asrWriteFd_ = -1;
+        return;
+    }
+    // 100 ms of audio needed more than a second of waiting, so the recogniser is
+    // not just busy with one decode: its queue is growing and the sound server
+    // will start dropping audio. This is the only honest "this machine cannot
+    // keep up" signal there is, and `StepTuning` uses it to pick a coarser step
+    // next time. Ignored until the engine has produced something, because loading
+    // a 130 MB model legitimately fills the pipe for a second or two.
+    const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - writeStart)
+                            .count();
+    if (waited > 1000 && asrProducedOutput_.load(std::memory_order_relaxed)) {
+        teeStallMs_.fetch_add(static_cast<std::uint64_t>(waited), std::memory_order_relaxed);
+    }
+}
+
+void Service::onAudioEnded() {
+    // The tool exited (device busy, unplugged, killed). Say so: without this the
+    // service would keep "recording" silence until the no-speech timeout.
+    captureEnded_.store(true, std::memory_order_relaxed);
 }
 
 std::size_t Service::committedPrefixLength(std::string_view text) const {
@@ -872,38 +812,27 @@ void Service::start() {
         }
         reapStreamingRecogniser();
     }
-    if (!captureAvailable()) {
+    if (!audioPort_.available()) {
+        // The host cannot record at all. Say so instead of opening a session
+        // that would sit on a model and never hear anything.
         Event event;
         event.kind = Event::Kind::Error;
         event.code = "microphone_missing";
-        event.message = "没有找到录音工具（pw-record / parec / arecord）。";
+        event.message = "此设备上无法录音（没有可用的麦克风采集后端）。";
         emit_(event);
         return;
     }
-    // Start the recogniser first: the capture thread writes straight into it.
+    // Start the recogniser first: the capture sink writes straight into it.
     if (!startStreamingRecogniser()) {
         streaming_ = false;
     }
-    startCaptureThread();
+    startCapture();
 }
 
 void Service::stopCapture() {
-    captureStopping_.store(true, std::memory_order_relaxed);
-    if (capturePid_ > 0) {
-        ::kill(capturePid_, SIGTERM);
-    }
-    if (captureThread_.joinable()) {
-        captureThread_.join();
-    }
-    if (captureFd_ >= 0) {
-        ::close(captureFd_);
-        captureFd_ = -1;
-    }
-    if (capturePid_ > 0) {
-        int status = 0;
-        ::waitpid(capturePid_, &status, 0);
-        capturePid_ = -1;
-    }
+    // `stop()` returns only once the sink is quiet, so nothing below can race
+    // with a late `onAudio`.
+    audioPort_.stop();
     capturing_ = false;
     // The desktop flips the default ~2 s after the last stream closes, so the
     // restore has to wait for it; doing it now would restore nothing.
@@ -926,21 +855,20 @@ void Service::pollDefaultSourceRestore(std::uint64_t nowMs) {
         restoreDefaultAtMs_ = 0;
         return;
     }
-    // `pactl` costs a few milliseconds, so it is not polled at command rate.
+    // Asking a sound server for its default device costs a few milliseconds, so
+    // it is not polled at command rate.
     if (lastRestoreCheckMs_ != 0 && nowMs - lastRestoreCheckMs_ < 250) {
         return;
     }
     lastRestoreCheckMs_ = nowMs;
 
-    const std::string current = defaultSourceName();
-    if (shouldRestoreDefaultSource(defaultSourceBefore_, current, availableSources())) {
+    // Everything that needs to know about device names happens behind the port;
+    // this loop only owns the timing.
+    if (audioPort_.restoreDefault(defaultSourceBefore_)) {
         restoreDefaultAtMs_ = 0;
-        if (setDefaultSource(defaultSourceBefore_)) {
-            SUPERIOR_INFO(diag::categories::SpeechRecognition)
-                .field("source", defaultSourceBefore_)
-                .field("was", current)
-                << "default input restored after recording";
-        }
+        SUPERIOR_INFO(diag::categories::SpeechRecognition)
+            .field("source", defaultSourceBefore_)
+            << "default input restored after recording";
         return;
     }
     if (nowMs >= restoreGiveUpAtMs_) {

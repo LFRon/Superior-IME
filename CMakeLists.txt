@@ -33,6 +33,10 @@ enable_testing()
 add_subdirectory(backend/paths)
 add_subdirectory(backend/diagnostics)
 add_subdirectory(backend/api)
+# Before the capabilities: the host targets link it, and CMake resolves a target
+# name only after its directory has been added.
+add_subdirectory(backend/platforms/linux)
+add_subdirectory(backend/platforms/stub)
 add_subdirectory(backend/skin)
 add_subdirectory(backend/config)
 add_subdirectory(backend/cloudpinyin)

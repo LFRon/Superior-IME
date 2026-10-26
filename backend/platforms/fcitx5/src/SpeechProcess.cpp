@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "superior/paths/Roots.hpp"
 #include "superior/diagnostics/Log.hpp"
 
 extern char **environ;
@@ -24,15 +25,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-fs::path dataHome() {
-    if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && xdg[0] != '\0') {
-        return fs::path(xdg);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".local" / "share";
-    }
-    return {};
-}
+fs::path dataHome() { return paths::Roots::fromEnvironment().data; }
 
 bool executable(const fs::path &path) {
     return !path.empty() && ::access(path.c_str(), X_OK) == 0;
@@ -93,15 +86,11 @@ namespace {
 /// stderr is a plain pipe), and the engine writes its reasons to stderr, so this
 /// file is the only place a model-load failure can be read afterwards.
 std::string speechLogPath() {
-    const char *state = std::getenv("XDG_STATE_HOME");
-    std::filesystem::path root;
-    if (state != nullptr && state[0] != '\0') {
-        root = std::filesystem::path(state) / "superior-ime";
-    } else if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        root = std::filesystem::path(home) / ".local" / "state" / "superior-ime";
-    } else {
+    const auto state = paths::Roots::fromEnvironment().state;
+    if (state.empty()) {
         return {};
     }
+    const std::filesystem::path root = state / "superior-ime";
     std::error_code error;
     std::filesystem::create_directories(root, error);
     if (error) {

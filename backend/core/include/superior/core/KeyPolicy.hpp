@@ -84,6 +84,60 @@ struct KeyPolicyInput {
 /// text support.
 [[nodiscard]] bool isEditingKey(KeyCode code) noexcept;
 
+/// A gesture the platform's input layer recognised: a *translated* fact, not a
+/// decision (`dtd §6.1` — the gate translates, it does not decide).
+///
+/// A "tap" is press+release with nothing in between; detecting it needs raw
+/// event timing, so it stays in the adapter. What a tap *means* is a product
+/// rule, and it lives here so Windows and Android cannot invent their own.
+enum class Gesture {
+    None,
+    /// Bare Shift press+release.
+    ShiftTap,
+    /// Bare right-Ctrl press+release.
+    RightCtrlTap,
+    /// Escape pressed while the microphone is live.
+    EscapeWhileSpeaking,
+};
+
+/// What the decision layer wants the gesture to do.
+enum class GestureIntent {
+    None,
+    /// Switch Chinese/English, recording the choice.
+    ToggleLanguage,
+    /// Open the dictation panel and start, or stop an ongoing recording.
+    ToggleSpeech,
+    /// Discard the utterance in flight without closing the panel.
+    CancelSpeech,
+};
+
+/// Everything the gesture policy needs. `settings` are product switches from
+/// `settings.json`; the rest are live session facts.
+struct GestureInput {
+    Gesture gesture = Gesture::None;
+    bool english = false;
+    /// `settings.json: inlineEnglish`.
+    bool inlineEnglishEnabled = true;
+    /// `settings.json: speechRecognition`.
+    bool speechEnabled = true;
+    /// `settings.json: speechRecognitionHotkey`.
+    bool speechHotkeyEnabled = true;
+    /// `core::SpeechState::busy()`.
+    bool speaking = false;
+};
+
+/// Pure gesture policy: the single place that says what a tap does.
+///
+/// It exists because these three gestures were decided in three different places
+/// inside the Fcitx5 adapter, each with its own copy of the settings gate. A port
+/// to Windows would have had to reproduce all three.
+///
+/// Rules: a Shift tap toggles language only when inline English is enabled (the
+/// feature it exists for); a right-Ctrl tap toggles dictation only when both the
+/// product switch and the hotkey switch are on; Escape cancels only while a
+/// session is live, so it keeps its normal meaning the rest of the time.
+[[nodiscard]] GestureIntent decideGesture(const GestureInput &input) noexcept;
+
 /// Sogou-style candidate paging: `+` (or keypad `+`) is "next page", keypad `-`
 /// is "previous page", anything else is 0.
 ///

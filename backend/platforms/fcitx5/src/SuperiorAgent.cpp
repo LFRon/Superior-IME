@@ -27,6 +27,7 @@
 #include "superior/diagnostics/Log.hpp"
 #include "superior/config/Settings.hpp"
 #include "superior/core/KeyPolicy.hpp"
+#include "superior/paths/Roots.hpp"
 #include "superior/speech_recognition/Layout.hpp"
 #include "superior/speech_recognition/Models.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
@@ -114,7 +115,20 @@ private:
 };} // namespace
 
 SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
-    : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr) {
+    : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr),
+      // `TextSession` asks the agent two questions and nothing else: "which
+      // context is this key" and "where is the caret now". Both are the agent's
+      // own state, so the port stays a pure sink (§6.7).
+      textSession_(
+          [this](const api::SessionKey &key) { return contextFor(key); },
+          [this]() -> api::SessionKey {
+              if (activeContext_ == nullptr) {
+                  return {};
+              }
+              const core::ImeSession *session = findSession(activeContext_);
+              return session != nullptr ? session->key() : api::SessionKey{};
+          }),
+      outbox_(textSession_) {
     // Fcitx5 starts us with stderr on /dev/null, so the default stderr sink
     // records nothing at all. Give the agent its own file first.
     static_cast<void>(diag::ensureLogFile("ime"));
@@ -424,7 +438,7 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
                                               byteCursor(clientPreedit));
     engine.preedit = preedit.text;
     engine.preeditCursor = preedit.cursor;
-    if (speechPreeditActive_) {
+    if (outbox_.draftShowing()) {
         // The speech draft is drawn by the application itself (client preedit).
         // Showing it here as well is the duplicate box the user asked us to remove.
         engine.preedit.clear();
@@ -638,9 +652,12 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
         //
         // `InputContext::reset` dispatches `InputContextReset`, which is what
         // calls the engine's `reset()`. `Instance::resetCompose` only clears
-        // XKB's compose state and leaves the engine composition alive.
-        inputContext->reset();
-        inputContext->inputPanel().reset();
+        // XKB's compose state and leaves the engine composition alive. The
+        // outbox expresses the same thing without naming Fcitx5.
+        if (const core::ImeSession *session = findSession(inputContext); session != nullptr) {
+            outbox_.setDestination(session->key());
+            outbox_.abandonComposition();
+        }
         inputContext->updatePreedit();
     }
 
@@ -656,11 +673,14 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
 }
 
 bool SuperiorAgent::reclaimStaleOverlay() {
-    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
-    if (runtime == nullptr || runtime[0] == '\0') {
+    // The runtime directory comes from `Superior::Paths`, never from `getenv`:
+    // this file is the last place below `platforms/` that parsed it itself, and
+    // a port replaces that one function instead of hunting for `getenv` calls.
+    const auto runtime = paths::Roots::fromEnvironment().runtime;
+    if (runtime.empty()) {
         return false;
     }
-    const std::string lockPath = std::string(runtime) + "/superior-ime-ui.lock";
+    const std::filesystem::path lockPath = runtime / "superior-ime-ui.lock";
     std::ifstream file(lockPath);
     if (!file) {
         return false;
@@ -737,9 +757,9 @@ void SuperiorAgent::ensureOverlay() {
     // ~/.local/bin), a system install puts it in /usr/bin, and the PATH lookup
     // is the last resort for hand-built trees.
     std::vector<std::string> candidates;
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        candidates.push_back(std::string(home) + "/.local/share/superior-ime/bin/superior_ui");
-        candidates.push_back(std::string(home) + "/.local/bin/superior_ui");
+    if (const auto home = paths::Roots::fromEnvironment().home; !home.empty()) {
+        candidates.push_back((home / ".local/share/superior-ime/bin/superior_ui").string());
+        candidates.push_back((home / ".local/bin/superior_ui").string());
     }
     candidates.emplace_back("/usr/bin/superior_ui");
     candidates.emplace_back("superior_ui");
@@ -904,7 +924,15 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
             .field("program", inputContext->program())
             << "shift key";
         if (result == ShiftTapDetector::Result::Toggle) {
-            if (inlineEnglishEnabled_) {
+            // What a tap means is a product rule, so it is decided in
+            // `core::decideGesture`; this adapter only reports that a tap
+            // happened. The gate used to sit here with its own copy per gesture.
+            const auto intent = core::decideGesture(core::GestureInput{
+                .gesture = core::Gesture::ShiftTap,
+                .english = modes_.english(),
+                .inlineEnglishEnabled = inlineEnglishEnabled_,
+            });
+            if (intent == core::GestureIntent::ToggleLanguage) {
                 setEnglishMode(inputContext, !modes_.english(), "shift tap");
             } else {
                 SUPERIOR_DEBUG(diag::categories::Fcitx5)
@@ -922,7 +950,13 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
     if (sym == FcitxKey_Control_R) {
         ModifierTap &ctrlTap = ctrlTaps_[inputContext];
         if (release) {
-            if (ctrlTap.released(now)) {
+            if (ctrlTap.released(now) &&
+                core::decideGesture(core::GestureInput{
+                    .gesture = core::Gesture::RightCtrlTap,
+                    .english = modes_.english(),
+                    .speechEnabled = speechRecognitionEnabled_,
+                    .speechHotkeyEnabled = speechRecognitionHotkey_,
+                }) == core::GestureIntent::ToggleSpeech) {
                 toggleSpeechByHotkey();
             }
         } else {
@@ -941,7 +975,12 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
     // and keep the key away from the engine, which would clear a composition the
     // user cannot even see behind the panel. The panel stays open — cancelling
     // is not closing, and re-starting is one click.
-    if (!release && sym == FcitxKey_Escape && speech_.busy()) {
+    if (!release && sym == FcitxKey_Escape &&
+        core::decideGesture(core::GestureInput{
+            .gesture = core::Gesture::EscapeWhileSpeaking,
+            .english = modes_.english(),
+            .speaking = speech_.busy(),
+        }) == core::GestureIntent::CancelSpeech) {
         cancelSpeech("escape");
         event.filterAndAccept();
         return true;
@@ -1019,11 +1058,13 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     if (!isOurs(inputContext)) {
         if (activeContext_ != nullptr) {
             activeContext_ = nullptr;
+            outbox_.setDestination({});
             broadcastHidden();
         }
         return;
     }
     activeContext_ = inputContext;
+    outbox_.setDestination(api::SessionKey{epoch_, sessionFor(inputContext).key().context});
 
     refreshing_ = true;
     syncPanelOwnership(inputContext);
@@ -1738,12 +1779,9 @@ bool SuperiorAgent::startSpeech() {
     }
     // Starting speech abandons a half-typed pinyin composition: two input modes
     // must never own the same commit.
-    if (activeContext_ != nullptr) {
-        activeContext_->reset();
-        activeContext_->inputPanel().reset();
-    }
-    heldSpeech_.clear();
-    speechHolding_ = false;
+    outbox_.clearDraft();
+    outbox_.discardHeld();
+    outbox_.abandonComposition();
     if (speech_.beginRecording()) {
         if (!speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start))) {
             // The pipe is gone: the child died between the readiness check and the
@@ -1765,9 +1803,8 @@ void SuperiorAgent::stopSpeech() {
 }
 
 void SuperiorAgent::toggleSpeechByHotkey() {
-    if (!speechRecognitionEnabled_ || !speechRecognitionHotkey_) {
-        return;
-    }
+    // The settings gate is `core::decideGesture`'s job, and its caller already
+    // applied it. Keeping a second copy here is how the two drifted apart before.
     if (speech_.recording()) {
         stopSpeech();
         return;
@@ -1789,8 +1826,7 @@ void SuperiorAgent::cancelSpeech(std::string_view reason) {
         return;
     }
     setSpeechPreedit({});
-    heldSpeech_.clear();
-    speechHolding_ = false;
+    outbox_.discardHeld();
     // The decision layer revokes the commit *first*: a `final` that is already
     // on the wire must not be typed after this point.
     speech_.cancel();
@@ -1890,37 +1926,18 @@ void SuperiorAgent::handleSpeechEvent(std::string_view line) {
 }
 
 void SuperiorAgent::setSpeechPreedit(std::string_view text) {
-    if (instance_ == nullptr || activeContext_ == nullptr) {
+    if (instance_ == nullptr) {
         return;
     }
-    fcitx::InputContext *inputContext = activeContext_;
-    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
-        return;
+    // The draft belongs inline at the caret, in the application, exactly where
+    // the committed text will land. `TextSession` decides whether this client
+    // can draw it; the outbox only remembers that a draft is showing so it is
+    // cleared exactly once.
+    if (text.empty()) {
+        outbox_.clearDraft();
+    } else {
+        outbox_.showDraft(std::string(text));
     }
-    if (text.empty() && !speechPreeditActive_) {
-        return;
-    }
-    // The draft belongs inline at the caret, in the application, exactly where the
-    // committed text will land. Setting the *panel* preedit put it in our own
-    // candidate strip instead — a second box next to the text field, which reads as
-    // "the input method is writing somewhere else".
-    //
-    // Client preedit is only used when the application says it supports it; the
-    // fallback is to show nothing and let the committed chunks appear, which is
-    // still direct typing. The panel preedit stays empty either way, so our window
-    // never duplicates the line (see `collect`).
-    fcitx::Text draft;
-    const bool inlinePreedit =
-        !text.empty() && inputContext->capabilityFlags().test(fcitx::CapabilityFlag::Preedit) &&
-        !inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive);
-    if (inlinePreedit) {
-        draft = fcitx::Text(std::string(text));
-        draft.setCursor(static_cast<int>(text.size()));
-    }
-    inputContext->inputPanel().setPreedit(fcitx::Text{});
-    inputContext->inputPanel().setClientPreedit(draft);
-    speechPreeditActive_ = inlinePreedit;
-    inputContext->updatePreedit();
 }
 
 void SuperiorAgent::holdSpeechCommits() {
@@ -1929,49 +1946,35 @@ void SuperiorAgent::holdSpeechCommits() {
     }
     // The draft cannot be drawn anywhere either; drop it and let the next chunk
     // carry the text once a client is focused again.
-    setSpeechPreedit({});
-    speechHolding_ = true;
+    outbox_.clearDraft();
     SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
-        .field("held", static_cast<std::int64_t>(heldSpeech_.size()))
+        .field("held", static_cast<std::int64_t>(outbox_.held().size()))
         << "no focused client; holding the transcript";
 }
 
 void SuperiorAgent::flushHeldSpeech() {
-    if (heldSpeech_.empty()) {
-        speechHolding_ = false;
+    if (!outbox_.holding()) {
         return;
     }
-    const std::string text = std::move(heldSpeech_);
-    heldSpeech_.clear();
-    speechHolding_ = false;
+    const std::size_t chars = outbox_.held().size();
+    outbox_.flush();
     SUPERIOR_INFO(diag::categories::SpeechRecognition)
-        .field("chars", static_cast<std::int64_t>(text.size()))
+        .field("chars", static_cast<std::int64_t>(chars))
         << "flushing the transcript held while nothing was focused";
-    commitSpeechText(text);
 }
 
 void SuperiorAgent::commitSpeechText(std::string_view text) {
     if (instance_ == nullptr || text.empty()) {
         return;
     }
-    if (activeContext_ == nullptr || speechHolding_) {
-        // Nowhere to type right now. Keep the words instead of losing them; the
-        // next focus-in flushes this buffer.
-        heldSpeech_ += text;
+    // `Hold`: this is speech the user already spoke, so losing it because the
+    // window closed mid-sentence is not acceptable.
+    if (!outbox_.commit({}, std::string(text), core::WhenUnfocused::Hold)) {
+        SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
+            .field("held", static_cast<std::int64_t>(outbox_.held().size()))
+            << "nowhere to type; the transcript is held";
         return;
     }
-    fcitx::InputContext *inputContext = activeContext_;
-    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
-        SUPERIOR_WARN(diag::categories::SpeechRecognition)
-            << "refusing to commit a transcript into a password field";
-        return;
-    }
-    // The engine may still hold a composition from before the panel opened.
-    // Dropping it first keeps the transcript from being followed by stale pinyin.
-    inputContext->reset();
-    inputContext->inputPanel().reset();
-    inputContext->commitString(std::string(text));
-    inputContext->updatePreedit();
     SUPERIOR_INFO(diag::categories::SpeechRecognition)
         .field("chars", static_cast<std::int64_t>(text.size()))
         << "transcript committed";
@@ -1990,14 +1993,16 @@ void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::stri
         return it != cloudContexts_.end() ? it->second.pinyin : std::string{};
     }();
 
-    // The engine still owns a composition for the pinyin we completed. Drop it
-    // first, otherwise the committed word would be followed by the remaining
-    // pinyin as soon as the user types again. `InputContext::reset` reaches the
-    // engine's `reset()`; `Instance::resetCompose` only resets XKB.
-    inputContext->reset();
-    inputContext->inputPanel().reset();
-    inputContext->commitString(std::string(text));
-    inputContext->updatePreedit();
+    // `Drop`: a candidate belongs to one composition. If focus moved since it
+    // was drawn, typing it into the new window would be wrong.
+    const core::ImeSession *session = findSession(inputContext);
+    const api::SessionKey key = session != nullptr ? session->key() : api::SessionKey{};
+    if (!outbox_.commit(key, std::string(text), core::WhenUnfocused::Drop)) {
+        SUPERIOR_DEBUG(diag::categories::Cloud)
+            .field("length", static_cast<std::int64_t>(text.size()))
+            << "cloud candidate dropped: its session is no longer active";
+        return;
+    }
 
     // Remember the pick, so the next `yuanshen` offers 原神 first without a
     // request. The engine cannot learn this one: we committed it, not rime.

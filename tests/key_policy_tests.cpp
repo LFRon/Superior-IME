@@ -140,6 +140,48 @@ void testPagingKeys() {
     CHECK(pageStep(KeyCode::Escape) == 0);
 }
 
+/// The three gestures that used to be decided in three places inside the Fcitx5
+/// adapter. Every rule below is a shipped behaviour, so a port must keep it.
+void testShiftTapGesture() {
+    GestureInput input;
+    input.gesture = Gesture::ShiftTap;
+    CHECK(decideGesture(input) == GestureIntent::ToggleLanguage);
+    // Inline English switched off: a bare Shift must stay a modifier.
+    input.inlineEnglishEnabled = false;
+    CHECK(decideGesture(input) == GestureIntent::None);
+}
+
+void testRightCtrlTapGesture() {
+    GestureInput input;
+    input.gesture = Gesture::RightCtrlTap;
+    CHECK(decideGesture(input) == GestureIntent::ToggleSpeech);
+    // Two independent switches; either one off disables the gesture.
+    input.speechHotkeyEnabled = false;
+    CHECK(decideGesture(input) == GestureIntent::None);
+    input.speechHotkeyEnabled = true;
+    input.speechEnabled = false;
+    CHECK(decideGesture(input) == GestureIntent::None);
+}
+
+void testEscapeWhileSpeakingGesture() {
+    GestureInput input;
+    input.gesture = Gesture::EscapeWhileSpeaking;
+    // Idle: Escape keeps its engine meaning, so no intent.
+    CHECK(decideGesture(input) == GestureIntent::None);
+    input.speaking = true;
+    CHECK(decideGesture(input) == GestureIntent::CancelSpeech);
+    // The speech switch does not govern Escape: a session already running must
+    // still be cancellable after the user turns the feature off.
+    input.speechEnabled = false;
+    input.speechHotkeyEnabled = false;
+    CHECK(decideGesture(input) == GestureIntent::CancelSpeech);
+}
+
+void testNoGesture() {
+    GestureInput input;
+    CHECK(decideGesture(input) == GestureIntent::None);
+}
+
 } // namespace
 
 int main() {
@@ -155,5 +197,9 @@ int main() {
     testNavigationInChineseIdleIsForwarded();
     testEditingKeyPredicate();
     testPagingKeys();
+    testShiftTapGesture();
+    testRightCtrlTapGesture();
+    testEscapeWhileSpeakingGesture();
+    testNoGesture();
     return superior::test::finish("key policy tests");
 }

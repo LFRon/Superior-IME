@@ -15,6 +15,27 @@ bool isEditingKey(KeyCode code) noexcept {
     }
 }
 
+GestureIntent decideGesture(const GestureInput &input) noexcept {
+    switch (input.gesture) {
+    case Gesture::ShiftTap:
+        // The tap exists to type English inline; with that switched off a bare
+        // Shift must stay a modifier, and silently switching language would be
+        // the worst of both.
+        return input.inlineEnglishEnabled ? GestureIntent::ToggleLanguage : GestureIntent::None;
+    case Gesture::RightCtrlTap:
+        // Two independent switches: the feature, and the gesture that triggers it.
+        return input.speechEnabled && input.speechHotkeyEnabled ? GestureIntent::ToggleSpeech
+                                                                : GestureIntent::None;
+    case Gesture::EscapeWhileSpeaking:
+        // Only while a session is live. Otherwise Escape belongs to the engine
+        // and the application, exactly as before.
+        return input.speaking ? GestureIntent::CancelSpeech : GestureIntent::None;
+    case Gesture::None:
+        break;
+    }
+    return GestureIntent::None;
+}
+
 int pageStep(KeyCode code) noexcept {
     switch (code) {
     case KeyCode::Plus:

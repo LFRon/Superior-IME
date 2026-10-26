@@ -6,6 +6,11 @@
 // call, and speaks JSON Lines on stdin/stdout. It never decides what to show and
 // never types anything — the agent does that. Keeping the model runtime out of
 // the input-method process is what makes a 600 MB decode harmless to typing.
+//
+// This file is the process entry, i.e. the host (D-13): it is the only place in
+// this program that names a platform. `Service` itself only knows
+// `api::AudioSource`, so the same logic runs unchanged on a host whose capture
+// is a Qt object rather than a child process.
 
 #include <cerrno>
 #include <csignal>
@@ -18,6 +23,7 @@
 #include <poll.h>
 #include <unistd.h>
 
+#include "superior/linux/AudioCapture.hpp"
 #include "superior/speech_recognition/Layout.hpp"
 #include "superior/speech_recognition/Models.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
@@ -92,7 +98,9 @@ int main() {
     // be handled — not terminate us with SIGPIPE, which is what a default action
     // does and how a broken recogniser took the whole capability down silently.
     ::signal(SIGPIPE, SIG_IGN);
-    Service service(emit);
+    // The capture backend is chosen here and nowhere else.
+    superior::linux::LinuxAudioSource audio;
+    Service service(emit, audio);
     EngineConfig config = defaults();
     service.configure(config);
     service.setSilencePolicy(policyFromEnvironment());

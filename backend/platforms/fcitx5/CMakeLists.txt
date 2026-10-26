@@ -36,7 +36,8 @@ if(SUPERIOR_ENABLE_FCITX5)
 
     add_library(superior_fcitx5_agent MODULE
         src/SpeechProcess.cpp
-        src/SuperiorAgent.cpp)
+        src/SuperiorAgent.cpp
+        src/TextSession.cpp)
 
     target_include_directories(superior_fcitx5_agent PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -48,6 +49,7 @@ if(SUPERIOR_ENABLE_FCITX5)
         Superior::Protocol
         Superior::Config
         Superior::CloudPinyin
+        Superior::Paths
         Superior::Diagnostics
         nlohmann_json::nlohmann_json)
 

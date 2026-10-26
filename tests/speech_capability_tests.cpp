@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The speech capability's contract, without a microphone or a model:
-// capture argv, PCM level, WAV framing, engine argv and the JSON Lines protocol.
+// PCM level, WAV framing, engine argv and the JSON Lines protocol.
+// Capture argv lives in `audio_capture_tests.cpp`, next to the Linux backend.
 
 #include <cstdint>
 #include <cstdlib>
@@ -29,36 +30,6 @@ bool contains(const std::vector<std::string> &values, const std::string &needle)
         }
     }
     return false;
-}
-
-void testCaptureArgv() {
-    const auto pipewire = buildCaptureCommand("pw-record");
-    CHECK(pipewire.program == "pw-record");
-    CHECK(contains(pipewire.args, "--rate=16000"));
-    CHECK(contains(pipewire.args, "--channels=1"));
-    CHECK(contains(pipewire.args, "-"));
-
-    // Pinning: the stream must name the device, otherwise a mid-session flip of
-    // the system default would silently move the recording.
-    const auto pinnedPipewire = buildCaptureCommand("pw-record", 16000, 1, "bluez_input.headset");
-    CHECK(contains(pinnedPipewire.args, "--target=bluez_input.headset"));
-    const auto pinnedPulse = buildCaptureCommand("parec", 16000, 1, "bluez_input.headset");
-    CHECK(contains(pinnedPulse.args, "--device=bluez_input.headset"));
-    // Unpinned keeps the old argv exactly.
-    CHECK(!contains(buildCaptureCommand("pw-record").args, "--target="));
-    // arecord cannot name a sound-server node, so it ignores the target.
-    CHECK(!contains(buildCaptureCommand("arecord", 16000, 1, "bluez_input.headset").args,
-                    "--target=bluez_input.headset"));
-
-    const auto pulse = buildCaptureCommand("parec");
-    CHECK(pulse.program == "parec");
-    CHECK(contains(pulse.args, "--format=s16le"));
-    CHECK(contains(pulse.args, "--raw"));
-
-    const auto alsa = buildCaptureCommand("arecord");
-    CHECK(alsa.program == "arecord");
-    CHECK(contains(alsa.args, "S16_LE"));
-    CHECK(contains(alsa.args, "raw"));
 }
 
 void testLevelMath() {
@@ -320,27 +291,6 @@ void testProtocolRoundTrip() {
 }
 
 } // namespace
-
-/// Restoring the default input is the one thing an input method can do about
-/// WirePlumber re-electing it after every recording. The rules must be
-/// conservative: never invent a device, never override a deliberate change.
-void testDefaultSourceRestoreRules() {
-    const std::vector<std::string> available{"alsa_input.mic", "bluez_input.headset"};
-
-    // The desktop flipped it: put it back.
-    CHECK(shouldRestoreDefaultSource("bluez_input.headset", "alsa_input.mic", available));
-    // Nothing changed: nothing to do.
-    CHECK(!shouldRestoreDefaultSource("bluez_input.headset", "bluez_input.headset", available));
-    // Never remembered (no pactl): stay out of the way.
-    CHECK(!shouldRestoreDefaultSource("", "alsa_input.mic", available));
-    // The user unplugged the headset: the name is gone, so do not force it.
-    CHECK(!shouldRestoreDefaultSource("bluez_input.headset", "alsa_input.mic",
-                                      std::vector<std::string>{"alsa_input.mic"}));
-    // The user switched deliberately to another live device: still restored only
-    // if the remembered one is still present, which is the trade-off we accept —
-    // see the comment in Capture.hpp.
-    CHECK(!shouldRestoreDefaultSource("gone", "alsa_input.mic", available));
-}
 
 /// The recogniser speaks in vocabulary artefacts; the document must not.
 void testTranscriptCleaning() {
@@ -673,7 +623,6 @@ void testSpeechGatingArgv() {
 }
 
 int main() {
-    testCaptureArgv();
     testContinuousModeNeverEndsOnSilence();
     testSpeechGatingArgv();
     testTranscriptCleaning();
@@ -682,7 +631,6 @@ int main() {
     testResolveStoredModel();
     testParaformerBackendArgs();
     testStreamingWindowCoversSession();
-    testDefaultSourceRestoreRules();
     testLevelMath();
     testSilenceWatchEndsUtterance();
     testSilenceWatchNoSpeechTimeout();

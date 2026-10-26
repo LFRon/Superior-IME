@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "superior/protocol/SceneServer.hpp"
 
+#include "superior/paths/Roots.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -340,9 +342,8 @@ SceneServer::~SceneServer() {
 }
 
 std::string SceneServer::defaultSocketPath() {
-    const char *runtime = ::getenv("XDG_RUNTIME_DIR");
-    if (runtime != nullptr && runtime[0] != '\0') {
-        return std::string(runtime) + "/superior-ime.sock";
+    if (const auto runtime = paths::Roots::fromEnvironment().runtime; !runtime.empty()) {
+        return (runtime / "superior-ime.sock").string();
     }
     return "/tmp/superior-ime-" + std::to_string(::getuid()) + ".sock";
 }

@@ -31,9 +31,11 @@
 #include "superior/core/Modes.hpp"
 #include "superior/core/SceneInput.hpp"
 #include "superior/core/SpeechState.hpp"
+#include "superior/core/TextOutbox.hpp"
 
 #include "SpeechProcess.h"
 #include "superior/fcitx5/ShiftTap.hpp"
+#include "superior/fcitx5/TextSession.hpp"
 #include "superior/protocol/SceneServer.hpp"
 
 namespace superior::fcitx5 {
@@ -183,7 +185,8 @@ private:
     /// Ends the utterance and lets the recogniser produce a transcript.
     void stopSpeech();
     /// Right-Ctrl tap: start when idle, stop when recording, otherwise open the
-    /// panel so its setup explanation is visible.
+    /// panel so its setup explanation is visible. The `settings.json` gate is
+    /// applied by the caller through `core::decideGesture`, not re-checked here.
     void toggleSpeechByHotkey();
     /// Notices a capability process that died mid-session.
     ///
@@ -281,13 +284,16 @@ private:
     std::unique_ptr<fcitx::EventSourceTime> socketRetryTimer_;
     /// Set by `startSceneServer` so the retry callback can stop itself.
     bool socketRetryStop_ = false;
-    /// Text committed by the capability while no client was focused.
-    std::string heldSpeech_;
-    /// True while dictation continues with no destination for the text.
-    bool speechHolding_ = false;
-    /// True while a speech draft is shown as preedit, so it is cleared exactly
-    /// once and never left behind in the composition.
-    bool speechPreeditActive_ = false;
+    /// The single exit for text (§6.6, P5.3).
+    ///
+    /// `textSession_` is the Fcitx5 implementation of `api::TextSessionPort`; it
+    /// owns "drop the composition, then commit" and "never write into a
+    /// sensitive field". `outbox_` adds the hold/flush policy: a transcript
+    /// waits for a caret, a clicked candidate does not.
+    ///
+    /// Declaration order matters: the outbox holds a reference to the session.
+    TextSession textSession_;
+    core::TextOutbox outbox_;
     /// Right-Ctrl tap toggles dictation (`settings.json: speechRecognitionHotkey`).
     bool speechRecognitionHotkey_ = true;
     /// Catalogue id selected in settings; the panel can change it.

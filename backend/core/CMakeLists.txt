@@ -9,7 +9,8 @@ add_library(superior_core STATIC
     src/KeyPolicy.cpp
     src/Modes.cpp
     src/SceneInput.cpp
-    src/SpeechState.cpp)
+    src/SpeechState.cpp
+    src/TextOutbox.cpp)
 
 add_library(Superior::Core ALIAS superior_core)
 

@@ -53,6 +53,11 @@ scan "backend/core" '\bkKey[A-Z]' "core -> platform key constant"
 # HOME on its own becomes a second place to update when a port changes the root
 # set (Windows: KnownFolders), and the copies drift.
 scan "backend/api" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "api -> environment path"
+# Nothing below `paths/` may parse a root on its own, including the platform
+# adapters: `SceneServer`'s socket path and the speech child's log path used to
+# be the last two copies of the same fallback chain.
+scan "backend/platforms" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "platform -> environment path"
+scan "backend/protocol" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "protocol -> environment path"
 scan "backend/config" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "config -> environment path"
 scan "backend/core" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "core -> environment path"
 scan "backend/pinyin" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "pinyin -> environment path"
@@ -88,6 +93,19 @@ scan "backend/pinyin/include" '#include[[:space:]]*[<"](rime_api|dlfcn)' "pinyin
 # Windows and Android, so no toolkit and no Fcitx5 may leak in.
 scan "backend/speech-recognition" '#include[[:space:]]*[<"](Q|Qt)' "speech-recognition -> Qt"
 scan "backend/speech-recognition" '#include[[:space:]]*[<"]fcitx' "speech-recognition -> fcitx5"
+# Capture details belong to a platform module, not to the capability: a
+# capability that names `pw-record` cannot run on Windows or Android, and
+# `api::AudioSource` exists precisely so it does not have to. `main.cpp` is the
+# process's host (D-13) and is the one file allowed to pick a backend.
+scan "backend/speech-recognition/src" '(pw-record|parec|arecord|pactl)' "speech-recognition -> capture tool"
+scan "backend/speech-recognition/include" '(pw-record|parec|arecord|pactl)' "speech-recognition -> capture tool"
+scan "backend/speech-recognition/src" '#include[[:space:]]*[<"]superior/(linux|windows|android)/' "speech-recognition -> platform module"
+scan "backend/speech-recognition/include" '#include[[:space:]]*[<"]superior/(linux|windows|android)/' "speech-recognition -> platform module"
+# The same rule in the other direction: a capability may not name a port's
+# implementation, only the port (which lives in `backend/api`).
+scan "backend/core" '#include[[:space:]]*[<"]superior/(linux|windows|android|fcitx5)/' "core -> platform module"
+scan "backend/pinyin" '#include[[:space:]]*[<"]superior/(linux|fcitx5)/' "pinyin -> platform module"
+scan "backend/api" '#include[[:space:]]*[<"]superior/(linux|windows|android|fcitx5)/' "api -> platform module"
 
 # The decision layer talks to capabilities through its own contract; it must not
 # depend on a concrete capability either.
@@ -96,6 +114,11 @@ scan "backend/core" '#include[[:space:]]*[<"]superior/(pinyin|speech-recognition
 # Runtime may use core, but its public headers must not expose core types.
 scan "backend/runtime/include" '#include[[:space:]]*[<"]superior/core/' "runtime public header -> core"
 scan "backend/runtime/include" 'superior::core' "runtime public header -> core"
+
+# The host-neutral stub is the proof that the contract layer stands alone: it may
+# include `superior/api/` and itself, nothing else. If it ever needs a capability,
+# `api/` has grown a dependency it should not have (`架构设计.md` §11 P5.5).
+scan "backend/platforms/stub" '#include[[:space:]]*[<"]superior/(core|platforms|protocol|pinyin|speech-recognition|cloudpinyin|config|skin|theme|diagnostics|paths|fcitx5)/' "stub -> anything but api"
 
 if (( fail != 0 )); then
     echo "check-boundaries: FAILED" >&2

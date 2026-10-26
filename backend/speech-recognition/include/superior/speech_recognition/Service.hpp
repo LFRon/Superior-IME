@@ -10,6 +10,9 @@
 #include <thread>
 #include <vector>
 
+#include <span>
+
+#include "superior/api/Ports.hpp"
 #include "superior/speech_recognition/Capture.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
 
@@ -19,11 +22,14 @@ namespace superior::speech_recognition {
 ///
 /// Everything blocking happens on a thread; `poll()` is the only place that
 /// emits, so the owner keeps a single-threaded view of the state machine.
-class Service {
+class Service final : public api::AudioSink {
 public:
     using Emit = std::function<void(const Event &)>;
 
-    explicit Service(Emit emit);
+    /// `audio` is the capture port; it must outlive the service. Passing it in
+    /// keeps this translation unit free of pipes, device names and capture
+    /// tools, so the same logic runs on any host (§6.2).
+    Service(Emit emit, api::AudioSource &audio);
     ~Service();
 
     Service(const Service &) = delete;
@@ -45,9 +51,13 @@ public:
     [[nodiscard]] bool capturing() const noexcept { return capturing_; }
     [[nodiscard]] bool working() const noexcept { return capturing_ || workerBusy_; }
 
+    // api::AudioSink — called on the capture implementation's own thread.
+    void onAudio(std::span<const std::int16_t> samples) override;
+    void onAudioEnded() override;
+
 private:
     void stopCapture();
-    void startCaptureThread();
+    void startCapture();
     /// Starts the streaming recogniser and the thread that reads its events.
     /// Returns false when it cannot, which puts the session back on the batch
     /// path.
@@ -58,6 +68,9 @@ private:
     void beginStreamingClose();
     /// Joins and reaps the recogniser once its reader thread has finished.
     void reapStreamingRecogniser();
+    /// Ends the recogniser we just started when capture never got going, so a
+    /// 130 MB model does not stay resident with nothing to decode.
+    void abandonRecogniser();
     /// Folds this session's measured back-pressure into the persisted step
     /// tuning. Called from `reapStreamingRecogniser`, the single place every
     /// streaming session ends.
@@ -98,20 +111,14 @@ private:
     EngineConfig config_;
 
     // Capture
+    api::AudioSource &audioPort_;
     bool capturing_ = false;
-    int captureFd_ = -1;
-    pid_t capturePid_ = -1;
-    std::thread captureThread_;
     std::mutex captureMutex_;
     std::vector<std::int16_t> audio_;
     double pendingLevel_ = 0.0;
     std::uint64_t lastLevelMs_ = 0;
     /// Set by the capture thread when the tool exits without being asked to.
     std::atomic<bool> captureEnded_{false};
-    /// Set by `stopCapture()` so the capture thread leaves its loop even while it
-    /// is blocked writing to a busy recogniser. Without it, stopping could hang
-    /// until the model finished decoding everything that was already queued.
-    std::atomic<bool> captureStopping_{false};
     /// Ends the utterance when the user stops talking, so the panel does not
     /// require a second click after every sentence.
     SilenceWatch silence_;

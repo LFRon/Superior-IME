@@ -174,6 +174,16 @@ superior_set_warnings(superior_key_policy_tests)
 
 # Every capability resolves its directories through Superior::Paths, so the
 # fallback chain has to be pinned where nobody can quietly re-derive it.
+# The single exit for text. Tested with a fake port so the hold / drop rules
+# are pinned without a window system.
+add_executable(superior_text_outbox_tests text_outbox_tests.cpp)
+target_link_libraries(superior_text_outbox_tests PRIVATE
+    Superior::Core
+    Superior::PlatformStub)
+target_include_directories(superior_text_outbox_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_text_outbox_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_text_outbox_tests)
+
 add_executable(superior_paths_tests paths_tests.cpp)
 target_link_libraries(superior_paths_tests PRIVATE Superior::Paths)
 target_include_directories(superior_paths_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -197,6 +207,20 @@ target_link_libraries(superior_golden_pinyin_tests PRIVATE Superior::Pinyin)
 target_include_directories(superior_golden_pinyin_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(superior_golden_pinyin_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_golden_pinyin_tests)
+
+add_executable(superior_audio_capture_tests audio_capture_tests.cpp)
+target_link_libraries(superior_audio_capture_tests PRIVATE Superior::LinuxPlatform)
+target_include_directories(superior_audio_capture_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_audio_capture_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_audio_capture_tests)
+
+add_executable(superior_port_conformance_tests conformance/port_conformance_tests.cpp)
+target_link_libraries(superior_port_conformance_tests PRIVATE
+    Superior::Core
+    Superior::PlatformStub)
+target_include_directories(superior_port_conformance_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_port_conformance_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_port_conformance_tests)
 
 add_executable(superior_speech_capability_tests speech_capability_tests.cpp)
 target_link_libraries(superior_speech_capability_tests PRIVATE Superior::SpeechRecognition)
@@ -251,11 +275,14 @@ add_test(NAME theme COMMAND superior_theme_tests)
 add_test(NAME core COMMAND superior_core_tests)
 add_test(NAME modes COMMAND superior_modes_tests)
 add_test(NAME key-policy COMMAND superior_key_policy_tests)
+add_test(NAME text-outbox COMMAND superior_text_outbox_tests)
 add_test(NAME paths COMMAND superior_paths_tests)
 add_test(NAME scene-input COMMAND superior_scene_input_tests)
 add_test(NAME pinyin-layout COMMAND superior_pinyin_layout_tests)
 add_test(NAME golden-pinyin
     COMMAND superior_golden_pinyin_tests "${PROJECT_SOURCE_DIR}/tests/golden/pinyin.txt")
+add_test(NAME port-conformance COMMAND superior_port_conformance_tests)
+add_test(NAME audio-capture COMMAND superior_audio_capture_tests)
 add_test(NAME speech-capability COMMAND superior_speech_capability_tests)
 add_test(NAME speech-state COMMAND superior_speech_state_tests)
 add_test(NAME speech-step COMMAND superior_speech_step_tests)
