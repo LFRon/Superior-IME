@@ -219,6 +219,13 @@ Fcitx 标点模块只翻图标、不暴露 checked，所以两种来源都要认
 `attachTrayActions()` 在 `refresh()` 里把它们挂到**属于我们的**上下文上——别的
 输入法的托盘菜单不该出现我们的开关。
 
+勾选状态问的是 owner 自己，不是界面的缓存：`speech_` 现在是
+`SpeechController`（P5.4 从 agent 拆出），它持有 `core::SpeechState` 与识别子进程，
+`visible()` / `enabled()` 就是那两个开关的真相。拆出去的好处是可以拿假能力、
+假时钟测：`tests/speech_controller_tests` 覆盖「面板没装好不该起进程」「密码框拒绝
+录音」「取消后迟到的结果不许上屏」「子进程死掉/阶段卡死要复位面板」「没焦点时
+先暂存再补上」这些规则，不需要麦克风，也不需要 Fcitx5。
+
 ### 两个必须记住的细节
 
 1. **菜单只在状态区重绘时重新读勾选**。`notificationitem` 只在

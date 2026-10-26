@@ -234,6 +234,21 @@ target_include_directories(superior_speech_step_tests PRIVATE "${CMAKE_CURRENT_S
 target_compile_features(superior_speech_step_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_speech_step_tests)
 
+# The speech panel's controller (P5.4): its capability, its clock and its layout
+# are fakes, so the state machine is exercised with no microphone, no model, no
+# child process and no Fcitx5. The target only exists where the adapter is built.
+if(TARGET Superior::Fcitx5Speech)
+    add_executable(superior_speech_controller_tests speech_controller_tests.cpp)
+    target_link_libraries(superior_speech_controller_tests PRIVATE
+        Superior::Fcitx5Speech
+        Superior::PlatformStub)
+    target_include_directories(superior_speech_controller_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(superior_speech_controller_tests PRIVATE cxx_std_20)
+    superior_set_warnings(superior_speech_controller_tests)
+    add_test(NAME speech-controller COMMAND superior_speech_controller_tests)
+endif()
+
 add_executable(superior_speech_state_tests speech_state_tests.cpp)
 target_link_libraries(superior_speech_state_tests PRIVATE Superior::Core)
 target_include_directories(superior_speech_state_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

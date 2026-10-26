@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include "SpeechController.h"
+
 namespace superior::fcitx5 {
 
 /// Owns the `superior_speech_recognition` child process.
@@ -19,26 +21,26 @@ namespace superior::fcitx5 {
 ///
 /// The child speaks JSON Lines on stdin/stdout; this class only moves bytes. All
 /// interpretation stays in the agent's decision layer.
-class SpeechProcess {
+class SpeechProcess final : public SpeechCapability {
 public:
-    using LineHandler = std::function<void(std::string_view)>;
+    using LineHandler = SpeechCapability::LineHandler;
 
     explicit SpeechProcess(fcitx::Instance *instance);
-    ~SpeechProcess();
+    ~SpeechProcess() override;
 
     SpeechProcess(const SpeechProcess &) = delete;
     SpeechProcess &operator=(const SpeechProcess &) = delete;
 
     /// Starts the child. Returns false with `error` filled when the binary is
     /// missing or the pipes cannot be created.
-    bool start(LineHandler handler, std::string &error);
-    void stop();
+    bool start(LineHandler handler, std::string &error) override;
+    void stop() override;
 
-    [[nodiscard]] bool running() const noexcept { return pid_ > 0; }
+    [[nodiscard]] bool running() const override { return pid_ > 0; }
 
     /// Writes one line. Returns false when the child is gone (the caller then
     /// reports the failure instead of silently swallowing a command).
-    bool send(std::string_view line);
+    bool send(std::string_view line) override;
 
     /// `SUPERIOR_SPEECH_BINARY`, then the managed copy, then `PATH`.
     [[nodiscard]] static std::string resolveBinary();

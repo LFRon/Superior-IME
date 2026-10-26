@@ -34,7 +34,30 @@ if(SUPERIOR_ENABLE_FCITX5)
     find_package(nlohmann_json 3.11 REQUIRED)
     set(FCITX5_CORE_VERSION "${Fcitx5Core_VERSION}")
 
+    # The speech panel's decision layer, as a library of its own (P5.4).
+    #
+    # It links `core`, the model catalogue and the JSON parser — no Fcitx5, no
+    # Qt, no audio device — because that is what makes it testable: the tests
+    # drive it with a fake capability and a fake clock (`speech-controller`).
+    add_library(superior_fcitx5_speech STATIC
+        src/SpeechController.cpp)
+
+    add_library(Superior::Fcitx5Speech ALIAS superior_fcitx5_speech)
+
+    target_include_directories(superior_fcitx5_speech PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+
+    target_link_libraries(superior_fcitx5_speech
+        PUBLIC Superior::Core
+        PUBLIC Superior::SpeechRecognition
+        PRIVATE Superior::Diagnostics
+        PRIVATE nlohmann_json::nlohmann_json)
+
+    target_compile_features(superior_fcitx5_speech PUBLIC cxx_std_20)
+    superior_set_warnings(superior_fcitx5_speech)
+
     add_library(superior_fcitx5_agent MODULE
+        src/OverlayController.cpp
         src/SpeechProcess.cpp
         src/SuperiorAgent.cpp
         src/TextSession.cpp)
@@ -45,6 +68,7 @@ if(SUPERIOR_ENABLE_FCITX5)
     target_link_libraries(superior_fcitx5_agent PRIVATE
         Fcitx5::Core
         Superior::Fcitx5Mapping
+        Superior::Fcitx5Speech
         Superior::SpeechRecognition
         Superior::Protocol
         Superior::Config

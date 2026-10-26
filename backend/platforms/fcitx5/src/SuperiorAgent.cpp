@@ -14,9 +14,7 @@
 #include <fcitx/text.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <thread>
 #include <cstdlib>
 #include <fstream>
 #include <optional>
@@ -38,8 +36,6 @@
 #include "superior/fcitx5/StatusMapping.hpp"
 #include "superior/protocol/Wire.hpp"
 
-#include <nlohmann/json.hpp>
-
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -51,14 +47,6 @@ namespace superior::fcitx5 {
 namespace diag = ::superior::diagnostics;
 
 namespace {
-
-/// Commands without a payload are one-liners; going through `encodeCommand`
-/// keeps their spelling in the protocol header rather than in this file.
-std::string encodeSpeechCommand(superior::speech_recognition::Command::Kind kind) {
-    superior::speech_recognition::Command command;
-    command.kind = kind;
-    return superior::speech_recognition::encodeCommand(command);
-}
 
 std::size_t byteCursor(const fcitx::Text &text) {
     const int cursor = text.cursor();
@@ -116,6 +104,32 @@ private:
 
 SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
     : manager_(manager), instance_(manager != nullptr ? manager->instance() : nullptr),
+      overlay_(instance_),
+      // The speech panel's decision layer. Its three effects reach back here,
+      // and its capability factory is what keeps the process type out of the
+      // controller (a test hands it a fake instead).
+      speech_({// Where a transcript goes: the outbox is the only text exit (§6.6).
+               [this]() -> core::TextOutbox & { return outbox_; },
+               // A password field refuses dictation; the decision to refuse is
+               // the controller's, the fact is the host's.
+               [this] {
+                   return activeContext_ != nullptr &&
+                          activeContext_->capabilityFlags().testAny(
+                              fcitx::CapabilityFlag::PasswordOrSensitive);
+               },
+               // Every speech transition ends with a repaint of the same scene.
+               [this] { refresh(activeContext_); },
+               // The recogniser child: a factory, so the controller never names
+               // the process type and the tests can hand it a fake.
+               [this] {
+                   return std::unique_ptr<SpeechCapability>(
+                       std::make_unique<SpeechProcess>(instance_));
+               },
+               // Monotonic milliseconds, for "how long has this been stuck".
+               [] { return steadyMs(); },
+               // Layout defaults (engine/model paths and presence) are the
+               // catalogue's own helpers; nothing to override here.
+               {}}),
       // `TextSession` asks the agent two questions and nothing else: "which
       // context is this key" and "where is the caret now". Both are the agent's
       // own state, so the port stays a pure sink (§6.7).
@@ -166,35 +180,8 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             << "learning loaded";
     }
 
-    std::string error;
-    const std::string socketPath = protocol::SceneServer::defaultSocketPath();
-    if (!startSceneServer(socketPath, error)) {
-        // A failed bind used to be permanent, which is how a Fcitx5 handover
-        // could leave the overlay dead for the rest of the session. Keep trying:
-        // the other instance is usually on its way out.
-        SUPERIOR_WARN(diag::categories::Fcitx5)
-            .field("path", socketPath)
-            .field("error", error)
-            << "cannot listen for the UI yet; retrying";
-        socketRetryTimer_ = instance_->eventLoop().addTimeEvent(
-            CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 1000000, 0,
-            [this, socketPath](fcitx::EventSourceTime *, std::uint64_t) {
-                std::string retryError;
-                if (startSceneServer(socketPath, retryError)) {
-                    ensureOverlay();
-                } else {
-                    SUPERIOR_DEBUG(diag::categories::Fcitx5)
-                        .field("error", retryError)
-                        << "UI socket still busy";
-                }
-                return !socketRetryStop_; // keep polling once a second
-            });
-    } else {
-        SUPERIOR_INFO(diag::categories::Fcitx5)
-            .field("path", socketPath)
-            << "UI socket ready";
-    }
-    server_.setCommandHandler([this](std::string bytes) { handleCommand(std::move(bytes)); });
+    overlay_.setCommandHandler([this](std::string bytes) { handleCommand(std::move(bytes)); });
+    overlay_.open(protocol::SceneServer::defaultSocketPath());
 
     handlers_.emplace_back(instance_->watchEvent(
         fcitx::EventType::InputContextFlushUI, fcitx::EventWatcherPhase::PostInputMethod,
@@ -218,7 +205,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
                 .field("program", inputContext->program())
                 << "input context focused";
             reloadSettings();
-            ensureOverlay();
+            overlay_.ensure();
             if (!isOurs(inputContext)) {
                 if (activeContext_ != nullptr) {
                     activeContext_ = nullptr;
@@ -227,7 +214,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
                 return;
             }
             refresh(inputContext);
-            flushHeldSpeech();
+            speech_.flushHeld();
         }));
 
     handlers_.emplace_back(instance_->watchEvent(
@@ -246,7 +233,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             // "the engine returned nothing" error on top). Instead the session
             // keeps recording and the text is held until a client is focused
             // again, so nothing is lost and nothing lands in the wrong place.
-            holdSpeechCommits();
+            speech_.holdCommits();
             if (auto *session = findSession(inputContext)) {
                 session->hide();
                 broadcast(inputContext);
@@ -265,7 +252,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
     // routed to us, otherwise Classic UI paints one frame that it never hides
     // afterwards (its own update path is then bypassed).
     reloadSettings();
-    ensureOverlay();
+    overlay_.ensure();
 
     // Fcitx5 may already have a focused client when the addon loads (Fcitx5
     // restarted while an application kept focus). No FocusIn event will follow
@@ -290,14 +277,14 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 500000, 0,
         [this](fcitx::EventSourceTime *source, std::uint64_t) {
             reloadSettings();
-            pollSpeechProcess();
+            speech_.tick();
             // The socket can vanish while the user stays in one window: an
             // Fcitx5 handover, a stalled agent, a cleaned-up runtime directory.
             // Focus events are the only other thing that rebuilds it, and
             // waiting for one left the panels dead until the user happened to
             // switch windows. One lstat every half second is the whole cost.
-            if (!server_.ownsSocketFile()) {
-                ensureOverlay();
+            if (!overlay_.ownsSocket()) {
+                overlay_.ensure();
             }
             source->setNextInterval(500000);
             source->setOneShot();
@@ -374,21 +361,13 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
 }
 
 SuperiorAgent::~SuperiorAgent() {
-    if (speechProcess_) {
-        speechProcess_->stop();
-    }
+    speech_.shutdown();
     settingsTimer_.reset();
     startupTimer_.reset();
     cloudTimer_.reset();
     // Drop sockets before libcurl's handles go away: a transfer outliving the
     // event loop would be polled by nobody and leak its socket.
     cloudFetcher_.cancelAll();
-    reaperStop_.store(true, std::memory_order_relaxed);
-    for (auto &reaper : reapers_) {
-        if (reaper.joinable()) {
-            reaper.join();
-        }
-    }
     SUPERIOR_INFO(diag::categories::Fcitx5)
         .field("sessions", static_cast<std::uint64_t>(sessions_.size()))
         << "superior agent stopping";
@@ -398,7 +377,7 @@ SuperiorAgent::~SuperiorAgent() {
         trayActionsRegistered_ = false;
     }
     handlers_.clear();
-    server_.close();
+    overlay_.shutdown();
 }
 
 core::ImeSession *SuperiorAgent::findSession(fcitx::InputContext *inputContext) {
@@ -509,7 +488,7 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
     // The microphone is ours too. It is injected as a status item instead of a
     // Fcitx5 `SimpleAction` because the agent owns the decision and the UI
     // draws the bar: a real action would need a second addon to click into.
-    if (speechRecognitionEnabled_) {
+    if (speech_.enabled()) {
         api::StatusItem mic;
         mic.id = "speech";
         mic.label = "";
@@ -565,10 +544,9 @@ void SuperiorAgent::reloadSettings() {
 
     const bool previousInlineEnglish = inlineEnglishEnabled_;
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
-    const bool previousSpeech = speechRecognitionEnabled_;
-    speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
+    const bool previousSpeech = speech_.enabled();
     showStatusBar_ = loaded.settings.showStatusBar;
-    speechRecognitionHotkey_ = loaded.settings.speechRecognitionHotkey;
+    speech_.setHotkeyEnabled(loaded.settings.speechRecognitionHotkey);
     // A stored id can be stale (a model that was dropped, or the *old* default
     // that the user never chose). Resolving it here keeps a dead id from turning
     // into "nothing is selected" in the panel and "nothing loads" in the engine.
@@ -586,14 +564,14 @@ void SuperiorAgent::reloadSettings() {
             .field("to", choice.id)
             << "migrated the speech model default";
     }
-    speechModelId_ = choice.id;
-    if (previousSpeech != speechRecognitionEnabled_) {
+    speech_.setModelId(choice.id);
+    // Turning the feature off must also close the panel, otherwise a hidden
+    // switch keeps a microphone open.
+    speech_.setEnabled(loaded.settings.speechRecognitionEnabled);
+    if (previousSpeech != speech_.enabled()) {
         SUPERIOR_INFO(diag::categories::SpeechRecognition)
-            .field("enabled", speechRecognitionEnabled_)
+            .field("enabled", speech_.enabled())
             << "speech recognition toolbar entry changed";
-        if (!speechRecognitionEnabled_) {
-            speech_.hide();
-        }
     }
     if (!loaded.settings.skinId.empty()) {
         skinId_ = loaded.settings.skinId;
@@ -690,130 +668,6 @@ void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool engli
     }
 }
 
-bool SuperiorAgent::reclaimStaleOverlay() {
-    // The runtime directory comes from `Superior::Paths`, never from `getenv`:
-    // this file is the last place below `platforms/` that parsed it itself, and
-    // a port replaces that one function instead of hunting for `getenv` calls.
-    const auto runtime = paths::Roots::fromEnvironment().runtime;
-    if (runtime.empty()) {
-        return false;
-    }
-    const std::filesystem::path lockPath = runtime / "superior-ime-ui.lock";
-    std::ifstream file(lockPath);
-    if (!file) {
-        return false;
-    }
-    // QLockFile's format: pid on the first line, then host and application name.
-    long pid = 0;
-    file >> pid;
-    if (pid <= 0 || pid == static_cast<long>(::getpid())) {
-        return false;
-    }
-    // Only signal a process that is really our overlay: a recycled PID must not
-    // take a stray SIGTERM, and this file is user-writable.
-    std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
-    std::string command;
-    if (cmdline) {
-        std::getline(cmdline, command, '\0');
-    }
-    if (command.find("superior_ui") == std::string::npos) {
-        return false;
-    }
-    if (::kill(static_cast<pid_t>(pid), SIGTERM) != 0) {
-        return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    return true;
-}
-
-void SuperiorAgent::ensureOverlay() {
-    // The overlay can only be reached through our socket. Rebuild it first when
-    // it is gone: another Fcitx5 replacing this one (`fcitx5 -r`) can remove the
-    // file, and respawning the UI against a dead socket just produced the
-    // "started the Superior overlay" / "stopped a stale overlay" loop with no
-    // panel in between.
-    if (!server_.ownsSocketFile()) {
-        std::string error;
-        if (!startSceneServer(protocol::SceneServer::defaultSocketPath(), error)) {
-            // Someone else owns the UI right now. Their agent spawns the
-            // overlay; taking it over here would fight it for the single
-            // instance lock on every focus change.
-            SUPERIOR_DEBUG(diag::categories::Fcitx5)
-                .field("error", error)
-                << "not touching the overlay while another agent owns the UI socket";
-            return;
-        }
-    }
-
-    if (server_.clientCount() > 0) {
-        overlaySpawned_ = true;
-        return;
-    }
-
-    if (const char *disabled = std::getenv("SUPERIOR_UI_AUTOSTART");
-        disabled != nullptr && std::string_view(disabled) == "0") {
-        return;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    if (overlaySpawned_ && now - lastOverlayAttempt_ < std::chrono::seconds(3)) {
-        return;
-    }
-    // We already have a socket but nobody is connected: either the overlay just
-    // started, or a *previous* one is wedged and still holds the single-instance
-    // lock — then every respawn prints "already running" and we never get a
-    // window again. Reclaim by stopping the holder, which is safe: the lock file
-    // lives in our own runtime directory and records the process that took it.
-    if (overlaySpawned_ && reclaimStaleOverlay()) {
-        SUPERIOR_WARN(diag::categories::Fcitx5)
-            << "stopped a stale overlay that still held the single-instance lock";
-    }
-    lastOverlayAttempt_ = now;
-
-    // Order matters: the per-user install keeps the executable under
-    // ~/.local/share/superior-ime/bin (only a tiny wrapper sits in
-    // ~/.local/bin), a system install puts it in /usr/bin, and the PATH lookup
-    // is the last resort for hand-built trees.
-    std::vector<std::string> candidates;
-    if (const auto home = paths::Roots::fromEnvironment().home; !home.empty()) {
-        candidates.push_back((home / ".local/share/superior-ime/bin/superior_ui").string());
-        candidates.push_back((home / ".local/bin/superior_ui").string());
-    }
-    candidates.emplace_back("/usr/bin/superior_ui");
-    candidates.emplace_back("superior_ui");
-
-    for (const auto &binary : candidates) {
-        pid_t pid = -1;
-        std::string program = binary;
-        std::vector<char *> argv{program.data(), nullptr};
-        if (::posix_spawnp(&pid, program.c_str(), nullptr, nullptr, argv.data(), environ) == 0) {
-            overlaySpawned_ = true;
-            // Reap the child so a crashed overlay does not stay a zombie for the
-            // lifetime of Fcitx5.
-            //
-            // The reaper is joinable, not detached: Fcitx5 may unload this addon,
-            // and a detached thread executing code inside a dlclose'd library
-            // would crash. The destructor stops and joins it first.
-            reapers_.emplace_back([this, pid] {
-                while (!reaperStop_.load(std::memory_order_relaxed)) {
-                    int status = 0;
-                    const pid_t result = ::waitpid(pid, &status, WNOHANG);
-                    if (result != 0) {
-                        return;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-            });
-            SUPERIOR_INFO(diag::categories::Fcitx5)
-                .field("binary", binary)
-                << "started the Superior overlay";
-            return;
-        }
-    }
-    SUPERIOR_WARN(diag::categories::Fcitx5)
-        << "cannot start the overlay; run superior_ui manually or set SUPERIOR_UI_AUTOSTART=0";
-}
-
 void SuperiorAgent::takePreeditOwnership(fcitx::InputContext *inputContext) {
     PreeditOwnership &state = preeditOwnership_[inputContext];
     if (state.owned) {
@@ -868,7 +722,7 @@ void SuperiorAgent::syncPanelOwnership(fcitx::InputContext *inputContext) {
 
     const std::string inputMethod = instance_->inputMethod(inputContext);
     const bool ours = inputMethod == "super-ime";
-    const bool hasUi = server_.clientCount() > 0;
+    const bool hasUi = overlay_.clientCount() > 0;
     auto &panel = inputContext->inputPanel();
 
     if (!ours) {
@@ -972,10 +826,10 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
                 core::decideGesture(core::GestureInput{
                     .gesture = core::Gesture::RightCtrlTap,
                     .english = modes_.english(),
-                    .speechEnabled = speechRecognitionEnabled_,
-                    .speechHotkeyEnabled = speechRecognitionHotkey_,
+                    .speechEnabled = speech_.enabled(),
+                    .speechHotkeyEnabled = speech_.hotkeyEnabled(),
                 }) == core::GestureIntent::ToggleSpeech) {
-                toggleSpeechByHotkey();
+                speech_.toggleByHotkey();
             }
         } else {
             ctrlTap.pressed(now);
@@ -999,7 +853,7 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
             .english = modes_.english(),
             .speaking = speech_.busy(),
         }) == core::GestureIntent::CancelSpeech) {
-        cancelSpeech("escape");
+        speech_.cancel("escape");
         event.filterAndAccept();
         return true;
     }
@@ -1100,7 +954,7 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     core::updateSession(engine, host, session, skinId_);
     session.setSpeech(speech_.scene(skinId_, 1));
 
-    if (server_.clientCount() > 0) {
+    if (overlay_.clientCount() > 0) {
         broadcast(inputContext);
     } else {
         // Nothing to draw with: hand the panel back to Fcitx5 instead of
@@ -1119,7 +973,7 @@ bool SuperiorAgent::isOurs(fcitx::InputContext *inputContext) const {
 }
 
 void SuperiorAgent::broadcastHidden() {
-    if (server_.clientCount() == 0) {
+    if (overlay_.clientCount() == 0) {
         return;
     }
     api::UiSceneFrame frame;
@@ -1127,13 +981,12 @@ void SuperiorAgent::broadcastHidden() {
     frame.session = api::SessionKey{epoch_, 0};
     frame.panel.visible = false;
     frame.status.visible = false;
-    server_.broadcast(protocol::encodeFrame(protocol::MessageType::Scene,
-                                            protocol::encodeScene(frame)));
+    overlay_.publish(protocol::encodeScene(frame));
     SUPERIOR_DEBUG(diag::categories::Fcitx5) << "hiding our windows: another input method is active";
 }
 
 void SuperiorAgent::broadcast(fcitx::InputContext *inputContext) {
-    const std::size_t clients = server_.clientCount();
+    const std::size_t clients = overlay_.clientCount();
     if (clients == 0) {
         SUPERIOR_TRACE(diag::categories::Fcitx5)
             .field("sessions", static_cast<std::uint64_t>(sessions_.size()))
@@ -1152,7 +1005,7 @@ void SuperiorAgent::broadcast(fcitx::InputContext *inputContext) {
         .field("bytes", static_cast<std::uint64_t>(payload.size()))
         .field("visible", frame.panel.visible)
         << "broadcasting scene";
-    server_.broadcast(protocol::encodeFrame(protocol::MessageType::Scene, payload));
+    overlay_.publish(payload);
 }
 
 void SuperiorAgent::forget(fcitx::InputContext *inputContext) {
@@ -1207,7 +1060,7 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, api::ToggleStatusItem>) {
             if (value.itemId == "speech") {
-                toggleSpeechPanel();
+                speech_.togglePanel();
                 return;
             }
             if (value.itemId != "inline-mode") {
@@ -1241,14 +1094,14 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
                     << "speech start ignored: the capability is not ready";
                 return;
             }
-            startSpeech();
+            speech_.start();
         } else if constexpr (std::is_same_v<T, api::SpeechStop>) {
             if (contextFor(value.session) == nullptr) {
                 return;
             }
-            stopSpeech();
+            speech_.stop();
         } else if constexpr (std::is_same_v<T, api::SpeechCancel>) {
-            cancelSpeech("discard button");
+            speech_.cancel("discard button");
         } else if constexpr (std::is_same_v<T, api::SpeechReload>) {
             // The panel sends this right after it writes `settings.json` (model
             // choice) or finishes a download. Re-reading the file first is not
@@ -1256,9 +1109,9 @@ void SuperiorAgent::applyCommand(const api::UiCommand &command) {
             // refresh answers with the *previous* model and the panel's combo
             // snaps back — which looked like "the first click does nothing".
             reloadSettings();
-            refreshSpeechSetup();
+            speech_.refreshSetup();
             // A child that is already running loaded the old model at start.
-            configureSpeechProcess();
+            speech_.reconfigure();
             refresh(activeContext_);
         } else if constexpr (std::is_same_v<T, api::SetUiScale>) {
             // Scaling is applied by the UI process, which also owns the
@@ -1327,7 +1180,7 @@ void SuperiorAgent::registerTrayActions() {
     speechAction_.setShortText("语音输入");
     speechAction_.setLongText("显示或隐藏语音输入窗口");
     speechAction_.connect<fcitx::SimpleAction::Activated>([this](fcitx::InputContext *) {
-        toggleSpeechPanel();
+        speech_.togglePanel();
         // The panel just opened or closed. The mark has to move in the same
         // activation, otherwise the menu the user is still looking at is wrong.
         refreshTrayActions();
@@ -1385,7 +1238,7 @@ void SuperiorAgent::attachTrayActions(fcitx::InputContext *inputContext) {
     // The microphone is a product switch (`settings.json: speechRecognitionEnabled`).
     // An entry that opens a panel the user switched off would promise a feature
     // that is not there, so it follows the same gate the toolbar uses.
-    const bool speechWanted = speechRecognitionEnabled_;
+    const bool speechWanted = speech_.enabled();
     if (speechWanted && !present(&speechAction_)) {
         statusArea.addAction(fcitx::StatusGroup::InputMethod, &speechAction_);
         changed = true;
@@ -1789,362 +1642,6 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
         }
     }
     state = CloudContext{};
-}
-
-namespace {
-
-/// The catalogue entry the user selected, falling back to the recommended one so
-/// a hand-edited settings file cannot leave voice permanently unusable.
-const superior::speech_recognition::ModelEntry &selectedModel(const std::string &id) {
-    if (const auto *entry = superior::speech_recognition::findModel(id)) {
-        return *entry;
-    }
-    return superior::speech_recognition::defaultModel();
-}
-
-} // namespace
-
-bool SuperiorAgent::startSceneServer(const std::string &socketPath, std::string &error) {
-    // Ask the server itself, never a cached flag: a flag stays true after the
-    // socket file has been removed or taken over, and then this returned success
-    // for the rest of the session while every panel waited forever for a frame
-    // that could not arrive.
-    if (server_.ownsSocketFile() && server_.socketPath() == socketPath) {
-        return true;
-    }
-    if (!server_.listen(socketPath, error)) {
-        return false;
-    }
-    // The timer keeps rescheduling itself while it runs; dropping the handle on
-    // the next tick is enough, and `reset()` here would delete a live source.
-    socketRetryStop_ = true;
-    SUPERIOR_INFO(diag::categories::Fcitx5).field("path", socketPath) << "UI socket ready";
-    return true;
-}
-
-bool SuperiorAgent::ensureSpeechProcess() {
-    if (speechProcess_ && speechProcess_->running()) {
-        return true;
-    }
-    if (instance_ == nullptr) {
-        return false;
-    }
-    if (!speechProcess_) {
-        speechProcess_ = std::make_unique<SpeechProcess>(instance_);
-    }
-    std::string error;
-    const bool started = speechProcess_->start(
-        [this](std::string_view line) { handleSpeechEvent(line); }, error);
-    if (!started) {
-        SUPERIOR_INFO(diag::categories::SpeechRecognition)
-            .field("error", error)
-            << "speech recognition process is unavailable";
-        return false;
-    }
-
-    configureSpeechProcess();
-    return true;
-}
-
-void SuperiorAgent::configureSpeechProcess() {
-    if (!speechProcess_ || !speechProcess_->running()) {
-        return;
-    }
-    // Tell the child which model to load. Sending it after every (re)start keeps
-    // the two in sync without the child reading our settings file.
-    using namespace superior::speech_recognition;
-    const ModelEntry &model = selectedModel(speechModelId_);
-    const std::string resolvedModel = speech_recognition::modelPath(model.id).string();
-    if (resolvedModel.empty()) {
-        return;
-    }
-    Command configure;
-    configure.kind = Command::Kind::Configure;
-    configure.config.enginePath = resolveEngine();
-    configure.config.modelPath = resolvedModel;
-    configure.config.backend = model.backend;
-    // Optional punctuation model: FireRedASR is a CTC model and emits no
-    // punctuation at all, so a downloaded FireRedPunc is used when present.
-    configure.config.puncPath = punctuationModelPath();
-    configure.config.language = "zh";
-    configure.config.threads = 0; // 0 = let the capability size it to the machine
-    // The model, not the user, decides how much audio one re-decode covers: a
-    // light non-autoregressive model stays ahead of the microphone at half the
-    // delay, while an autoregressive one only does it at the coarser step.
-    configure.config.stepMs = model.stepMs;
-    speechProcess_->send(encodeCommand(configure));
-}
-
-void SuperiorAgent::pollSpeechProcess() {
-    // Whatever the cause — a dead child, a phase event lost on the way — a session
-    // must not stay "busy" forever. This is the difference between "one utterance
-    // failed" and "the input method is dead until Fcitx5 restarts".
-    //
-    // The limits are per phase on purpose: flushing a finished utterance takes a
-    // second or two, so waiting a minute there would be a minute of nothing for
-    // no reason, while recording legitimately lasts until the 60 s cap.
-    const std::uint64_t stuckMs = [this] {
-        switch (speech_.phase()) {
-        case api::SpeechPhase::Recording:
-            return std::uint64_t{65000};
-        case api::SpeechPhase::Transcribing:
-            return std::uint64_t{20000};
-        case api::SpeechPhase::Cancelling:
-            return std::uint64_t{5000};
-        default:
-            return std::uint64_t{0};
-        }
-    }();
-    if (speech_.busy() && stuckMs != 0 && speechPhaseSinceMs_ != 0 &&
-        steadyMs() - speechPhaseSinceMs_ > stuckMs) {
-        SUPERIOR_WARN(diag::categories::SpeechRecognition)
-            .field("phase", api::speechPhaseName(speech_.phase()))
-            .field("idleMs", static_cast<std::int64_t>(steadyMs() - speechPhaseSinceMs_))
-            << "speech session appears stuck; resetting the panel";
-        speechPhaseSinceMs_ = steadyMs();
-        speech_.fail("语音识别超时，已停止。");
-        refresh(activeContext_);
-        return;
-    }
-    if (!speechProcess_ || speechProcess_->running()) {
-        return;
-    }
-    // A dead child is harmless while nothing is in flight: the next start simply
-    // spawns a new one. It is fatal exactly when the user is waiting for it.
-    if (!speech_.busy()) {
-        return;
-    }
-    SUPERIOR_WARN(diag::categories::SpeechRecognition)
-        << "speech capability exited mid-session; ending the session";
-    speech_.fail("语音识别组件意外退出，请重试。");
-    refresh(activeContext_);
-}
-
-void SuperiorAgent::refreshSpeechSetup() {
-    using namespace superior::speech_recognition;
-    const ModelEntry &entry = selectedModel(speechModelId_);
-    const bool engine = enginePresent();
-    const bool model = modelPresent(entry.id);
-    speech_.setModel(entry.id, entry.displayName, entry.bytes);
-    speech_.refreshSetup(engine, model);
-}
-
-bool SuperiorAgent::startSpeech() {
-    if (!speech_.canStart()) {
-        return false;
-    }
-    if (activeContext_ != nullptr &&
-        activeContext_->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
-        speech_.fail("密码输入框不允许语音输入。");
-        refresh(activeContext_);
-        return false;
-    }
-    if (!ensureSpeechProcess()) {
-        speech_.fail("语音识别组件未安装。");
-        refresh(activeContext_);
-        return false;
-    }
-    // Starting speech abandons a half-typed pinyin composition: two input modes
-    // must never own the same commit.
-    outbox_.clearDraft();
-    outbox_.discardHeld();
-    outbox_.abandonComposition();
-    if (speech_.beginRecording()) {
-        if (!speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Start))) {
-            // The pipe is gone: the child died between the readiness check and the
-            // command. Saying so beats a panel that animates a microphone nobody is
-            // listening to.
-            speech_.fail("语音识别组件未响应，请重试。");
-        }
-    }
-    refresh(activeContext_);
-    return speech_.recording();
-}
-
-void SuperiorAgent::stopSpeech() {
-    speech_.beginTranscribing();
-    if (speechProcess_) {
-        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Stop));
-    }
-    refresh(activeContext_);
-}
-
-void SuperiorAgent::toggleSpeechByHotkey() {
-    // The settings gate is `core::decideGesture`'s job, and its caller already
-    // applied it. Keeping a second copy here is how the two drifted apart before.
-    if (speech_.recording()) {
-        stopSpeech();
-        return;
-    }
-    if (!speech_.visible()) {
-        // Open *before* asking whether it can start: `canStart()` is false while
-        // the panel is hidden, and a recording with no visible state would be a
-        // hidden microphone. Opening also computes the setup state, so a missing
-        // engine or model turns into an explanation instead of a dead hotkey.
-        toggleSpeechPanel();
-    }
-    if (speech_.canStart()) {
-        startSpeech();
-    }
-}
-
-void SuperiorAgent::cancelSpeech(std::string_view reason) {
-    if (!speech_.busy() || speech_.phase() == api::SpeechPhase::Cancelling) {
-        return;
-    }
-    setSpeechPreedit({});
-    outbox_.discardHeld();
-    // The decision layer revokes the commit *first*: a `final` that is already
-    // on the wire must not be typed after this point.
-    speech_.cancel();
-    if (speechProcess_) {
-        speechProcess_->send(encodeSpeechCommand(speech_recognition::Command::Kind::Cancel));
-    }
-    SUPERIOR_INFO(diag::categories::SpeechRecognition)
-        .field("reason", std::string(reason))
-        .field("phase", api::speechPhaseName(speech_.phase()))
-        << "speech cancelled";
-    if (activeContext_ != nullptr) {
-        refresh(activeContext_);
-    }
-}
-
-void SuperiorAgent::toggleSpeechPanel() {
-    if (speech_.visible()) {
-        // Closing is a cancel: a transcript still in flight must not be typed
-        // into the document after the user closed the panel.
-        cancelSpeech("panel closed");
-        speech_.hide();
-        if (activeContext_ != nullptr) {
-            refresh(activeContext_);
-        }
-        return;
-    }
-
-    using namespace superior::speech_recognition;
-    const ModelEntry &entry = selectedModel(speechModelId_);
-    const bool engine = enginePresent();
-    const bool model = modelPresent(entry.id);
-    speech_.setModel(entry.id, entry.displayName, entry.bytes);
-    speech_.show(engine, model);
-    if (engine && model) {
-        ensureSpeechProcess();
-    }
-    if (activeContext_ != nullptr) {
-        refresh(activeContext_);
-    }
-}
-
-void SuperiorAgent::handleSpeechEvent(std::string_view line) {
-    using namespace superior::speech_recognition;
-    // The child's protocol is small; decoding it here keeps the decision layer
-    // (`core::SpeechState`) free of JSON.
-    const auto parsed = nlohmann::json::parse(std::string(line), nullptr, false);
-    if (parsed.is_discarded() || !parsed.is_object()) {
-        return;
-    }
-    const std::string kind = parsed.value("ev", std::string{});
-    speechPhaseSinceMs_ = steadyMs();
-
-    if (kind == "ready") {
-        speech_.refreshSetup(true, true);
-    } else if (kind == "phase") {
-        // The child drives the session as well as the button does: it ends an
-        // utterance on its own after a pause. Following its phase events is what
-        // keeps `acceptFinal` from dropping a transcript whose stop nobody
-        // clicked. Every transition is idempotent, so the UI-driven ones win.
-        const std::string name = parsed.value("name", std::string{});
-        if (name == "recording") {
-            speech_.recordingStarted();
-        } else if (name == "transcribing") {
-            speech_.beginTranscribing();
-        } else if (name == "idle") {
-            speech_.idle();
-        }
-    } else if (kind == "level") {
-        speech_.setLevel(parsed.value("rms", 0.0));
-        speech_.setRemaining(parsed.value("remainingMs", std::int64_t{-1}));
-    } else if (kind == "partial") {
-        speech_.setPartial(parsed.value("text", std::string{}));
-        // The draft lives in the composition line, not in the document: the user
-        // sees words appear, and any rewrite happens before anything is real.
-        setSpeechPreedit(speech_.partial());
-    } else if (kind == "chunk") {
-        // A finalized segment. Commit it now and keep listening — this is what
-        // "writes while I speak" means.
-        const std::string text = parsed.value("text", std::string{});
-        if (speech_.acceptChunk(text)) {
-            setSpeechPreedit({});
-            commitSpeechText(speech_.lastText());
-        }
-    } else if (kind == "final") {
-        const std::string text = parsed.value("text", std::string{});
-        if (speech_.acceptFinal(text)) {
-            setSpeechPreedit({});
-            commitSpeechText(speech_.lastText());
-        }
-    } else if (kind == "error") {
-        speech_.fail(parsed.value("message", std::string{"语音识别失败"}));
-    }
-
-    if (activeContext_ != nullptr) {
-        refresh(activeContext_);
-    }
-}
-
-void SuperiorAgent::setSpeechPreedit(std::string_view text) {
-    if (instance_ == nullptr) {
-        return;
-    }
-    // The draft belongs inline at the caret, in the application, exactly where
-    // the committed text will land. `TextSession` decides whether this client
-    // can draw it; the outbox only remembers that a draft is showing so it is
-    // cleared exactly once.
-    if (text.empty()) {
-        outbox_.clearDraft();
-    } else {
-        outbox_.showDraft(std::string(text));
-    }
-}
-
-void SuperiorAgent::holdSpeechCommits() {
-    if (!speech_.busy()) {
-        return;
-    }
-    // The draft cannot be drawn anywhere either; drop it and let the next chunk
-    // carry the text once a client is focused again.
-    outbox_.clearDraft();
-    SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
-        .field("held", static_cast<std::int64_t>(outbox_.held().size()))
-        << "no focused client; holding the transcript";
-}
-
-void SuperiorAgent::flushHeldSpeech() {
-    if (!outbox_.holding()) {
-        return;
-    }
-    const std::size_t chars = outbox_.held().size();
-    outbox_.flush();
-    SUPERIOR_INFO(diag::categories::SpeechRecognition)
-        .field("chars", static_cast<std::int64_t>(chars))
-        << "flushing the transcript held while nothing was focused";
-}
-
-void SuperiorAgent::commitSpeechText(std::string_view text) {
-    if (instance_ == nullptr || text.empty()) {
-        return;
-    }
-    // `Hold`: this is speech the user already spoke, so losing it because the
-    // window closed mid-sentence is not acceptable.
-    if (!outbox_.commit({}, std::string(text), core::WhenUnfocused::Hold)) {
-        SUPERIOR_DEBUG(diag::categories::SpeechRecognition)
-            .field("held", static_cast<std::int64_t>(outbox_.held().size()))
-            << "nowhere to type; the transcript is held";
-        return;
-    }
-    SUPERIOR_INFO(diag::categories::SpeechRecognition)
-        .field("chars", static_cast<std::int64_t>(text.size()))
-        << "transcript committed";
 }
 
 void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::string_view text) {

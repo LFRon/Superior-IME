@@ -21,7 +21,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "superior/api/Commands.hpp"
@@ -35,6 +34,8 @@
 #include "superior/core/SpeechState.hpp"
 #include "superior/core/TextOutbox.hpp"
 
+#include "OverlayController.h"
+#include "SpeechController.h"
 #include "SpeechProcess.h"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/fcitx5/TextSession.hpp"
@@ -77,10 +78,6 @@ private:
     /// character directly, which is what "Shift 切换英文" means for a Sogou-style
     /// IME: no input method switch, no separate keyboard layout.
     bool handleKeyEvent(fcitx::KeyEvent &event);
-
-    /// Spawns the overlay process if no UI is connected, unless disabled.
-    /// Retries on later focus events so a crashed overlay comes back.
-    void ensureOverlay();
 
     /// Reloads `~/.config/superior-ime/settings.json` when its mtime changed.
     void reloadSettings();
@@ -180,55 +177,6 @@ private:
     void clearPendingCloud(fcitx::InputContext *inputContext);
     void updateCloudTimer();
 
-    /// Starts the recogniser child on first use. Returns false when the binary
-    /// is missing, which is a setup state, not a crash.
-    bool ensureSpeechProcess();
-    /// Stops an overlay that holds the single-instance lock but is not connected
-    /// to us, so the next spawn can take over.
-    bool reclaimStaleOverlay();
-    /// Creates the overlay socket, recovering from a stale file and retrying
-    /// while another instance still holds it.
-    bool startSceneServer(const std::string &socketPath, std::string &error);
-    /// Sends the model/engine configuration to the child. Called on start and
-    /// whenever the selected model changes, so a running child cannot keep
-    /// decoding with the model the user just switched away from.
-    void configureSpeechProcess();
-    /// Re-reads "is the engine installed / is a model downloaded" and updates
-    /// the panel's setup state.
-    void refreshSpeechSetup();
-    /// Opens or closes the panel, cancelling a live session on close.
-    void toggleSpeechPanel();
-    /// Drops the current utterance without committing it. Used by close, Escape
-    /// and focus loss; the reason is only for the log.
-    void cancelSpeech(std::string_view reason);
-    /// Starts dictation if the capability is ready. Shared by the panel button
-    /// and the right-Ctrl tap, so both paths cannot drift apart.
-    bool startSpeech();
-    /// Ends the utterance and lets the recogniser produce a transcript.
-    void stopSpeech();
-    /// Right-Ctrl tap: start when idle, stop when recording, otherwise open the
-    /// panel so its setup explanation is visible. The `settings.json` gate is
-    /// applied by the caller through `core::decideGesture`, not re-checked here.
-    void toggleSpeechByHotkey();
-    /// Notices a capability process that died mid-session.
-    ///
-    /// Without it the panel kept showing "recording" (or "finishing") forever: the
-    /// child is the only thing that sends phase events, so its death left the state
-    /// machine waiting for an event that could never arrive, and every later click
-    /// was refused because the phase was still busy.
-    void pollSpeechProcess();
-    /// Applies one JSON line from the recogniser.
-    void handleSpeechEvent(std::string_view line);
-    /// Commits a finished transcript to the focused input context.
-    void commitSpeechText(std::string_view text);
-    /// Called on focus loss while dictating: keep recording, stop typing.
-    void holdSpeechCommits();
-    /// Called on focus gain: type whatever was said while nothing was focused.
-    void flushHeldSpeech();
-    /// Shows the in-flight transcript as preedit so the user sees words appear
-    /// while speaking, and keeps the committed text untouched.
-    void setSpeechPreedit(std::string_view text);
-
     /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
     /// text. Kept in one place so the policy cannot drift between call sites.
     void commitCloudText(fcitx::InputContext *inputContext, std::string_view text);
@@ -256,7 +204,11 @@ private:
 
     fcitx::AddonManager *manager_ = nullptr;
     fcitx::Instance *instance_ = nullptr;
-    protocol::SceneServer server_;
+    /// The overlay process and the socket it connects to (P5.4).
+    ///
+    /// Declared first so it is destroyed last: the socket must outlive the
+    /// handlers that publish through it.
+    OverlayController overlay_;
     std::map<fcitx::InputContext *, std::unique_ptr<core::ImeSession>> sessions_;
     std::map<fcitx::InputContext *, ShiftTapDetector> shiftTaps_;
     /// Right-Ctrl tap per context: the gesture is local to the focused client.
@@ -287,7 +239,6 @@ private:
     fcitx::InputContext *cloudPendingContext_ = nullptr;
     std::string cloudPendingPinyin_;
     std::chrono::steady_clock::time_point cloudPendingSince_{};
-    bool overlaySpawned_ = false;
     bool settingsLoaded_ = false;
     /// The tray menu's two entries. They live here because the agent owns both
     /// pieces of state they show (the speech panel and `settings.json`); the
@@ -302,21 +253,13 @@ private:
     bool traySpeechChecked_ = false;
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;
     std::unique_ptr<fcitx::EventSourceTime> startupTimer_;
-    /// The speech panel's decision layer. The capability itself (recording and
-    /// recognition) lives in `superior_speech_recognition`; this object only
-    /// owns "what should the panel show and may this transcript be committed".
-    core::SpeechState speech_;
-    std::unique_ptr<SpeechProcess> speechProcess_;
-    /// When the speech state last changed. A session cannot outlive
-    /// `sessionCapMs` by much, so a phase that stays busy far longer means an
-    /// event was lost — and a lost event used to mean the panel refused every
-    /// later click because it still believed a session was running.
-    std::uint64_t speechPhaseSinceMs_ = 0;
-    /// Product switch: show the microphone in the toolbar at all.
-    bool speechRecognitionEnabled_ = true;
-    std::unique_ptr<fcitx::EventSourceTime> socketRetryTimer_;
-    /// Set by `startSceneServer` so the retry callback can stop itself.
-    bool socketRetryStop_ = false;
+    /// The speech panel's decision layer (P5.4).
+    ///
+    /// The capability itself (recording and recognition) lives in
+    /// `superior_speech_recognition`; this object only owns "what should the
+    /// panel show and may this transcript be committed", and it reaches the
+    /// adapter through three injected effects instead of calling back into it.
+    SpeechController speech_;
     /// The single exit for text (§6.6, P5.3).
     ///
     /// `textSession_` is the Fcitx5 implementation of `api::TextSessionPort`; it
@@ -327,10 +270,6 @@ private:
     /// Declaration order matters: the outbox holds a reference to the session.
     TextSession textSession_;
     core::TextOutbox outbox_;
-    /// Right-Ctrl tap toggles dictation (`settings.json: speechRecognitionHotkey`).
-    bool speechRecognitionHotkey_ = true;
-    /// Catalogue id selected in settings; the panel can change it.
-    std::string speechModelId_ = "qwen3-asr-0.6b";
     bool inlineEnglishEnabled_ = true;
     /// The single owner of Chinese/English. Nothing else may keep its own copy:
     /// two booleans flipping on the same Shift release is exactly the bug this
@@ -340,12 +279,7 @@ private:
     fcitx::InputContext *activeContext_ = nullptr;
     bool refreshing_ = false;
     std::filesystem::file_time_type settingsStamp_{};
-    std::chrono::steady_clock::time_point lastOverlayAttempt_{};
     std::vector<std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>> handlers_;
-    /// Threads reaping spawned overlay processes. Joined in the destructor before
-    /// Fcitx5 may unload this addon.
-    std::vector<std::thread> reapers_;
-    std::atomic<bool> reaperStop_{false};
     api::Epoch epoch_ = 1;
     api::ContextId nextContext_ = 1;
     api::FrameId nextFrame_ = 1;
