@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
+#include <QFileSystemWatcher>
 #include <QGuiApplication>
 #include <QLockFile>
 #include <QScreen>
@@ -280,24 +281,23 @@ int main(int argc, char **argv) {
 
     client.start();
 
-    // Settings are shared with the agent, which polls the same file. Polling
-    // here as well keeps the two processes from inventing another IPC surface.
-    QTimer settingsTimer;
-    settingsTimer.setInterval(500);
+    // Settings are shared with the agent through `settings.json`. The file is
+    // the single source of truth for both processes, so a second IPC surface
+    // would only be one more thing that can drift.
+    //
+    // Watching beats polling, though. A switch flipped in the Fcitx5 tray menu
+    // used to sit in the file until the next 500 ms tick, and that tick *was*
+    // the lag the toolbar toggle showed. inotify delivers the write on the next
+    // event-loop turn instead, which is what a Qt signal/slot would give us if
+    // the click happened in this process rather than in the agent's.
+    //
+    // The *directory* is watched, not the file: `config::saveSettings` writes a
+    // temporary and renames it into place, so the inode behind `settings.json`
+    // is replaced by every save and a watch on the file itself would be dropped
+    // by the first one. Every writer goes through `saveSettings`.
     std::filesystem::file_time_type settingsStamp{};
     bool settingsStampValid = false;
-    {
-        // Seed the stamp so the first tick does not re-apply the settings that
-        // were just read above (and does not report a change that never
-        // happened).
-        std::error_code error;
-        const auto stamp = std::filesystem::last_write_time(settingsPath, error);
-        if (!error) {
-            settingsStamp = stamp;
-            settingsStampValid = true;
-        }
-    }
-    QObject::connect(&settingsTimer, &QTimer::timeout, [&]() {
+    auto applySettingsIfChanged = [&]() {
         std::error_code error;
         const auto stamp = std::filesystem::last_write_time(settingsPath, error);
         if (error) {
@@ -338,8 +338,62 @@ int main(int argc, char **argv) {
         if (lastFrame) {
             render(*lastFrame);
         }
-    });
-    settingsTimer.start();
+    };
+
+    // Seed the stamp so the first event does not re-apply the settings that
+    // were just read above (and does not report a change that never happened).
+    {
+        std::error_code error;
+        const auto stamp = std::filesystem::last_write_time(settingsPath, error);
+        if (!error) {
+            settingsStamp = stamp;
+            settingsStampValid = true;
+        }
+    }
+
+    const std::string settingsDirectory = settingsPath.parent_path().string();
+    QFileSystemWatcher settingsWatcher;
+    // Only reached when inotify is unavailable or the config directory does not
+    // exist yet; every tick also retries the watch so a late directory upgrade
+    // stops the polling on its own.
+    QTimer settingsRescan;
+    settingsRescan.setInterval(500);
+    const auto armSettingsWatch = [&]() {
+        if (settingsDirectory.empty() || !settingsWatcher.directories().isEmpty()) {
+            return;
+        }
+        std::error_code error;
+        if (!std::filesystem::is_directory(settingsDirectory, error)) {
+            return;
+        }
+        if (!settingsWatcher.addPath(QString::fromStdString(settingsDirectory))) {
+            return;
+        }
+        SUPERIOR_INFO(diag::categories::Ui).field("directory", settingsDirectory)
+            << "watching settings";
+        settingsRescan.stop();
+    };
+
+    // The directory can be deleted or renamed away too, and Qt drops the watch
+    // when that happens; this handler notices and hands the job back to the
+    // poller, which upgrades itself again once the directory returns.
+    const auto applySettingsAndRecheck = [&]() {
+        applySettingsIfChanged();
+        if (settingsWatcher.directories().isEmpty()) {
+            settingsRescan.start();
+        }
+        armSettingsWatch();
+    };
+
+    QObject::connect(&settingsWatcher, &QFileSystemWatcher::directoryChanged,
+                     [&](const QString &) { applySettingsAndRecheck(); });
+    QObject::connect(&settingsRescan, &QTimer::timeout, [&]() { applySettingsAndRecheck(); });
+    armSettingsWatch();
+    if (settingsWatcher.directories().isEmpty()) {
+        SUPERIOR_WARN(diag::categories::Ui).field("directory", settingsDirectory)
+            << "cannot watch the settings directory; polling it instead";
+        settingsRescan.start();
+    }
 
     std::cout << "superior-ui: platform=" << QGuiApplication::platformName().toStdString()
               << " socket=" << socketPath.toStdString()

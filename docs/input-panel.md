@@ -231,8 +231,25 @@ Fcitx 标点模块只翻图标、不暴露 checked，所以两种来源都要认
 
 ### 工具栏显隐的唯一 owner
 
-仍然是 `settings.json` 的 `showStatusBar`。agent 从托盘菜单改它，UI 侧每 500 ms
-轮询同一个文件并 `setEnabled()`。不另开 IPC，也不允许两边各写一次。
+仍然是 `settings.json` 的 `showStatusBar`。agent 从托盘菜单改它，UI 侧不轮询，而是
+用 `QFileSystemWatcher` 盯着 `~/.config/superior-ime/` 这个**目录**，写进来就
+`setEnabled()`。不另开 IPC，也不允许两边各写一次。
+
+盯目录而不是盯文件：`config::saveSettings()` 是「写 `.tmp` 再 `rename`」，每次保存
+都换掉 `settings.json` 的 inode，盯文件的 watch 第一次保存就废了。目录 watch 对
+`rename` 进入目录的事件照样触发。只有 inotify 不可用、或配置目录还不存在时才退回
+500 ms 轮询，而且每个 tick 都会重试挂 watch，挂上就自动停表。
+
+为什么不能只靠 Qt 信号槽：托盘点击发生在 **fcitx5 进程**里的 `Action::activate`，
+UI 在 `superior_ui` 进程里，信号槽跨不过进程边界。inotify 是「同一个事件语义」在
+跨进程下的等价物——写入那一刻唤醒事件循环，而不是等下一个 tick。
+
+实测（`CLOCK_MONOTONIC` 打点，两进程共用一个时钟）：点击 → agent 收到 `Activated`
+约 149 ms，`Activated` → 写盘 → UI `hide()` → X `UnmapNotify` 只要 **0.5 ms**。
+这 149 ms 全在 fcitx5 自己的 `notificationitem` 里（`dbusmenu.cpp` 故意
+`addTimeEvent(+30 ms)` 等输入上下文拿到焦点，剩下是它事件循环的派发开销）——
+换成「键盘 - 英语（美国）」这类纯 Fcitx5 菜单项也是 149 ms。所以**不要**再去
+优化这一段，我们这条管线已经没有可压缩的部分了。
 
 ### 「全角标点」为什么标签固定
 
