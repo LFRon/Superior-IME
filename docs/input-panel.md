@@ -153,6 +153,8 @@ Fcitx5 的 action 名。
 |---|---|---|
 | `punctuation` | `Punctuation` | 月牙（半角）/ 实心圆（全角）；内置 Rime 引擎注册，切换 `ascii_punct` |
 | `pinyin-prediction` | 过滤 | 不显示（其它引擎的预测开关；当前引擎没有） |
+| `superior-toolbar` | 过滤 | 只出现在 Fcitx5 托盘菜单（见下节） |
+| `superior-speech` | 过滤 | 只出现在 Fcitx5 托盘菜单（见下节） |
 | 其它 | `Text` | 原样显示 `shortText` |
 
 点击处理：UI 发 `ToggleStatusItem{id}` → agent 在 `StatusArea` 里按名查找 action →
@@ -182,6 +184,62 @@ Fcitx 标点模块只翻图标、不暴露 checked，所以两种来源都要认
 只旋转「偏移方向」而不旋转画布：圆减圆本身旋转对称，转方向与转画布结果相同，
 但少一层 save/rotate/restore。`moonBiteDirection()` 是纯函数，45° 与 90° 都有
 单测。
+
+---
+
+## 右键菜单：用 Fcitx5 托盘图标的那一个
+
+三个开关住在 **Fcitx5 托盘图标的右键菜单**里，我们**不画自己的菜单**。
+
+### 为什么只能这样
+
+`notificationitem` 的菜单结构是硬编码的（`dbusmenu.cpp`），没有任何第三方扩展点：
+
+```
+(0,0) ├ 输入法组（>1 组才有）
+      ├ 输入法列表
+      ├ ──分隔线──
+      ├ ← 当前输入上下文 statusArea 里每个 id()!=0 的 action
+      ├ ──分隔线──（有 action 才加）
+      ├ 配置 / 重启 / 退出
+```
+
+所以「出现在托盘菜单里」= 「注册一个 action 并挂进我们上下文的 statusArea」，
+除此之外没有第二条路。外框、字体、配色都是桌面环境的，我们只贡献条目。
+
+### 我们贡献的三项
+
+| 菜单项 | action | 勾选状态来自 | 点击后 |
+|---|---|---|---|
+| 全角标点 | `punctuation` | 引擎的 `isChecked()` | 引擎切 `ascii_punct` |
+| 显示工具栏 | `superior-toolbar` | `settings.json: showStatusBar` | 写回该键 |
+| 语音输入 | `superior-speech` | `core::SpeechState::visible()` | 开关语音面板 |
+
+`SuperiorAgent::registerTrayActions()` 在启动时注册这两个 checkable action，
+`attachTrayActions()` 在 `refresh()` 里把它们挂到**属于我们的**上下文上——别的
+输入法的托盘菜单不该出现我们的开关。
+
+### 两个必须记住的细节
+
+1. **菜单只在状态区重绘时重新读勾选**。`notificationitem` 只在
+   `InputContextFlushUI` 且 `component == StatusArea` 时 `updateMenu()`，所以
+   `refreshTrayActions()` 一旦发现值变了就 `updateUserInterface(StatusArea)`。
+2. **托盘点击是「裸」的 `Action::activate`**，不经过我们的 UI。引擎侧因此必须
+   在 `FlushUI(StatusArea)` 里也刷新一次场景，否则工具栏的月牙会停在旧状态，
+   直到下一次按键。这就是 `InputContextFlushUI` 同时处理 `InputPanel` 与
+   `StatusArea` 的原因。
+
+### 工具栏显隐的唯一 owner
+
+仍然是 `settings.json` 的 `showStatusBar`。agent 从托盘菜单改它，UI 侧每 500 ms
+轮询同一个文件并 `setEnabled()`。不另开 IPC，也不允许两边各写一次。
+
+### 「全角标点」为什么标签固定
+
+`shortText` 就是菜单里那一行的文字，所以它必须描述**开关**而不是**当前状态**：
+勾=全角、不勾=半角。早先它写成「半角/全角」随状态翻转，菜单里就出现「半角」配
+一个没勾的圆点，看不出点下去会变成什么。工具栏不受影响——那一格画的是图形不是
+文字。
 
 ---
 

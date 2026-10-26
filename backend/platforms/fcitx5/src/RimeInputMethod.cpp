@@ -190,7 +190,11 @@ RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
     if (instance_ != nullptr && libraryReady_) {
         punctuationAction_.setCheckable(true);
         punctuationAction_.setChecked(!modes_.halfPunctuation());
-        punctuationAction_.setShortText("全角");
+        // A label names the switch, never its current position: the check mark
+        // carries the state. Fcitx5's tray menu uses `shortText` as the visible
+        // entry, so "半角" with the mark *off* left the user guessing which way
+        // the click would go.
+        punctuationAction_.setShortText("全角标点");
         punctuationAction_.setLongText("切换标点全角/半角");
         punctuationAction_.setIcon("fcitx-punc-active");
         punctuationAction_.connect<fcitx::SimpleAction::Activated>(
@@ -589,9 +593,9 @@ void RimeInputMethod::applyModes(Session &session) {
 
 void RimeInputMethod::refreshPunctuationAction() {
     const bool half = modes_.halfPunctuation();
-    // `isChecked` drives the glyph: full width is a filled circle.
+    // `isChecked` drives both the toolbar glyph and the tray check mark: full
+    // width is a filled circle and a ticked entry.
     punctuationAction_.setChecked(!half);
-    punctuationAction_.setShortText(half ? "半角" : "全角");
     punctuationAction_.setIcon(half ? "fcitx-punc-inactive" : "fcitx-punc-active");
 }
 

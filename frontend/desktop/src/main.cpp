@@ -199,18 +199,14 @@ int main(int argc, char **argv) {
     std::optional<api::UiSceneFrame> lastFrame;
     const auto render = [&](const api::UiSceneFrame &frame) {
         // A frame with both surfaces hidden means another input method is
-        // active. Draw nothing at all: Fcitx5 keeps its own panel and theme in
-        // that case.
-        if (!frame.panel.visible && !frame.status.visible) {
-            status.apply(frame.status, {}, {}, superior::ui::SkinTheme::fallback());
-            candidates.apply(frame.panel, superior::ui::SkinTheme::fallback());
-            return;
-        }
-
+        // active. Fcitx5 keeps its own panel and theme in that case, so nothing
+        // of ours is drawn.
+        const bool ours = frame.panel.visible || frame.status.visible;
         const superior::ui::SkinTheme theme =
-            activeSkin ? superior::ui::SkinTheme::from(*activeSkin, frame.panel.styleId)
-                       : superior::ui::SkinTheme::fallback();
-        status.apply(frame.status, frame.panel.mode, {}, theme);
+            (activeSkin && ours) ? superior::ui::SkinTheme::from(*activeSkin, frame.panel.styleId)
+                                 : superior::ui::SkinTheme::fallback();
+
+        status.apply(frame.status, ours ? frame.panel.mode : std::string{}, {}, theme);
 
         // The speech panel shares the process with the other two overlays, so a
         // single geometry policy keeps them from ever stacking onto each other.
@@ -222,7 +218,16 @@ int main(int argc, char **argv) {
             speech.setScreen(superior::ui::Rect{available.left(), available.top(),
                                                 available.width(), available.height()});
         }
+        // Applied even when no surface of ours is visible: leaving the speech
+        // panel on screen after a switch to another input method left a window
+        // behind that no later frame would ever take down again.
         speech.apply(frame.speech, frame.session, theme);
+
+        if (!ours) {
+            candidates.apply(frame.panel, superior::ui::SkinTheme::fallback());
+            return;
+        }
+
         // Three overlays, one geometry policy: the candidate panel steps around
         // the speech panel rather than covering it. `raise()` is not enough on a
         // compositor that reorders override-redirect windows.

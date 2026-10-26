@@ -3,6 +3,7 @@
 
 #include <fcitx-utils/eventloopinterface.h>
 
+#include <fcitx/action.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
@@ -10,6 +11,7 @@
 #include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/instance.h>
+#include <fcitx/userinterfacemanager.h>
 
 #include <fcitx-utils/handlertable.h>
 
@@ -122,6 +124,26 @@ private:
     /// The UI never mutates engine state: it names an action, the engine decides
     /// what that means, exactly like a click in classicui's tray.
     void activateStatusItem(const std::string &itemId);
+
+    /// Publishes the overlay's two switches as Fcitx5 status actions.
+    ///
+    /// Fcitx5's tray menu is built from the status area and has no extension
+    /// point (`notificationitem/dbusmenu.cpp` lists every registered action of
+    /// the current context, then Configure/Restart/Exit). Contributing an entry
+    /// therefore means registering an action and putting it in our contexts.
+    void registerTrayActions();
+
+    /// Adds the tray actions to one of our contexts. Idempotent: focus passes
+    /// over the same window many times.
+    void attachTrayActions(fcitx::InputContext *inputContext);
+
+    /// Copies the overlay state into the actions. Fcitx5 only re-reads a check
+    /// mark when the status area is rebuilt, so a change is flushed.
+    void refreshTrayActions();
+
+    /// Flips `showStatusBar` in `settings.json`, which stays the single owner:
+    /// the overlay polls that file, so it follows without a second channel.
+    void toggleStatusBar();
 
     /// Cloud pinyin, sitting next to the engine's own candidates.
     ///
@@ -267,6 +289,17 @@ private:
     std::chrono::steady_clock::time_point cloudPendingSince_{};
     bool overlaySpawned_ = false;
     bool settingsLoaded_ = false;
+    /// The tray menu's two entries. They live here because the agent owns both
+    /// pieces of state they show (the speech panel and `settings.json`); the
+    /// overlay only draws.
+    fcitx::SimpleAction toolbarAction_;
+    fcitx::SimpleAction speechAction_;
+    bool trayActionsRegistered_ = false;
+    /// Mirrors `settings.json: showStatusBar`, which remains the single owner.
+    bool showStatusBar_ = true;
+    /// Last values published to Fcitx5, so an unchanged state costs no flush.
+    bool trayToolbarChecked_ = true;
+    bool traySpeechChecked_ = false;
     std::unique_ptr<fcitx::EventSourceTime> settingsTimer_;
     std::unique_ptr<fcitx::EventSourceTime> startupTimer_;
     /// The speech panel's decision layer. The capability itself (recording and

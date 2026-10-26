@@ -145,6 +145,10 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         .field("epoch", static_cast<std::uint64_t>(epoch_))
         << "superior agent starting (observer only)";
 
+    // Before the first settings read: `reloadSettings` publishes the real value
+    // of the toolbar switch through these actions.
+    registerTrayActions();
+
     // Our own record of cloud picks. The engine's learning lives in Fcitx5's
     // data directory and is not ours to read; this file only covers the words we
     // committed ourselves.
@@ -196,7 +200,12 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         fcitx::EventType::InputContextFlushUI, fcitx::EventWatcherPhase::PostInputMethod,
         [this](fcitx::Event &event) {
             auto &flush = static_cast<fcitx::InputContextFlushUIEvent &>(event);
-            if (flush.component() == fcitx::UserInterfaceComponent::InputPanel) {
+            // The status area is a scene input too. A switch flipped from
+            // Fcitx5's own tray menu reaches the engine as a plain
+            // `Action::activate`, so nothing else would repaint the toolbar and
+            // its crescent would keep the old width until the next keystroke.
+            if (flush.component() == fcitx::UserInterfaceComponent::InputPanel ||
+                flush.component() == fcitx::UserInterfaceComponent::StatusArea) {
                 refresh(flush.inputContext());
             }
         }));
@@ -383,6 +392,11 @@ SuperiorAgent::~SuperiorAgent() {
     SUPERIOR_INFO(diag::categories::Fcitx5)
         .field("sessions", static_cast<std::uint64_t>(sessions_.size()))
         << "superior agent stopping";
+    if (trayActionsRegistered_) {
+        instance_->userInterfaceManager().unregisterAction(&toolbarAction_);
+        instance_->userInterfaceManager().unregisterAction(&speechAction_);
+        trayActionsRegistered_ = false;
+    }
     handlers_.clear();
     server_.close();
 }
@@ -553,6 +567,7 @@ void SuperiorAgent::reloadSettings() {
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
     const bool previousSpeech = speechRecognitionEnabled_;
     speechRecognitionEnabled_ = loaded.settings.speechRecognitionEnabled;
+    showStatusBar_ = loaded.settings.showStatusBar;
     speechRecognitionHotkey_ = loaded.settings.speechRecognitionHotkey;
     // A stored id can be stale (a model that was dropped, or the *old* default
     // that the user never chose). Resolving it here keeps a dead id from turning
@@ -635,6 +650,9 @@ void SuperiorAgent::reloadSettings() {
     if (!inlineEnglishEnabled_ && modes_.english()) {
         setEnglishMode(activeContext_, false, "settings");
     }
+
+    // The settings page edits the same switch the tray menu does.
+    refreshTrayActions();
 }
 
 void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool english,
@@ -1089,6 +1107,9 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
         // leaving the user without candidates.
         inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
     }
+    // Every transition that can open or close the speech panel ends up here, so
+    // this is the one place that keeps its tray check mark honest.
+    refreshTrayActions();
     refreshing_ = false;
 }
 
@@ -1284,6 +1305,152 @@ void SuperiorAgent::activateStatusItem(const std::string &itemId) {
     SUPERIOR_DEBUG(diag::categories::Fcitx5)
         .field("item", itemId)
         << "status item click ignored: no such action in this context";
+}
+
+void SuperiorAgent::registerTrayActions() {
+    if (trayActionsRegistered_ || instance_ == nullptr) {
+        return;
+    }
+
+    // Both entries are checkable: the tray menu then draws a mark instead of an
+    // icon, and `dbusmenu` turns `isChecked` into `toggle-state`. The labels are
+    // what the menu shows, so they name the window, not the verb.
+    toolbarAction_.setCheckable(true);
+    toolbarAction_.setChecked(showStatusBar_);
+    toolbarAction_.setShortText("显示工具栏");
+    toolbarAction_.setLongText("显示或隐藏输入法工具栏");
+    toolbarAction_.connect<fcitx::SimpleAction::Activated>(
+        [this](fcitx::InputContext *) { toggleStatusBar(); });
+
+    speechAction_.setCheckable(true);
+    speechAction_.setChecked(speech_.visible());
+    speechAction_.setShortText("语音输入");
+    speechAction_.setLongText("显示或隐藏语音输入窗口");
+    speechAction_.connect<fcitx::SimpleAction::Activated>([this](fcitx::InputContext *) {
+        toggleSpeechPanel();
+        // The panel just opened or closed. The mark has to move in the same
+        // activation, otherwise the menu the user is still looking at is wrong.
+        refreshTrayActions();
+    });
+
+    const bool toolbarRegistered =
+        instance_->userInterfaceManager().registerAction(std::string(kToolbarToggleAction),
+                                                         &toolbarAction_);
+    const bool speechRegistered =
+        instance_->userInterfaceManager().registerAction(std::string(kSpeechToggleAction),
+                                                         &speechAction_);
+    if (!toolbarRegistered || !speechRegistered) {
+        // Half a pair is worse than none: one menu entry that works and one that
+        // does nothing. Leave the status area untouched.
+        if (toolbarRegistered) {
+            instance_->userInterfaceManager().unregisterAction(&toolbarAction_);
+        }
+        if (speechRegistered) {
+            instance_->userInterfaceManager().unregisterAction(&speechAction_);
+        }
+        SUPERIOR_WARN(diag::categories::Fcitx5)
+            .field("toolbar", std::string(kToolbarToggleAction))
+            .field("speech", std::string(kSpeechToggleAction))
+            << "cannot publish the overlay switches to the tray menu";
+        return;
+    }
+
+    trayActionsRegistered_ = true;
+    SUPERIOR_INFO(diag::categories::Fcitx5)
+        .field("toolbar", std::string(kToolbarToggleAction))
+        .field("speech", std::string(kSpeechToggleAction))
+        << "overlay switches published as status actions";
+}
+
+void SuperiorAgent::attachTrayActions(fcitx::InputContext *inputContext) {
+    if (!trayActionsRegistered_ || inputContext == nullptr) {
+        return;
+    }
+    auto &statusArea = inputContext->statusArea();
+    const auto present = [&statusArea](const fcitx::Action *action) {
+        for (auto *candidate : statusArea.allActions()) {
+            if (candidate == action) {
+                return true;
+            }
+        }
+        return false;
+    };
+    // Only our own contexts get these: the menu lists the *focused* context's
+    // actions, and another input method's tray menu is not our business.
+    bool changed = false;
+    if (!present(&toolbarAction_)) {
+        statusArea.addAction(fcitx::StatusGroup::InputMethod, &toolbarAction_);
+        changed = true;
+    }
+    // The microphone is a product switch (`settings.json: speechRecognitionEnabled`).
+    // An entry that opens a panel the user switched off would promise a feature
+    // that is not there, so it follows the same gate the toolbar uses.
+    const bool speechWanted = speechRecognitionEnabled_;
+    if (speechWanted && !present(&speechAction_)) {
+        statusArea.addAction(fcitx::StatusGroup::InputMethod, &speechAction_);
+        changed = true;
+    } else if (!speechWanted && present(&speechAction_)) {
+        statusArea.removeAction(&speechAction_);
+        changed = true;
+    }
+    if (changed) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("program", inputContext->program())
+            .field("toolbar", std::string(kToolbarToggleAction))
+            .field("speech", std::string(kSpeechToggleAction))
+            .field("speechEnabled", speechWanted)
+            << "overlay switches attached to the status area";
+    }
+}
+
+void SuperiorAgent::refreshTrayActions() {
+    if (!trayActionsRegistered_) {
+        return;
+    }
+    // Membership first (a product switch may have turned the microphone off),
+    // then the check marks.
+    if (activeContext_ != nullptr) {
+        attachTrayActions(activeContext_);
+    }
+    const bool toolbar = showStatusBar_;
+    const bool speech = speech_.visible();
+    const bool changed = toolbar != trayToolbarChecked_ || speech != traySpeechChecked_;
+    trayToolbarChecked_ = toolbar;
+    traySpeechChecked_ = speech;
+    toolbarAction_.setChecked(toolbar);
+    speechAction_.setChecked(speech);
+    if (!changed) {
+        return;
+    }
+    // `notificationitem` rebuilds the tray menu on a StatusArea flush and reads
+    // `isChecked` at that moment. Without this the mark keeps the old value
+    // until something else happens to flush.
+    if (activeContext_ != nullptr) {
+        activeContext_->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+    }
+}
+
+void SuperiorAgent::toggleStatusBar() {
+    const bool visible = !showStatusBar_;
+    // The settings file is the owner of this switch, so the overlay's existing
+    // poll picks the change up without a second IPC surface. A failed write is
+    // still applied: a menu entry that does nothing is worse than one that
+    // forgets across a restart.
+    const std::filesystem::path path = config::defaultSettingsPath();
+    config::Settings settings = config::loadSettings(path).settings;
+    settings.showStatusBar = visible;
+    std::string error;
+    if (!config::saveSettings(path, settings, error)) {
+        SUPERIOR_WARN(diag::categories::Fcitx5)
+            .field("path", path.string())
+            .field("error", error)
+            << "cannot persist the status bar visibility";
+    }
+    showStatusBar_ = visible;
+    SUPERIOR_INFO(diag::categories::Fcitx5)
+        .field("visible", visible)
+        << "status bar visibility toggled from the tray menu";
+    refreshTrayActions();
 }
 
 void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {

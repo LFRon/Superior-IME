@@ -9,7 +9,8 @@ constexpr std::string_view kPunctuationAction = "punctuation";
 } // namespace
 
 bool isStatusActionHidden(std::string_view actionName) noexcept {
-    return actionName == kPredictionAction;
+    return actionName == kPredictionAction || actionName == kToolbarToggleAction ||
+           actionName == kSpeechToggleAction;
 }
 
 bool statusIconIsOn(std::string_view icon) noexcept {

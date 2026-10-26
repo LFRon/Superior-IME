@@ -22,6 +22,14 @@ void testPredictionHidden() {
     CHECK(superior::fcitx5::isStatusActionHidden("pinyin-prediction"));
 }
 
+void testTrayOnlyActionsHidden() {
+    // Published for Fcitx5's tray menu; the toolbar draws these two as windows
+    // instead, so a second button for each would be a duplicate control.
+    CHECK(superior::fcitx5::isStatusActionHidden(superior::fcitx5::kToolbarToggleAction));
+    CHECK(superior::fcitx5::isStatusActionHidden(superior::fcitx5::kSpeechToggleAction));
+    CHECK(superior::fcitx5::kToolbarToggleAction != superior::fcitx5::kSpeechToggleAction);
+}
+
 void testUsefulActionsStay() {
     CHECK(!superior::fcitx5::isStatusActionHidden("punctuation"));
     CHECK(!superior::fcitx5::isStatusActionHidden("fullwidth"));
@@ -99,6 +107,7 @@ void testRoleIsIndependentOfActive() {
 
 int main() {
     testPredictionHidden();
+    testTrayOnlyActionsHidden();
     testUsefulActionsStay();
     testPunctuationRole();
     testIconStateSuffix();
