@@ -266,10 +266,12 @@ stop_process
 # fills), too large and text appears in lumps. 2000 ms is the shipped default; the
 # environment variable is the escape hatch for a GPU build or a smaller model.
 #
-# The default depends on the load at session start by design, so the expectation is
-# computed the same way the service does it: 2000 ms unless the machine is
-# saturated (>= 0.9 x cores), in which case 3000 ms.
-expected_step="$(awk '{ if ($1 < 0.9 * '"$(nproc)"') print 2000; else print 3000 }' /proc/loadavg)"
+# The step no longer depends on the machine's load: `streamingStepMs` measures
+# backpressure from this pipeline instead of reading `/proc/loadavg`, whose 1/5/15
+# minute averages said nothing about whether the recogniser was keeping up. The
+# default is therefore the model baseline, and it is the same on an idle laptop
+# and on a busy shared machine.
+expected_step=2000
 start_process 'bash -c "dd if=/dev/zero bs=32000 count=1 2>/dev/null; sleep 6"' \
     'bash -c "echo 不该走批处理"' "$root/quiet-stream.sh"
 wait_for '"ev":"ready"' || fail "no ready event (step default)"
