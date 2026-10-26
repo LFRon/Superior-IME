@@ -31,6 +31,7 @@
 #include "superior/speech_recognition/Models.hpp"
 #include "superior/speech_recognition/Protocol.hpp"
 #include "superior/fcitx5/InlineText.hpp"
+#include "superior/fcitx5/KeyTranslation.hpp"
 #include "superior/fcitx5/PreeditSource.hpp"
 #include "superior/fcitx5/ShiftTap.hpp"
 #include "superior/fcitx5/StatusMapping.hpp"
@@ -956,19 +957,30 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
                            panel.candidateList() != nullptr;
 
     const auto states = event.key().states();
-    const auto inlineText = inlineTextFor(static_cast<std::uint32_t>(sym),
-                                          states.test(fcitx::KeyState::Shift));
+    const bool shift = states.test(fcitx::KeyState::Shift);
+    // The translation to a platform-free `KeyCode` happens here, once. The
+    // native keysym keeps travelling to librime through `RimeInputMethod`, which
+    // still holds the original event, so the decision layer never sees it.
+    const std::optional<std::string> inlineText =
+        inlineTextFor(static_cast<std::uint32_t>(sym), shift);
+    // `inlineTextFor` returns exactly one printable ASCII character when it
+    // produces anything, so the first byte is the whole character. "No text" and
+    // "empty text" both mean the same thing here: this key types nothing.
+    const char32_t typed =
+        (inlineText && !inlineText->empty())
+            ? static_cast<char32_t>(static_cast<unsigned char>((*inlineText)[0]))
+            : char32_t{0};
 
     const core::KeyDecision decision = core::decideKey(core::KeyPolicyInput{
-        .key = core::KeyPress{.sym = static_cast<std::uint32_t>(sym),
-                              .shift = states.test(fcitx::KeyState::Shift),
+        .key = core::KeyPress{.code = keyCodeFor(static_cast<std::uint32_t>(sym)),
+                              .text = typed,
+                              .shift = shift,
                               .control = states.test(fcitx::KeyState::Ctrl),
                               .alt = states.test(fcitx::KeyState::Alt),
                               .super = states.test(fcitx::KeyState::Super),
                               .release = release},
         .composing = composing,
         .english = modes_.english(),
-        .printable = inlineText.has_value() && !inlineText->empty(),
     });
 
     switch (decision.intent) {

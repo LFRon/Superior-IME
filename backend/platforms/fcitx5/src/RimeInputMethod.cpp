@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "RimeInputMethod.h"
 
+#include "superior/fcitx5/KeyTranslation.hpp"
+
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
 
@@ -342,7 +344,10 @@ void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyE
     // which the schema has no binding for, so librime would commit it as
     // punctuation and end the composition. Paging through the list keeps this
     // identical to a wheel scroll: same engine call, same panel refresh.
-    if (const int step = core::pageStep(static_cast<std::uint32_t>(event.key().sym()));
+    // `keyCodeFor` is how this addon asks "is that the paging key" without
+    // teaching the decision layer any keysym value.
+    const auto keysym = static_cast<std::uint32_t>(event.key().sym());
+    if (const int step = core::pageStep(fcitx5::keyCodeFor(keysym));
         step != 0 && !event.isRelease()) {
         const fcitx::KeyStates states = event.key().states();
         const bool shortcut =

@@ -3,24 +3,24 @@
 
 #include <cstdint>
 
+#include "superior/core/KeyCode.hpp"
+
 namespace superior::core {
 
-/// X11 keysyms used by the policy. These values are the lingua franca between
-/// X11, librime and (after translation) Windows VK / Android key codes, so the
-/// policy can stay platform neutral.
-inline constexpr std::uint32_t kKeyTab = 0xff09U;
-inline constexpr std::uint32_t kKeyReturn = 0xff0dU;
-inline constexpr std::uint32_t kKeyEscape = 0xff1bU;
-inline constexpr std::uint32_t kKeyBackspace = 0xff08U;
-inline constexpr std::uint32_t kKeyKpEnter = 0xff8dU;
-inline constexpr std::uint32_t kKeyDelete = 0xffffU;
-inline constexpr std::uint32_t kKeyPlus = 0x002bU;
-inline constexpr std::uint32_t kKeyKpAdd = 0xffabU;
-inline constexpr std::uint32_t kKeyKpSubtract = 0xffadU;
-
-/// One key press, already stripped of toolkit types.
+/// One key press, already stripped of toolkit types *and* of platform values.
+///
+/// `text` is the single source of "this key produces something the user can
+/// see". It used to be a separate `printable` flag computed by the adapter from
+/// the same helper, which meant two fields could disagree; now there is one.
+///
+/// A non-zero `text` is what inline English commits and what starts a new
+/// composition. The adapter fills it only for keys whose text it can actually
+/// produce (`InlineText.cpp` covers printable ASCII), so an unknown layout key
+/// arrives with `text == 0` and is forwarded untouched — same behaviour as
+/// before, with one field fewer to get wrong.
 struct KeyPress {
-    std::uint32_t sym = 0;
+    KeyCode code = KeyCode::Other;
+    char32_t text = 0;
     bool shift = false;
     bool control = false;
     bool alt = false;
@@ -58,9 +58,6 @@ struct KeyPolicyInput {
     bool composing = false;
     /// The *product* language mode, i.e. `core::Modes::english()`.
     bool english = false;
-    /// True when the key produces text in the current layout. Only the platform
-    /// knows this (keyboard layout, dead keys), so the caller fills it in.
-    bool printable = false;
 };
 
 /// Pure key policy: the single place that decides "who handles this key".
@@ -85,7 +82,7 @@ struct KeyPolicyInput {
 /// client, so the client already owns those characters. Deleting them via
 /// `deleteSurroundingText` broke Backspace on every client without surrounding
 /// text support.
-[[nodiscard]] bool isEditingKey(std::uint32_t sym) noexcept;
+[[nodiscard]] bool isEditingKey(KeyCode code) noexcept;
 
 /// Sogou-style candidate paging: `+` (or keypad `+`) is "next page", keypad `-`
 /// is "previous page", anything else is 0.
@@ -96,8 +93,13 @@ struct KeyPolicyInput {
 /// instead of acting keeps this decision testable and reusable by the Windows
 /// and Android frontends.
 ///
+/// The asymmetry is deliberate and preserved from the shipped behaviour: the
+/// main-row `-` (`KeyCode::Minus`) is **not** a paging key, because typing a
+/// hyphen while a candidate list is open must type a hyphen. Only the keypad
+/// key pages backwards.
+///
 /// Modifiers are the caller's business: `+` *is* Shift on most layouts, so a
 /// plain "no Shift" test would reject the very key this describes.
-[[nodiscard]] int pageStep(std::uint32_t sym) noexcept;
+[[nodiscard]] int pageStep(KeyCode code) noexcept;
 
 } // namespace superior::core

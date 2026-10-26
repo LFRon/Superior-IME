@@ -5,7 +5,6 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
-#include <cstdio>
 #include <cstring>
 #include <thread>
 #include <filesystem>
@@ -246,11 +245,18 @@ constexpr std::uint64_t kDraftDwellMs = 250;
 /// autoregressive models keep 2000 ms — FireRed measured 2.96x realtime at
 /// 1000 ms over 55 s, which no laptop can give while the user is working.
 ///
-/// The baseline is then raised by what this machine actually did: `strikes` come
-/// from `StepTuning`, incremented when a session could not keep up (the
-/// recogniser's pipe stayed full) and forgiven after a few clean ones. The load
-/// average still applies, because a machine at full load has fewer cycles to
-/// spare no matter how fast it is.
+/// The baseline is then raised by what *this pipeline* actually did: `strikes`
+/// come from `StepTuning`, incremented when a session could not keep up (the
+/// recogniser's pipe stayed full) and forgiven after a few clean ones.
+///
+/// System load is deliberately **not** consulted any more. It used to read
+/// `/proc/loadavg`, which is three problems in one: Linux-only (so the whole
+/// adaptation was dead on any other platform), a proxy that says nothing about
+/// *this* pipeline (a loaded machine may still decode in time, an idle one may
+/// not), and a second opinion that fought the first — a busy machine raised the
+/// step even when the recogniser had been finishing early, so the two mechanisms
+/// could never agree on a steady state. Backpressure measures the thing that
+/// actually matters: whether our own pipe is keeping up.
 int streamingStepMs(int baselineMs, int strikes) {
     if (const char *value = std::getenv("SUPERIOR_SPEECH_STEP_MS"); value != nullptr) {
         const long parsed = std::atol(value);
@@ -258,22 +264,7 @@ int streamingStepMs(int baselineMs, int strikes) {
             return static_cast<int>(std::min<long>(parsed, 10000));
         }
     }
-    const int baseline = stepMsWithStrikes(baselineMs > 0 ? baselineMs : 2000, strikes);
-    double load = 0.0;
-    if (std::FILE *file = std::fopen("/proc/loadavg", "r"); file != nullptr) {
-        if (std::fscanf(file, "%lf", &load) != 1) {
-            load = 0.0;
-        }
-        std::fclose(file);
-    }
-    const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    const double busy = load / static_cast<double>(cores);
-    if (busy < 0.9) {
-        return baseline;
-    }
-    // One notch coarser while the machine is busy, and the ceiling of the knob
-    // once it is genuinely saturated.
-    return busy < 1.4 ? std::min(kMaxStepMs, baseline + kStepNotchMs) : kMaxStepMs;
+    return stepMsWithStrikes(baselineMs > 0 ? baselineMs : 2000, strikes);
 }
 
 /// The recogniser's reasons are technical and English; the panel shows the

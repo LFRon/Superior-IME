@@ -30,6 +30,7 @@ endif()
 
 enable_testing()
 
+add_subdirectory(backend/paths)
 add_subdirectory(backend/diagnostics)
 add_subdirectory(backend/api)
 add_subdirectory(backend/skin)

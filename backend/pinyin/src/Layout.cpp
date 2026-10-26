@@ -10,6 +10,7 @@
 #endif
 
 #include "superior/diagnostics/Log.hpp"
+#include "superior/paths/Roots.hpp"
 
 namespace superior::pinyin {
 
@@ -23,13 +24,7 @@ constexpr std::string_view kCapabilityDir = "pinyin";
 constexpr std::string_view kLegacyDir = "rime";
 
 fs::path dataHomeFromEnvironment() {
-    if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && xdg[0] != '\0') {
-        return fs::path(xdg);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".local" / "share";
-    }
-    return {};
+    return ::superior::paths::Roots::fromEnvironment().data;
 }
 
 bool isDirectory(const fs::path &path) {

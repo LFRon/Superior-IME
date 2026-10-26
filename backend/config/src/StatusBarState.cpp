@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "superior/paths/Roots.hpp"
+
 namespace superior::config {
 
 namespace {
@@ -20,14 +22,11 @@ constexpr std::string_view kSchema = "superior.statusbar/1";
 } // namespace
 
 fs::path defaultStatusBarStatePath() {
-    if (const char *configHome = std::getenv("XDG_CONFIG_HOME");
-        configHome != nullptr && configHome[0] != '\0') {
-        return fs::path(configHome) / "superior-ime" / "statusbar.json";
+    const fs::path configHome = ::superior::paths::Roots::fromEnvironment().config;
+    if (configHome.empty()) {
+        return {};
     }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".config" / "superior-ime" / "statusbar.json";
-    }
-    return {};
+    return configHome / "superior-ime" / "statusbar.json";
 }
 
 StatusBarLoad loadStatusBarState(const fs::path &path) {

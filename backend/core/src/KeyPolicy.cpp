@@ -3,19 +3,27 @@
 
 namespace superior::core {
 
-bool isEditingKey(std::uint32_t sym) noexcept {
-    return sym == kKeyBackspace || sym == kKeyDelete || sym == kKeyReturn ||
-           sym == kKeyKpEnter || sym == kKeyTab;
+bool isEditingKey(KeyCode code) noexcept {
+    switch (code) {
+    case KeyCode::Backspace:
+    case KeyCode::Delete:
+    case KeyCode::Return:
+    case KeyCode::Tab:
+        return true;
+    default:
+        return false;
+    }
 }
 
-int pageStep(std::uint32_t sym) noexcept {
-    if (sym == kKeyPlus || sym == kKeyKpAdd) {
+int pageStep(KeyCode code) noexcept {
+    switch (code) {
+    case KeyCode::Plus:
         return 1;
-    }
-    if (sym == kKeyKpSubtract) {
+    case KeyCode::KpSubtract:
         return -1;
+    default:
+        return 0;
     }
-    return 0;
 }
 
 KeyDecision decideKey(const KeyPolicyInput &input) noexcept {
@@ -32,20 +40,20 @@ KeyDecision decideKey(const KeyPolicyInput &input) noexcept {
     }
 
     if (input.composing) {
-        if (key.sym == kKeyEscape) {
+        if (key.code == KeyCode::Escape) {
             return KeyDecision{KeyIntent::Cancel, true};
         }
         return KeyDecision{KeyIntent::Engine, false};
     }
 
     if (input.english) {
-        if (key.sym == kKeyEscape) {
+        if (key.code == KeyCode::Escape) {
             return KeyDecision{KeyIntent::ToggleLanguage, true};
         }
-        if (isEditingKey(key.sym)) {
+        if (isEditingKey(key.code)) {
             return KeyDecision{KeyIntent::Forward, false};
         }
-        if (input.printable) {
+        if (key.text != 0) {
             return KeyDecision{KeyIntent::CommitInline, true};
         }
         return KeyDecision{KeyIntent::Forward, false};
@@ -54,10 +62,10 @@ KeyDecision decideKey(const KeyPolicyInput &input) noexcept {
     // Chinese, no composition: a printable key starts one, everything else is
     // not ours. Navigation keys are forwarded so arrow keys keep working in
     // widgets that never compose anything.
-    if (key.sym == kKeyEscape) {
+    if (key.code == KeyCode::Escape) {
         return KeyDecision{KeyIntent::Forward, false};
     }
-    if (!input.printable) {
+    if (key.text == 0) {
         return KeyDecision{KeyIntent::Forward, false};
     }
     return KeyDecision{KeyIntent::Engine, false};

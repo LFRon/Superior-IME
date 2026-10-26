@@ -158,11 +158,27 @@ target_include_directories(superior_modes_tests PRIVATE "${CMAKE_CURRENT_SOURCE_
 target_compile_features(superior_modes_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_modes_tests)
 
+# The keysym -> KeyCode table is the seam between the Fcitx5 adapter and the
+# decision layer: if a key maps to `Other` the policy silently stops applying.
+add_executable(superior_key_translation_tests key_translation_tests.cpp)
+target_link_libraries(superior_key_translation_tests PRIVATE Superior::Fcitx5Mapping)
+target_include_directories(superior_key_translation_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_key_translation_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_key_translation_tests)
+
 add_executable(superior_key_policy_tests key_policy_tests.cpp)
 target_link_libraries(superior_key_policy_tests PRIVATE Superior::Core)
 target_include_directories(superior_key_policy_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(superior_key_policy_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_key_policy_tests)
+
+# Every capability resolves its directories through Superior::Paths, so the
+# fallback chain has to be pinned where nobody can quietly re-derive it.
+add_executable(superior_paths_tests paths_tests.cpp)
+target_link_libraries(superior_paths_tests PRIVATE Superior::Paths)
+target_include_directories(superior_paths_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_paths_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_paths_tests)
 
 add_executable(superior_scene_input_tests scene_input_tests.cpp)
 target_link_libraries(superior_scene_input_tests PRIVATE Superior::Core)
@@ -216,6 +232,7 @@ add_test(NAME diagnostics COMMAND superior_diagnostics_tests)
 add_test(NAME skin COMMAND superior_skin_tests)
 add_test(NAME inline-text COMMAND superior_inline_text_tests)
 add_test(NAME shift-tap COMMAND superior_shift_tap_tests)
+add_test(NAME key-translation COMMAND superior_key_translation_tests)
 add_test(NAME qt-platform COMMAND superior_qt_platform_tests)
 add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
 add_test(NAME drag-handle COMMAND superior_drag_handle_tests)
@@ -234,6 +251,7 @@ add_test(NAME theme COMMAND superior_theme_tests)
 add_test(NAME core COMMAND superior_core_tests)
 add_test(NAME modes COMMAND superior_modes_tests)
 add_test(NAME key-policy COMMAND superior_key_policy_tests)
+add_test(NAME paths COMMAND superior_paths_tests)
 add_test(NAME scene-input COMMAND superior_scene_input_tests)
 add_test(NAME pinyin-layout COMMAND superior_pinyin_layout_tests)
 add_test(NAME golden-pinyin

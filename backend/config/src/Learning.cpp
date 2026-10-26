@@ -9,6 +9,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "superior/paths/Roots.hpp"
+
 namespace superior::config {
 
 namespace {
@@ -23,14 +25,7 @@ constexpr std::string_view kSchema = "superior.learning/1";
 namespace {
 
 fs::path configHomeFromEnvironment() {
-    if (const char *configHome = std::getenv("XDG_CONFIG_HOME");
-        configHome != nullptr && configHome[0] != '\0') {
-        return fs::path(configHome);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".config";
-    }
-    return {};
+    return ::superior::paths::Roots::fromEnvironment().config;
 }
 
 } // namespace

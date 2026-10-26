@@ -9,6 +9,8 @@
 
 #include <unistd.h>
 
+#include "superior/paths/Roots.hpp"
+
 namespace superior::speech_recognition {
 
 namespace {
@@ -16,13 +18,7 @@ namespace {
 /// Same layout as the log and the recogniser's stderr, so a user who finds one
 /// file finds all of them.
 std::filesystem::path stateRoot() {
-    if (const char *state = std::getenv("XDG_STATE_HOME"); state != nullptr && state[0] != '\0') {
-        return std::filesystem::path(state);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return std::filesystem::path(home) / ".local" / "state";
-    }
-    return {};
+    return ::superior::paths::Roots::fromEnvironment().state;
 }
 
 } // namespace

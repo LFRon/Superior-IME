@@ -1,5 +1,6 @@
 add_library(superior_fcitx5_mapping STATIC
     src/InlineText.cpp
+    src/KeyTranslation.cpp
     src/PreeditSource.cpp
     src/ShiftTap.cpp
     src/StatusMapping.cpp)
@@ -73,6 +74,9 @@ if(SUPERIOR_ENABLE_FCITX5)
     target_link_libraries(superior_fcitx5_pinyin PRIVATE
         Fcitx5::Core
         Superior::Core
+        # The keysym -> KeyCode table lives with the other Fcitx5 translations,
+        # so both addons agree on what a key means.
+        Superior::Fcitx5Mapping
         Superior::Pinyin
         Superior::Diagnostics)
 

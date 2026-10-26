@@ -16,7 +16,8 @@ target_include_directories(superior_config PUBLIC
 target_link_libraries(superior_config
     PUBLIC Superior::Api
     PRIVATE nlohmann_json::nlohmann_json
-    PRIVATE Superior::Diagnostics)
+    PRIVATE Superior::Diagnostics
+    PRIVATE Superior::Paths)
 
 target_compile_features(superior_config PUBLIC cxx_std_20)
 superior_set_warnings(superior_config)

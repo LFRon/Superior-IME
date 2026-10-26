@@ -6,6 +6,7 @@
 
 #include <unistd.h>
 
+#include "superior/paths/Roots.hpp"
 #include "superior/speech_recognition/Models.hpp"
 
 namespace superior::speech_recognition {
@@ -15,31 +16,16 @@ namespace fs = std::filesystem;
 namespace {
 
 fs::path dataHome() {
-    if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && xdg[0] != '\0') {
-        return fs::path(xdg);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".local" / "share";
-    }
-    return {};
+    return ::superior::paths::Roots::fromEnvironment().data;
 }
 
 fs::path runtimeHome() {
-    if (const char *runtime = std::getenv("XDG_RUNTIME_DIR");
-        runtime != nullptr && runtime[0] != '\0') {
-        return fs::path(runtime);
-    }
-    return fs::temp_directory_path();
+    const fs::path runtime = ::superior::paths::Roots::fromEnvironment().runtime;
+    return runtime.empty() ? fs::temp_directory_path() : runtime;
 }
 
 fs::path cacheHome() {
-    if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && xdg[0] != '\0') {
-        return fs::path(xdg);
-    }
-    if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / ".cache";
-    }
-    return {};
+    return ::superior::paths::Roots::fromEnvironment().cache;
 }
 
 /// The file name the engine itself uses for its Silero weights.

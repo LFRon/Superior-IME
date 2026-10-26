@@ -11,6 +11,7 @@
 
 #include "superior/config/IniFile.hpp"
 #include "superior/diagnostics/Log.hpp"
+#include "superior/paths/Roots.hpp"
 
 namespace superior::config {
 
@@ -22,27 +23,6 @@ namespace diag = ::superior::diagnostics;
 constexpr std::string_view kThemeKey = "Theme";
 constexpr std::string_view kDarkThemeKey = "DarkTheme";
 constexpr std::string_view kUseDarkThemeKey = "UseDarkTheme";
-
-std::vector<fs::path> splitPaths(const char *raw) {
-    std::vector<fs::path> result;
-    if (raw == nullptr) {
-        return result;
-    }
-    const std::string text(raw);
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const std::size_t colon = text.find(':', start);
-        const std::size_t end = colon == std::string::npos ? text.size() : colon;
-        if (end > start) {
-            result.emplace_back(text.substr(start, end - start));
-        }
-        if (colon == std::string::npos) {
-            break;
-        }
-        start = colon + 1;
-    }
-    return result;
-}
 
 std::string readText(const fs::path &path) {
     std::ifstream stream(path, std::ios::binary);
@@ -106,24 +86,11 @@ bool backupOnce(const fs::path &path, fs::path &backupPath, std::string &error) 
 } // namespace
 
 Paths Paths::fromEnvironment() {
+    const ::superior::paths::Roots roots = ::superior::paths::Roots::fromEnvironment();
     Paths paths;
-    if (const char *home = std::getenv("XDG_CONFIG_HOME"); home != nullptr && home[0] != '\0') {
-        paths.configHome = home;
-    } else if (const char *userHome = std::getenv("HOME"); userHome != nullptr) {
-        paths.configHome = fs::path(userHome) / ".config";
-    }
-
-    if (const char *home = std::getenv("XDG_DATA_HOME"); home != nullptr && home[0] != '\0') {
-        paths.dataHome = home;
-    } else if (const char *userHome = std::getenv("HOME"); userHome != nullptr) {
-        paths.dataHome = fs::path(userHome) / ".local" / "share";
-    }
-
-    paths.dataDirs = splitPaths(std::getenv("XDG_DATA_DIRS"));
-    if (paths.dataDirs.empty()) {
-        paths.dataDirs.emplace_back("/usr/local/share");
-        paths.dataDirs.emplace_back("/usr/share");
-    }
+    paths.configHome = roots.config;
+    paths.dataHome = roots.data;
+    paths.dataDirs = roots.dataDirs;
     return paths;
 }
 

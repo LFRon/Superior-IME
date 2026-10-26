@@ -43,6 +43,23 @@ scan "backend/core" '#include[[:space:]]*[<"](Q|Qt)' "core -> Qt"
 scan "backend/core" '#include[[:space:]]*[<"]fcitx' "core -> fcitx5"
 scan "backend/core" 'std::chrono::(system_clock|steady_clock)' "core -> wall clock"
 scan "backend/core" 'std::this_thread::sleep' "core -> blocking sleep"
+# No platform key numbering in the decision layer. A keysym literal here means
+# the policy knows one platform's values, and the other two platforms then have
+# to imitate them forever (`KeyCode.hpp` explains the alternative).
+scan "backend/core" '0x[fF][fF][0-9a-fA-F][0-9a-fA-F]' "core -> X11 keysym literal"
+scan "backend/core" '\bkKey[A-Z]' "core -> platform key constant"
+
+# Path roots come from Superior::Paths only. A capability that parses XDG_* or
+# HOME on its own becomes a second place to update when a port changes the root
+# set (Windows: KnownFolders), and the copies drift.
+scan "backend/api" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "api -> environment path"
+scan "backend/config" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "config -> environment path"
+scan "backend/core" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "core -> environment path"
+scan "backend/pinyin" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "pinyin -> environment path"
+scan "backend/runtime" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "runtime -> environment path"
+scan "backend/skin" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "skin -> environment path"
+scan "backend/speech-recognition" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "speech -> environment path"
+scan "backend/theme" 'getenv\("(XDG_[A-Z_]+|HOME)"\)' "theme -> environment path"
 
 # Pure data modules must stay free of Qt and Fcitx5.
 scan "backend/config" '#include[[:space:]]*[<"](Q|Qt)' "config -> Qt"

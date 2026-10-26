@@ -10,6 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "superior/paths/Roots.hpp"
+
 namespace superior::config {
 
 namespace {
@@ -39,13 +41,11 @@ bool validPlacement(std::string_view value) {
 } // namespace
 
 fs::path defaultSettingsPath() {
-    if (const char *home = std::getenv("XDG_CONFIG_HOME"); home != nullptr && home[0] != '\0') {
-        return fs::path(home) / "superior-ime" / "settings.json";
+    const fs::path configHome = ::superior::paths::Roots::fromEnvironment().config;
+    if (configHome.empty()) {
+        return {};
     }
-    if (const char *userHome = std::getenv("HOME"); userHome != nullptr && userHome[0] != '\0') {
-        return fs::path(userHome) / ".config" / "superior-ime" / "settings.json";
-    }
-    return {};
+    return configHome / "superior-ime" / "settings.json";
 }
 
 SettingsLoad loadSettings(const fs::path &path) {

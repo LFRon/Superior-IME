@@ -19,6 +19,7 @@ target_include_directories(superior_speech_recognition PUBLIC
 
 target_link_libraries(superior_speech_recognition
     PRIVATE Superior::Diagnostics
+    PRIVATE Superior::Paths
     PRIVATE nlohmann_json::nlohmann_json)
 
 target_compile_features(superior_speech_recognition PUBLIC cxx_std_20)

@@ -20,6 +20,7 @@ target_include_directories(superior_pinyin
 
 target_link_libraries(superior_pinyin
     PRIVATE Superior::Diagnostics
+    PRIVATE Superior::Paths
     PRIVATE ${CMAKE_DL_LIBS})
 
 target_compile_features(superior_pinyin PUBLIC cxx_std_20)

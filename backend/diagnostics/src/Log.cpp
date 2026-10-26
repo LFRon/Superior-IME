@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include "superior/paths/Roots.hpp"
+
 namespace superior::diagnostics {
 
 namespace {
@@ -131,8 +133,12 @@ std::string sanitizeCategory(std::string_view category) {
 
 std::string expandHome(std::string_view path) {
     if (path.size() >= 2 && path[0] == '~' && path[1] == '/') {
-        if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-            return std::string(home) + std::string(path.substr(1));
+        const std::filesystem::path home = paths::Roots::fromEnvironment().home;
+        if (!home.empty()) {
+            // Concatenate rather than `home / substr`: appending keeps whatever
+            // the user wrote after `~/` verbatim, including `~//x` staying `/x`
+            // under the home directory instead of jumping to the filesystem root.
+            return home.string() + std::string(path.substr(1));
         }
     }
     return std::string(path);
@@ -406,12 +412,8 @@ std::string ensureLogFile(std::string_view name) {
         existing != nullptr && existing[0] != '\0') {
         return std::string(existing);
     }
-    std::filesystem::path base;
-    if (const char *state = std::getenv("XDG_STATE_HOME"); state != nullptr && state[0] != '\0') {
-        base = std::filesystem::path(state);
-    } else if (const char *home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        base = std::filesystem::path(home) / ".local" / "state";
-    } else {
+    std::filesystem::path base = paths::Roots::fromEnvironment().state;
+    if (base.empty()) {
         return {};
     }
     std::error_code error;

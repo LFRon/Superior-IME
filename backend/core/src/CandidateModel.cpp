@@ -16,8 +16,11 @@ namespace {
 constexpr int kMinPageSize = 1;
 constexpr int kMaxPageSize = 32;
 constexpr std::uint32_t kPositionBits = 16;
-constexpr api::CandidateId kPositionMask = 0xFFFF;
-constexpr std::uint32_t kMaxGeneration = 0xFFFF;
+// Written as a shift rather than a literal so `scripts/check-boundaries.sh` can
+// forbid X11 keysym values in `core/` without a false positive here. The point
+// of that rule is that no platform numbering may live in the decision layer.
+constexpr api::CandidateId kPositionMask = (api::CandidateId{1} << kPositionBits) - 1U;
+constexpr std::uint32_t kMaxGeneration = (1U << kPositionBits) - 1U;
 
 } // namespace
 

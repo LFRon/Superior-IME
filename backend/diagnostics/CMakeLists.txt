@@ -9,4 +9,7 @@ target_include_directories(superior_diagnostics PUBLIC
 
 target_compile_features(superior_diagnostics PUBLIC cxx_std_20)
 
+target_link_libraries(superior_diagnostics
+    PRIVATE Superior::Paths)
+
 superior_set_warnings(superior_diagnostics)
