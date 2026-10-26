@@ -78,9 +78,11 @@ void testNoDestinationMeansNoCall() {
     CHECK(outbox.held() == "保留");
 }
 
-/// A stale key must be dropped by the *implementation*, so the policy can pass
-/// the decision through without a second validity check.
-void testStaleSessionIsDroppedByTheImplementation() {
+/// The policy forwards a key it cannot judge, and the *implementation* owns the
+/// decision. Here that decision is "record it" (this fake types nowhere), which
+/// is the point: `TextOutbox` performs no second validity check, so an
+/// implementation is free to resolve a stale key however its host requires.
+void testPolicyForwardsAKeyItCannotJudge() {
     RecordingTextSession port;
     TextOutbox outbox(port);
 
@@ -146,7 +148,7 @@ void testSilentAudioSourceKeepsItsPromises() {
 int main() {
     testApplyIsSynchronousAndOrdered();
     testNoDestinationMeansNoCall();
-    testStaleSessionIsDroppedByTheImplementation();
+    testPolicyForwardsAKeyItCannotJudge();
     testTwoSentencesInARow();
     testSilentAudioSourceKeepsItsPromises();
     return superior::test::finish("port conformance tests");

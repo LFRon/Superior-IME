@@ -14,16 +14,23 @@ Superior-IME 的第一原则：**前端与后端分开，UI 只能通过契约�
 
 ```
 backend/                 纯后端：无 Qt、无窗口、headless 可测
-├─ api/                  契约：事件、场景帧、命令、端口、能力
-├─ core/                 决策层：模式、按键归属、候选、场景折叠、语音状态
+├─ api/                  契约：场景帧、命令、端口、能力（只含纯数据，无平台词汇）
+├─ core/                 决策层：模式、按键归属、候选、场景折叠、语音状态、文本出口策略
+├─ paths/                唯一解析 XDG_* / HOME 的地方（Roots），换平台只改这一处
 ├─ pinyin/               能力：拼音（librime + 万象）
-├─ runtime/              串行泵、票据、代次隔离、确定性采样
+├─ speech-recognition/   能力：语音（采集 + 一个识别器子进程，不含麦克风细节）
+├─ cloudpinyin/          能力：云输入（去抖、缓存、错误预算）
 ├─ skin/                 皮肤模型、校验、内容哈希
-├─ protocol/             IPC 帧编解码与能力协商
+├─ config/               设置与学习词
+├─ theme/                classicui 主题导出
+├─ diagnostics/          日志
+├─ protocol/             IPC 帧编解码、场景广播
 └─ platforms/
-   ├─ fcitx5/            Fcitx5 agent addon、classicui 主题导出
-   ├─ windows/           预留
-   └─ android/           预留
+   ├─ fcitx5/            Fcitx5 agent addon（唯一写客户端文本的适配器）
+   ├─ linux/             Linux 桌面端口实现：麦克风采集
+   ├─ stub/              只依赖 api 的端口实现 + 编译探针（新平台的起点）
+   ├─ windows/           预留（先从 stub 抄）
+   └─ android/           预留（先从 stub 抄）
 
 frontend/                纯前端：只依赖 api / protocol / skin
 ├─ app/                  应用装配与 main()
@@ -45,14 +52,18 @@ flowchart LR
     API[api]
     SKIN[skin]
     CORE[core]
-    RT[runtime]
+    PATHS[paths]
     PROTO[protocol]
     FC[platforms/fcitx5]
-    RT --> CORE
+    STUB[platforms/stub]
     CORE --> API
     CORE --> SKIN
-    FC --> RT
+    FC --> CORE
+    FC --> PROTO
+    FC --> API
+    STUB --> API
     PROTO --> API
+    PROTO --> PATHS
   end
   subgraph frontend
     APP[app]
@@ -77,6 +88,11 @@ flowchart LR
 3. `backend/skin` 是纯数据层：不依赖 Qt，不做像素解码。
 4. `backend/api` 无实现依赖。
 5. 前后端只通过 `superior::api` 类型与 `superior::proto` 帧通信。
+6. `backend/platforms/*` 只实现 `backend/api` 的端口；能力由宿主注入，适配器不认识能力实现。
+7. 根目录（`XDG_*` / `HOME`）只有 `backend/paths` 解析，其它模块一律查 `paths::Roots`。
+
+要新增一个平台宿主，按 [platform-onboarding.md](platform-onboarding.md) 施工：
+每个端口的确切签名、三种 `TextEdit` 的语义、验收清单都在那里。
 
 这些规则由 `scripts/check-boundaries.sh` 机械化检查，并作为 ctest 用例执行。它不是"注释里的约定"。
 

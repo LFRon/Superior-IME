@@ -14,6 +14,9 @@
 [docs/fcitx5-integration.md](docs/fcitx5-integration.md)、
 [docs/pinyin-engine.md](docs/pinyin-engine.md)。
 
+要往别的操作系统上搬：[docs/platform-onboarding.md](docs/platform-onboarding.md)
+（每个端口的确切签名、三种 `TextEdit` 的语义、验收清单、以及哪些端口现在**不该**实现）。
+
 ---
 
 ## 当前状态
