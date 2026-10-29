@@ -234,6 +234,7 @@ private:
     int cloudMinLength_ = 2;
     int cloudIndex_ = 2;
     std::unique_ptr<fcitx::EventSourceTime> cloudTimer_;
+    bool cloudPumping_ = false;
     /// Debounce: only the settled composition is sent, because typing `nihao`
     /// would otherwise fire four requests (`ni`, `nih`, `niha`, `nihao`).
     fcitx::InputContext *cloudPendingContext_ = nullptr;

@@ -5,8 +5,8 @@
 先！进！自带云拼音，**默认关闭**。开启后，输入两个字母以上、停顿 200 ms，
 就会把当前的**纯拼音**发给服务商，用返回的词补一个候选。
 
-这与 `fcitx5-cloudpinyin` 的思路一致（同一个占位符 `☁`、同一个"连续失败就暂停"
-策略），但有四处按我们的架构重写了，见下面「与上游的差异」。
+这与 `fcitx5-cloudpinyin` 的思路一致（同一个候选位置、同一套"连续失败就暂停"
+策略），但按我们的架构重写了，见下面「与上游的差异」。
 
 ---
 
@@ -15,8 +15,8 @@
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 纯逻辑 | `backend/cloudpinyin/{Cloud,CloudState}.{hpp,cpp}` | URL 构造、响应解析、拼音规范化、LRU 缓存、错误预算 |
-| 传输 | `backend/cloudpinyin/src/Fetcher.cpp` | libcurl `multi`，**无独立线程** |
-| 引擎适配 | `backend/platforms/fcitx5/src/SuperiorAgent.cpp` | 占位符插入、结果回填、去重、提交 |
+| 传输 | `backend/cloudpinyin/src/Fetcher.cpp` | libcurl `multi` + **独立工作线程**，请求/结果队列 |
+| 引擎适配 | `backend/platforms/fcitx5/src/SuperiorAgent.cpp` | 候选插入、结果回填、去重、提交 |
 | 界面 | `frontend/settings` | 开关与服务商选择 |
 | 诊断 | `superior-config cloud probe` | 一条命令判断当前网络能不能用 |
 
@@ -41,9 +41,9 @@ UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` �
         → 敏感输入？              密码框/英文模式直接跳过
         → 候选列表可写？          toModifiable() 为 null 就放弃
         → 缓存命中？              直接插入真实候选，不发请求
-        → 否则插入 ☁ 占位符，交给去抖
-去抖 200 ms 后仍未变化 → Fetcher::submit()（异步，不阻塞）
-结果回来 → 回填占位符 / 与引擎已有候选重复则删除占位符
+        → 否则只登记待查询，不占位
+去抖 200 ms 后仍未变化 → Fetcher::submit()（工作线程，不阻塞主循环）
+结果回来 → 插入真实候选 / 与引擎已有候选重复则丢弃
 选中     → resetCompose() + commitString()
 ```
 
@@ -56,10 +56,11 @@ UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` �
 
 | 差异 | 原因 |
 |---|---|
-| **无独立线程**，用 `curl_multi` + 40 ms 事件定时器 | agent 是共享库，Fcitx5 会 `dlclose`。线程一旦活过卸载就会跑到已释放的内存上（浮层回收线程踩过同一个坑） |
+| **独立工作线程** + 请求/结果队列 | 同步解析 DNS 或等待 TLS 握手会把 Fcitx5 主循环卡住；agent 是共享库，Fcitx5 会 `dlclose`，所以 `Fetcher` 的析构必须停止并 `join` 工作线程，不能让线程活过卸载（浮层回收线程踩过同一个坑） |
+| 40 ms 事件定时器每次回调都 `setNextInterval()` | Fcitx5 的 `addTimeEvent` 是**单次**时间源，第三个参数是精度不是周期。只靠重复 `setEnabled(true)` 续命会把 deadline 留在过去，sd-event 就会在云请求期间反复回调、饿死 XCB/XIM（Telegram 按键约 200 ms 才到一个） |
 | **不插占位符**，结果到了才插入 | 占位符会把你要按的第 2 位换成云朵，并把它后面所有候选挤后一格 |
 | 状态以「拼音」而不是「列表指针」为身份 | 引擎可能原地重建列表内容，指针不变；只认指针会让过期的插入位置指向真实候选，云端候选直接消失 |
-| 回填前校验占位符是否还在原处 | 否则 `replace()` 会覆盖引擎刚生成的候选 |
+| 插入前校验列表身份并去重 | 否则结果会落进已经换过的组合，或覆盖/重复引擎刚生成的候选 |
 | 结果与引擎候选重复就丢弃 | 本地词库已经很好，`shurufa` / `rengongzhineng` 这类词的云端结果与引擎完全一致，硬塞一行只是噪音 |
 | 拼音规范化处理 `ü` | 引擎的 preedit 写 `lü`，服务商只认 `lv`；早期版本把整串判成"非拼音"直接跳过，于是所有带 ü 的词都没有云候选 |
 | 失败三次即暂停 60 秒，网络类错误一次顶三次 | 上游是十次错误 + 5 分钟冷却：用户看到的是"开了但没反应"，而且很难等回来 |

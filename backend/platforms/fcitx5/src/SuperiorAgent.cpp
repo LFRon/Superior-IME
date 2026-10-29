@@ -1498,15 +1498,35 @@ void SuperiorAgent::updateCloudTimer() {
         return;
     }
     if (cloudTimer_) {
-        cloudTimer_->setEnabled(true);
+        // The callback re-arms the one-shot source itself. Do not touch it from
+        // inside that callback: `isEnabled()` can report false while the source
+        // is being dispatched, and re-enabling it there used to leave the
+        // deadline in the past. sd-event then called `pumpCloud()` in a tight
+        // loop which starved XCB/XIM input (Telegram keys arrived in ~200 ms
+        // batches while a cloud request was running).
+        if (!cloudPumping_ && !cloudTimer_->isEnabled()) {
+            cloudTimer_->setNextInterval(kCloudTickUs);
+            cloudTimer_->setEnabled(true);
+        }
         return;
     }
     cloudTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kCloudTickUs, kCloudTickUs,
-        [this](fcitx::EventSourceTime *, std::uint64_t) {
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kCloudTickUs, 0,
+        [this](fcitx::EventSourceTime *source, std::uint64_t) {
+            // A time source is one-shot: without moving the deadline forward,
+            // sd-event keeps it enabled in the past and calls this callback in
+            // a tight loop. That starved XCB/XIM input, so Telegram keys were
+            // only delivered in ~200 ms batches while a request was pending.
+            source->setNextInterval(kCloudTickUs);
+            cloudPumping_ = true;
             pumpCloud();
+            cloudPumping_ = false;
             return true;
         });
+    cloudTimer_->setEnabled(false);
+    if (needed) {
+        cloudTimer_->setEnabled(true);
+    }
 }
 
 void SuperiorAgent::pumpCloud() {
@@ -1615,7 +1635,16 @@ void SuperiorAgent::applyCloudResult(fcitx::InputContext *inputContext,
         .field("index", static_cast<std::int64_t>(insertAt))
         .field("length", static_cast<std::int64_t>(text.size()))
         << "cloud candidate inserted";
-    inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+    // A cloud answer arrives outside any key event. Calling the host's
+    // `updateUserInterface()` here makes the platform (XIM clients in
+    // particular) process an asynchronous panel update interleaved with key
+    // dispatch. Our overlay draws from the scene, so refresh that directly and
+    // leave the platform UI untouched. A result for a background context stays
+    // in its panel and is shown when it becomes active again; refreshing it here
+    // would switch the overlay to the wrong window.
+    if (inputContext == activeContext_) {
+        refresh(inputContext);
+    }
 }
 
 void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
@@ -1637,7 +1666,9 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
                 modifiable->candidateFromAll(state.insertIndex).text().toString() ==
                     state.text) {
                 modifiable->remove(state.insertIndex);
-                inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+                if (inputContext == activeContext_) {
+                    refresh(inputContext);
+                }
             }
         }
     }
