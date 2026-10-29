@@ -347,3 +347,35 @@ Superior-IME/
 | D-06 | `superior-skin` 不解码像素 | 可在无 Qt 环境测试；渲染归 UI |
 | D-07 | 布局归 UI，语义归 core | 跨进程无法可靠共享字形度量 |
 | D-08 | P0 不做 zip 皮肤包 | 降低依赖；目录形式已够用 |
+
+---
+
+## 10. 2026-10-29 复盘：Telegram + 云拼音卡顿
+
+### 10.1 现象
+
+Telegram（Flatpak，X11/XIM）里快速打字时，字母像排队一样逐个出现，候选框也跟着一格一格刷新；`fcitx5-rime` / `fcitx5-pinyin` 不卡，VSCode 等走 GTK/IBus 路径的客户端也不明显。关闭云拼音，或把 `cloudPinyinMinLength` 调高到不会发请求时，输入立刻流畅。
+
+### 10.2 两个根因
+
+1. **每个键都重建 librime session**。Telegram 的 XIM 客户端会在每个键上触发 `XResetIC`，旧 `RimeInputMethod::reset()` 走 `forget()` → `destroy_session()` → `create_session()`，一次约 30 ms；日志表现为每个字母前都出现一对 `rime engine stopped` / `rime engine ready`。
+2. **云拼音的 40 ms tick 退化成了事件循环忙循环**。Fcitx5 的 `addTimeEvent(clock, usec, accuracy, callback)` 是**单次**时间源，第三个参数是精度而不是周期；旧代码把它当周期定时器，并在 `updateCloudTimer()` 里反复 `setEnabled(true)`。deadline 留在过去时，sd-event 会不停回调 `pumpCloud()`。单次 `pumpCloud` 很快，所以慢日志抓不到，但 XCB/XIM 的按键分发被饿死：X 事件时间相差几十到几百毫秒，到达 agent 却稳定约 200 ms 一个，偶尔积压数秒后一次性 burst。
+
+**关键教训：云拼音“异步”不等于“不会卡输入”。** 网络请求确实没有同步等待，但错误的定时器调度会占满 Fcitx5 主循环，效果和阻塞一样；而且它伤害的是 XIM 的同步转发队列，所以只有 Telegram 这类客户端最明显。
+
+### 10.3 修复
+
+- `RimePort::clearComposition()` / `RimeEngine::reset()`：用 librime `clear_composition` 原地清空组合，不再重建 session；`activate` / `deactivate` / `reset` 保留面板 custom callback。
+- `Fetcher`：HTTP 传输移到独立工作线程，请求/结果队列 + generation 取消；析构停止并 `join`，保证 addon 被 `dlclose` 时线程不会活过库。
+- `updateCloudTimer()`：回调内 `source->setNextInterval(kCloudTickUs)` 显式续期；空闲时 `setEnabled(false)`；`cloudPumping_` 防止在回调里重复启用；`OverlayController` 的 socket 重试定时器同样改为显式续期。
+- 云结果到达只刷新我们的浮层 scene，不再对 XIM 客户端做异步 `updateUserInterface`；后台 context 的结果留在其面板，不抢当前浮层。
+- 回归测试：`testResetClearsCompositionInPlace()` 固定“reset 不重建 session”的约定；全量 `ctest` 40/40 通过。
+
+### 10.4 当前状态（2026-10-29）
+
+- GNU/Linux X11 路线可日常使用：Fcitx5 内加载 `libsuperioragent.so` + `libsuperiorpinyin.so`，Qt 浮层负责候选窗/状态栏，`superior_speech_recognition` 负责语音子进程。
+- 拼音使用内置 librime + 万象方案；`superior-config` 可做 `rime status/deploy/lookup` 和 `cloud probe`。
+- 云拼音默认关闭；`googlecn` 实测可用，`baidu` 端点已失效，`sogou` 仍是占位。当前实现不再插占位符，结果到达后才插入真实候选。
+- 用户目录安装（`~/.local`）可用：`scripts/install-user.sh` 写入 `~/.local/lib/fcitx5`、`~/.local/share/fcitx5`、`~/.local/share/superior-ime`，并通过 `~/.config/environment.d/90-superior-ime.conf` 设置 `FCITX_ADDON_DIRS`。
+- 已实测：Telegram（XIM）连续输入/云候选正常；VSCode 等非 XIM 客户端正常；40/40 ctest 通过。
+- 未完成/边界：Wayland layer-shell 候选窗仍是 P1；Windows/macOS/Android 只有接口预留；语音为 P3 本地识别路线；`docs/` 里仍有一些早期架构描述与实现漂移，后续按模块收敛。
