@@ -49,7 +49,8 @@ void OverlayController::retryLater(std::string_view socketPath) {
     }
     retryTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 1000000, 0,
-        [this, path = std::string(socketPath)](fcitx::EventSourceTime *, std::uint64_t) {
+        [this, path = std::string(socketPath)](fcitx::EventSourceTime *source,
+                                               std::uint64_t) {
             std::string retryError;
             if (claim(path, retryError)) {
                 ensure();
@@ -58,7 +59,14 @@ void OverlayController::retryLater(std::string_view socketPath) {
                     .field("error", retryError)
                     << "UI socket still busy";
             }
-            return !retryStop_; // keep polling once a second
+            if (retryStop_) {
+                return false;
+            }
+            // Move the deadline before returning: a time source is one-shot,
+            // and leaving it in the past makes sd-event call us in a tight
+            // loop while the socket is busy.
+            source->setNextInterval(1000000);
+            return true;
         });
 }
 
