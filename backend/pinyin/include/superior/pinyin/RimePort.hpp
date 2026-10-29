@@ -33,6 +33,12 @@ public:
     virtual bool createSession(std::string &error) = 0;
     virtual void destroySession() = 0;
 
+    /// Abandons the current composition and candidate menu without touching the
+    /// session. Reset happens on a client-side `XResetIC`, which some toolkits
+    /// (notably Telegram's Qt/XIM path) send on every keystroke; recreating the
+    /// whole librime session there costs tens of milliseconds per key.
+    virtual void clearComposition() = 0;
+
     /// Returns true when the engine consumed the key.
     virtual bool processKey(std::uint32_t sym, std::uint32_t mask) = 0;
 

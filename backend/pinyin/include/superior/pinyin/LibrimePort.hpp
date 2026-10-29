@@ -33,6 +33,7 @@ public:
 
     bool createSession(std::string &error) override;
     void destroySession() override;
+    void clearComposition() override;
 
     bool processKey(std::uint32_t sym, std::uint32_t mask) override;
     bool takeCommit(std::string &out) override;

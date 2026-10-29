@@ -145,6 +145,22 @@ int selectionSlot(const fcitx::Key &key) {
     return slot;
 }
 
+/// Clears the panel without dropping the agent's custom-panel callback.
+///
+/// `InputPanel::reset()` clears both callbacks by design. That is correct when
+/// another input method takes the panel over, but not when the same engine is
+/// merely resetting a composition or bouncing through deactivate/activate: the
+/// agent would see an empty callback and re-take the panel on the next event,
+/// toggling the `Preedit` capability with it. Some clients (Telegram under XIM)
+/// reset on every key, so that churn is visible as lag.
+void clearPanelKeepingCallback(fcitx::InputPanel &panel) {
+    auto custom = panel.customInputPanelCallback();
+    auto virtualKeyboard = panel.customVirtualKeyboardCallback();
+    panel.reset();
+    panel.setCustomInputPanelCallback(std::move(custom));
+    panel.setCustomVirtualKeyboardCallback(std::move(virtualKeyboard));
+}
+
 } // namespace
 
 RimeInputMethod::RimeInputMethod(fcitx::AddonManager *manager)
@@ -289,7 +305,7 @@ void RimeInputMethod::activate(const fcitx::InputMethodEntry &entry,
     // Opening lazily on activation keeps windows that never use this input
     // method from allocating a session at all.
     auto *session = sessionFor(inputContext);
-    inputContext->inputPanel().reset();
+    clearPanelKeepingCallback(inputContext->inputPanel());
     if (session != nullptr) {
         attachPunctuation(inputContext, *session);
         updatePanel(inputContext, *session);
@@ -303,8 +319,20 @@ void RimeInputMethod::deactivate(const fcitx::InputMethodEntry &entry,
     if (inputContext == nullptr) {
         return;
     }
-    inputContext->inputPanel().reset();
-    forget(inputContext);
+    // Keep the librime session. Deactivation is often followed by immediate
+    // reactivation (Fcitx5 switches on capability changes; some clients bounce
+    // the input method per key). Recreating a session reloads the schema and
+    // took ~30 ms here, which is the difference between typing and stuttering.
+    // `forget()` is still called on `InputContextDestroyed`, where the context
+    // really goes away.
+    if (auto it = sessions_.find(inputContext); it != sessions_.end()) {
+        it->second->engine.reset();
+        it->second->listBuilt = false;
+        it->second->builtTexts.clear();
+    }
+    // The agent still owns this panel if the context bounces straight back to
+    // us; only `InputContextSwitchInputMethod`/destroy should drop the callback.
+    clearPanelKeepingCallback(inputContext->inputPanel());
 }
 
 void RimeInputMethod::reset(const fcitx::InputMethodEntry &entry,
@@ -314,15 +342,31 @@ void RimeInputMethod::reset(const fcitx::InputMethodEntry &entry,
     if (inputContext == nullptr) {
         return;
     }
-    // Reopening is the only reliable way to clear librime's composition through
-    // the C API; `clear_composition` leaves parts of the state behind.
-    forget(inputContext);
     auto *session = sessionFor(inputContext);
-    inputContext->inputPanel().reset();
     if (session != nullptr) {
+        // `clear_composition` abandons the composition in place. Reopening the
+        // session here was the old workaround, and it made Telegram (which sends
+        // `XResetIC` on every key) take tens of milliseconds per character.
+        auto &panel = inputContext->inputPanel();
+        const bool hadContent = panel.candidateList() != nullptr ||
+                                !panel.preedit().toString().empty() ||
+                                !panel.clientPreedit().toString().empty();
+        session->engine.reset();
+        session->listBuilt = false;
+        session->builtTexts.clear();
+        clearPanelKeepingCallback(panel);
         attachPunctuation(inputContext, *session);
         updatePanel(inputContext, *session);
+        // `updatePanel` is a no-op when the cleared panel was already empty, but
+        // the UI may still be showing the previous frame. Only publish when
+        // there was something to take down; otherwise this is one more scene per
+        // keystroke for clients that reset constantly.
+        if (hadContent) {
+            inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+        }
+        return;
     }
+    clearPanelKeepingCallback(inputContext->inputPanel());
 }
 
 void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyEvent &event) {
@@ -484,7 +528,7 @@ void RimeInputMethod::updatePanel(fcitx::InputContext *inputContext, Session &se
     auto &panel = inputContext->inputPanel();
     if (snapshot.composition.preedit.empty() && snapshot.menu.candidates.empty()) {
         if (session.listBuilt || panel.candidateList() || !panel.preedit().toString().empty()) {
-            panel.reset();
+            clearPanelKeepingCallback(panel);
             session.listBuilt = false;
             session.builtTexts.clear();
             inputContext->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);

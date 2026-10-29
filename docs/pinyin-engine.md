@@ -28,7 +28,7 @@ backend/pinyin/                纯逻辑，不含 Qt / Fcitx5，可单测
   Types.hpp                  按键、组合、菜单、快照、部署状态
   RimePort.hpp               引擎需要的全部 librime 能力（接口）
   RimeEngine.{hpp,cpp}       状态机：按键、提交、翻页、ASCII 模式
-  RimePaths.{hpp,cpp}        数据目录与「是否已编译」判断
+  Layout.{hpp,cpp}           数据目录布局与旧目录迁移判断
   LibrimePort.{hpp,cpp}      dlopen + RimeApi 函数表；公共头不出现 rime_api.h
 
 backend/platforms/fcitx5/
@@ -38,6 +38,12 @@ backend/platforms/fcitx5/
 `backend/pinyin` 的公共头禁止包含 `rime_api.h` / `dlfcn.h`，也禁止 Qt/Fcitx5，
 由 `scripts/check-boundaries.sh` 强制。这样同一套状态机以后可以直接给
 Windows TSF 或 Android 用。
+
+`reset()` / `deactivate()` **不销毁 librime session**。早期实现每次 `forget()` 再
+`create_session()`，一次约 30 ms；Telegram 的 XIM 客户端会在每个键上触发
+`XResetIC`，于是每个字母都重新加载一次方案。现在用
+`clear_composition()` 原地清空组合，并保留面板的 custom callback，只有
+`InputContextDestroyed` 才真正销毁 session。
 
 ## 数据目录与部署
 
@@ -135,8 +141,8 @@ patch:
 2. 把这个值写入**所有**打开的 session（这个开关是方案级的，下一个窗口也必须一致）；
 3. 更新 action 的 checked/短文本/图标，触发 `StatusArea` 重绘。
 
-新会话在 `activate`/`reset` 时会复制工具栏状态，所以切窗口不会让标点突然变回
-另一种宽度。状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
+`activate` 时（以及确实需要重建会话时）会复制工具栏状态，所以切窗口不会让标点
+突然变回另一种宽度。状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
 
 ## 翻页
 

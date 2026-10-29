@@ -133,6 +133,19 @@ bool RimeEngine::page(bool backward) {
     return port_.changePage(backward);
 }
 
+bool RimeEngine::reset() {
+    if (!sessionOpen_) {
+        return false;
+    }
+    port_.clearComposition();
+    // A reset means "drop what is being typed". Any commit already queued came
+    // from the composition being dropped, so it must not leak into the next key.
+    std::string ignored;
+    port_.takeCommit(ignored);
+    refreshAsciiMode();
+    return true;
+}
+
 bool RimeEngine::takeCommit(std::string &out) {
     out.clear();
     if (!sessionOpen_) {

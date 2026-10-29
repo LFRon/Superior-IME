@@ -50,6 +50,13 @@ public:
     }
     void destroySession() override { open = false; }
 
+    void clearComposition() override {
+        ++clearCount;
+        pendingComposition = Composition{};
+        pendingMenu = Menu{};
+        pendingCommit.clear();
+    }
+
     bool processKey(std::uint32_t sym, std::uint32_t mask) override {
         keys.push_back({sym, mask});
         if (consumeNext) {
@@ -115,6 +122,7 @@ public:
     int deployCount = 0;
     int sessionCount = 0;
     int commitDrains = 0;
+    int clearCount = 0;
     bool initialized = false;
     bool open = false;
     bool ascii = false;
@@ -410,6 +418,29 @@ void testTakeCommitAfterSelection() {
     CHECK(port.commitDrains == 1);
 }
 
+void testResetClearsCompositionInPlace() {
+    FakePort port;
+    port.schema = "wanxiang";
+    RimeEngine engine(port);
+    std::string error;
+    CHECK(engine.start(testPaths(), error));
+
+    port.pendingComposition.preedit = "ni";
+    port.pendingMenu.candidates.push_back(Candidate{"你", ""});
+    port.pendingCommit = "stale";
+
+    CHECK(engine.reset());
+    CHECK(port.clearCount == 1);
+    CHECK(port.pendingComposition.preedit.empty());
+    CHECK(port.pendingMenu.candidates.empty());
+    CHECK(port.pendingCommit.empty());
+    // The point of the in-place clear: no session churn. Telegram sends a reset
+    // per key, and reopening a session there took ~30 ms.
+    CHECK(port.sessionCount == 1);
+    CHECK(port.open);
+    CHECK(engine.running());
+}
+
 void testOperationsBeforeStartAreNoOps() {
     FakePort port;
     RimeEngine engine(port);
@@ -490,6 +521,7 @@ int main() {
     testSchemaOptionsForwardToPort();
     testSelectAndPageForwardToPort();
     testTakeCommitAfterSelection();
+    testResetClearsCompositionInPlace();
     testOperationsBeforeStartAreNoOps();
     testPathsAreIsolatedFromFcitx();
     testMissingRootLeavesPathsEmpty();

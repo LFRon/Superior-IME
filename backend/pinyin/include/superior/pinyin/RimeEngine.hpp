@@ -59,6 +59,14 @@ public:
     bool selectCandidate(std::size_t index);
     bool page(bool backward);
 
+    /// Abandons the composition without closing the session.
+    ///
+    /// Fcitx5 calls `reset()` when the client sends `XResetIC`. Some clients do
+    /// that for every keystroke, so this must be an in-place clear; tearing down
+    /// the librime session here made typing in Telegram take tens of
+    /// milliseconds per character.
+    bool reset();
+
     /// Removes and returns the text produced by the last non-key action
     /// (`selectCandidate`), if any.
     ///

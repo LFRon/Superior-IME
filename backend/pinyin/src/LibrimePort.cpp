@@ -233,6 +233,13 @@ void LibrimePort::destroySession() {
     impl_->session = 0;
 }
 
+void LibrimePort::clearComposition() {
+    if (!available() || impl_->session == 0 || impl_->api->clear_composition == nullptr) {
+        return;
+    }
+    impl_->api->clear_composition(impl_->session);
+}
+
 bool LibrimePort::processKey(std::uint32_t sym, std::uint32_t mask) {
     if (!available() || impl_->session == 0) {
         return false;
