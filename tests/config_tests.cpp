@@ -134,6 +134,7 @@ void testSettingsRoundTrip() {
     settings.skinId = "org.example.skin";
     settings.themeName = "org.example.skin";
     settings.shiftToggle = false;
+    settings.shiftCommitPinyin = false;
     settings.uiScale = 1.25;
     settings.statusPlacement = "topLeft";
     settings.logLevel = "debug";
@@ -147,6 +148,7 @@ void testSettingsRoundTrip() {
     CHECK(loaded.warnings.empty());
     CHECK(loaded.settings.skinId == settings.skinId);
     CHECK(!loaded.settings.shiftToggle);
+    CHECK(!loaded.settings.shiftCommitPinyin);
     CHECK(superior::test::near(loaded.settings.uiScale, 1.25));
     CHECK(loaded.settings.statusPlacement == "topLeft");
     CHECK(loaded.settings.logLevel == "debug");

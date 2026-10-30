@@ -56,6 +56,16 @@ std::size_t byteCursor(const fcitx::Text &text) {
     return static_cast<std::size_t>(cursor);
 }
 
+/// True while the engine holds something the user is still composing.
+///
+/// A live candidate list counts even with an empty preedit: the engine showing
+/// words means the user is mid-word, which is the state the Shift tap has to
+/// recognise before it can decide between committing and switching language.
+bool panelComposing(const fcitx::InputPanel &panel) {
+    return !panel.preedit().toString().empty() || !panel.clientPreedit().toString().empty() ||
+           panel.candidateList() != nullptr;
+}
+
 /// Marker shown while a cloud answer is still on its way. Matches upstream's
 /// glyph so a user who knows fcitx5-cloudpinyin recognises it immediately.
 constexpr std::string_view kCloudPlaceholder = "☁";
@@ -544,6 +554,7 @@ void SuperiorAgent::reloadSettings() {
 
     const bool previousInlineEnglish = inlineEnglishEnabled_;
     inlineEnglishEnabled_ = loaded.settings.shiftToggle;
+    shiftCommitPinyin_ = loaded.settings.shiftCommitPinyin;
     const bool previousSpeech = speech_.enabled();
     showStatusBar_ = loaded.settings.showStatusBar;
     speech_.setHotkeyEnabled(loaded.settings.speechRecognitionHotkey);
@@ -631,6 +642,46 @@ void SuperiorAgent::reloadSettings() {
 
     // The settings page edits the same switch the tray menu does.
     refreshTrayActions();
+}
+
+bool SuperiorAgent::commitCompositionLetters(fcitx::InputContext *inputContext) {
+    if (inputContext == nullptr) {
+        return false;
+    }
+    const auto &panel = inputContext->inputPanel();
+    // Read the letters *before* anything touches the composition: the commit
+    // path drops the composition first, so a later read yields nothing.
+    const PreeditView view = choosePreedit(panel.preedit().toString(), byteCursor(panel.preedit()),
+                                           panel.clientPreedit().toString(),
+                                           byteCursor(panel.clientPreedit()));
+    if (view.text.empty()) {
+        // Nothing typed (an engine can hold a list with an empty preedit). The
+        // caller still switches language: the user asked for English.
+        return false;
+    }
+
+    // `Drop`: the letters belong to the window they were typed in. If focus
+    // moved between press and release, typing them into the new window would be
+    // wrong, and the old window lost them when it lost the caret.
+    const core::ImeSession *session = findSession(inputContext);
+    const api::SessionKey key = session != nullptr ? session->key() : api::SessionKey{};
+    if (!outbox_.commit(key, view.text, core::WhenUnfocused::Drop)) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("length", static_cast<std::int64_t>(view.text.size()))
+            .field("program", inputContext->program())
+            << "composition not committed: its session is no longer active";
+        return false;
+    }
+
+    // The commit ends the composition, so the candidate window has to go with
+    // it. `refresh` is also what re-folds the scene the overlay draws.
+    refresh(inputContext);
+    SUPERIOR_INFO(diag::categories::Fcitx5)
+        .field("length", static_cast<std::int64_t>(view.text.size()))
+        .field("fromClient", view.fromClient)
+        .field("program", inputContext->program())
+        << "committed the pinyin letters on a shift tap";
+    return true;
 }
 
 void SuperiorAgent::setEnglishMode(fcitx::InputContext *inputContext, bool english,
@@ -799,16 +850,26 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
             // What a tap means is a product rule, so it is decided in
             // `core::decideGesture`; this adapter only reports that a tap
             // happened. The gate used to sit here with its own copy per gesture.
+            const bool composing = panelComposing(inputContext->inputPanel());
             const auto intent = core::decideGesture(core::GestureInput{
                 .gesture = core::Gesture::ShiftTap,
                 .english = modes_.english(),
+                .composing = composing,
                 .inlineEnglishEnabled = inlineEnglishEnabled_,
+                .shiftCommitPinyin = shiftCommitPinyin_,
             });
-            if (intent == core::GestureIntent::ToggleLanguage) {
+            if (intent == core::GestureIntent::CommitAndSwitchToEnglish) {
+                // Order matters: switching language abandons the composition, so
+                // the letters have to be read and committed while it still
+                // exists. `setEnglishMode` then finds nothing left to drop.
+                commitCompositionLetters(inputContext);
+                setEnglishMode(inputContext, true, "shift tap: letters committed");
+            } else if (intent == core::GestureIntent::ToggleLanguage) {
                 setEnglishMode(inputContext, !modes_.english(), "shift tap");
             } else {
                 SUPERIOR_DEBUG(diag::categories::Fcitx5)
                     .field("program", inputContext->program())
+                    .field("composing", composing)
                     << "shift tap ignored: inline English is disabled in settings";
             }
         }
@@ -863,9 +924,7 @@ bool SuperiorAgent::handleKeyEvent(fcitx::KeyEvent &event) {
     // facts the policy cannot know: whether a composition is active and whether
     // the key produces text in the current layout.
     const auto &panel = inputContext->inputPanel();
-    const bool composing = !panel.preedit().toString().empty() ||
-                           !panel.clientPreedit().toString().empty() ||
-                           panel.candidateList() != nullptr;
+    const bool composing = panelComposing(panel);
 
     const auto states = event.key().states();
     const bool shift = states.test(fcitx::KeyState::Shift);

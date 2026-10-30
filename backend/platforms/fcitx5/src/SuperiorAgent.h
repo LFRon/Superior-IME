@@ -89,6 +89,13 @@ private:
     /// `inputContext` may be null (settings hot reload without a focused
     /// window); the mode still changes, but no scene is repainted.
     void setEnglishMode(fcitx::InputContext *inputContext, bool english, const char *reason);
+    /// Commits the letters the engine is composing, as they are, and ends the
+    /// composition. Used by the Shift tap when `shiftCommitPinyin` is on.
+    ///
+    /// Returns false when there was nothing to commit (empty composition, or a
+    /// session that is no longer active); the caller switches language anyway,
+    /// because the user asked for English, not for a commit.
+    bool commitCompositionLetters(fcitx::InputContext *inputContext);
 
     /// Per-context Shift tap detector. The mode itself is global; only the
     /// physical key state belongs to a window.
@@ -272,6 +279,9 @@ private:
     TextSession textSession_;
     core::TextOutbox outbox_;
     bool inlineEnglishEnabled_ = true;
+    /// Mirrors `settings.json: shiftCommitPinyin`: a bare Shift tap commits the
+    /// typed letters instead of switching language while composing.
+    bool shiftCommitPinyin_ = true;
     /// The single owner of Chinese/English. Nothing else may keep its own copy:
     /// two booleans flipping on the same Shift release is exactly the bug this
     /// member replaced.

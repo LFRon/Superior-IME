@@ -16,6 +16,14 @@ struct Settings {
     std::string skinId = "org.superior.default";
     std::string themeName = "org.superior.default";
     bool shiftToggle = true;
+    /// A bare Shift tap while a pinyin composition is open commits the typed
+    /// letters as they are, instead of switching language.
+    ///
+    /// On by default: it is what makes "I typed it, just give me the letters"
+    /// work, and the Sogou behaviour it copies. Off means a tap does nothing at
+    /// all mid-composition — Shift stays a plain modifier, and Esc is the way to
+    /// abandon the pinyin.
+    bool shiftCommitPinyin = true;
     bool showStatusBar = true;
     std::string statusPlacement = "bottomRight";
     double uiScale = 1.0;
