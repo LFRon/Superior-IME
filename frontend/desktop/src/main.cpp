@@ -10,6 +10,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -32,6 +33,7 @@
 #include "SkinTheme.hpp"
 #include "OverlayLayout.hpp"
 #include "StatusWindow.hpp"
+#include "platform/ScreenScale.hpp"
 
 #include "superior/diagnostics/Log.hpp"
 
@@ -154,9 +156,54 @@ int main(int argc, char **argv) {
     superior::ui::CandidateWindow candidates;
     superior::ui::SpeechRecognitionPanel speech;
 
-    status.setScale(settings.uiScale);
-    candidates.setScale(settings.uiScale);
-    speech.setScale(settings.uiScale);
+    // --------------------------------------------------------------- scale
+    //
+    // The strategy layer only ever sees one ratio (`setScale`). Where the
+    // desktop's own factor comes from is the platform's business: X11 reads
+    // `Xft.dpi`, Wayland reads `wl_output.scale` (`platform/ScreenScale*`).
+    //
+    // It is asked here rather than taken from Qt: Qt derives its DPR from the
+    // same resource at start-up but cannot tell a stale `Xft.dpi` from a real
+    // one, and it never re-reads either. Reading the desktop's own declaration
+    // keeps the toolbar the same size as the applications that honour it.
+    // `scaleForWindows` divides by Qt's cached ratio, so the final size is
+    // `system × uiScale` exactly once. The scale is read once: on X11 changing
+    // it needs a logout, and the overlay restarts with the session.
+    const superior::ui::SystemScale systemScale = superior::ui::readSystemScale();
+    double appliedScale = 1.0;
+    const auto resolvedScale = [&]() {
+        double dpr = 1.0;
+        if (const QScreen *screen = QGuiApplication::primaryScreen()) {
+            dpr = screen->devicePixelRatio();
+        }
+        return superior::ui::scaleForWindows(systemScale, dpr, settings.uiScale);
+    };
+    const auto applyScale = [&](const char *reason) {
+        const double next = resolvedScale();
+        const bool changed = std::abs(next - appliedScale) >= 0.001;
+        appliedScale = next;
+        status.setScale(appliedScale);
+        candidates.setScale(appliedScale);
+        speech.setScale(appliedScale);
+        if (!changed) {
+            return;
+        }
+        double dpr = 1.0;
+        if (const QScreen *screen = QGuiApplication::primaryScreen()) {
+            dpr = screen->devicePixelRatio();
+        }
+        SUPERIOR_INFO(diag::categories::Ui)
+            .field("reason", std::string(reason))
+            .field("source", std::string(superior::ui::scaleSourceName(systemScale.source)))
+            .field("raw", static_cast<std::int64_t>(systemScale.raw))
+            .field("system", systemScale.factor, 3)
+            .field("toolkitDpr", dpr, 3)
+            .field("userScale", settings.uiScale, 3)
+            .field("applied", appliedScale, 3)
+            << "overlay scale resolved";
+    };
+    applyScale("startup");
+
     status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
     status.setEnabled(settings.showStatusBar);
 
@@ -324,14 +371,13 @@ int main(int argc, char **argv) {
             activeSkinId = settings.skinId;
             activeSkin = loadConfiguredSkin(paths, activeSkinId);
         }
-        status.setScale(settings.uiScale);
-        candidates.setScale(settings.uiScale);
-        speech.setScale(settings.uiScale);
+        applyScale("settings applied");
         status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
         status.setEnabled(settings.showStatusBar);
         SUPERIOR_INFO(diag::categories::Ui)
             .field("skin", settings.skinId)
-            .field("scale", settings.uiScale, 2)
+            .field("uiScale", settings.uiScale, 2)
+            .field("appliedScale", appliedScale, 3)
             .field("statusBar", settings.showStatusBar)
             .field("placement", settings.statusPlacement)
             << "settings applied";

@@ -43,6 +43,15 @@ target_include_directories(superior_layout_rules_tests PRIVATE
 target_compile_features(superior_layout_rules_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_layout_rules_tests)
 
+# The scale helpers stay pure so the platform-specific readers can be replaced
+# without a display: what is tested here is the arithmetic every port shares.
+add_executable(superior_ui_scale_tests ui_scale_tests.cpp)
+target_include_directories(superior_ui_scale_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_ui_scale_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_ui_scale_tests)
+
 add_executable(superior_overlay_layout_tests
     overlay_layout_tests.cpp
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src/OverlayLayout.cpp"
@@ -276,6 +285,7 @@ add_test(NAME qt-platform COMMAND superior_qt_platform_tests)
 add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
 add_test(NAME drag-handle COMMAND superior_drag_handle_tests)
 add_test(NAME overlay-layout COMMAND superior_overlay_layout_tests)
+add_test(NAME ui-scale COMMAND superior_ui_scale_tests)
 add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
 add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
 add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)

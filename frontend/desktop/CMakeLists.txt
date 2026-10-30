@@ -7,7 +7,19 @@ if(Qt6Svg_FOUND)
     set(SUPERIOR_HAVE_QT_SVG ON)
 endif()
 
+# The overlay asks the platform for the desktop's scale factor; the libraries are
+# optional so a build on a system without their headers still produces a working
+# overlay (it simply cannot follow a scale set after start-up).
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SUPERIOR_XCB QUIET IMPORTED_TARGET xcb)
+    pkg_check_modules(SUPERIOR_WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
+endif()
+
 add_executable(superior_ui
+    src/platform/ScreenScale.cpp
+    src/platform/ScreenScaleX11.cpp
+    src/platform/ScreenScaleWayland.cpp
     src/CandidateLabel.cpp
     src/CandidateWindow.cpp
     src/DragHandle.cpp
@@ -48,6 +60,16 @@ target_link_libraries(superior_ui PRIVATE
 if(SUPERIOR_HAVE_QT_SVG)
     target_link_libraries(superior_ui PRIVATE Qt6::Svg)
     target_compile_definitions(superior_ui PRIVATE SUPERIOR_HAVE_QT_SVG=1)
+endif()
+
+if(SUPERIOR_XCB_FOUND)
+    target_link_libraries(superior_ui PRIVATE PkgConfig::SUPERIOR_XCB)
+    target_compile_definitions(superior_ui PRIVATE SUPERIOR_HAVE_XCB_SCALE=1)
+endif()
+
+if(SUPERIOR_WAYLAND_CLIENT_FOUND)
+    target_link_libraries(superior_ui PRIVATE PkgConfig::SUPERIOR_WAYLAND_CLIENT)
+    target_compile_definitions(superior_ui PRIVATE SUPERIOR_HAVE_WAYLAND_SCALE=1)
 endif()
 
 target_compile_features(superior_ui PRIVATE cxx_std_20)
