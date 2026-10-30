@@ -23,10 +23,15 @@
 namespace superior::ui {
 
 namespace {
-constexpr int kBaseHeight = 30;
-constexpr int kBasePadding = 8;
-constexpr int kBaseGap = 6;
-constexpr int kBasePointSize = 95; // 9.5 pt in tenths
+// Base metrics are the 100 % size: the desktop's scale factor multiplies them
+// (`platform/ScreenScale`), and the user's `uiScale` multiplies them again. They
+// are sized next to the system's own bars, not as small as they used to be: at
+// 30 px / 9.5 pt the toolbar was visibly smaller than every other panel on a
+// 125 % desktop.
+constexpr int kBaseHeight = 36;
+constexpr int kBasePadding = 9;
+constexpr int kBaseGap = 7;
+constexpr int kBasePointSize = 105; // 10.5 pt in tenths
 
 QString itemText(const api::StatusItem &item) {
     if (!item.label.empty()) {
@@ -40,12 +45,12 @@ QString itemText(const api::StatusItem &item) {
 
 /// A glyph cell is square-ish and fixed: the moon/circle must not resize the bar
 /// when the punctuation mode flips.
-constexpr int kGlyphCellWidth = 22;
+constexpr int kGlyphCellWidth = 26;
 int itemWidth(const QFontMetrics &metrics, const api::StatusItem &item, double scale) {
     if (glyphFor(item) != Glyph::None) {
         return static_cast<int>(std::lround(static_cast<double>(kGlyphCellWidth) * scale));
     }
-    return std::max(24, metrics.horizontalAdvance(itemText(item)) + 16);
+    return std::max(28, metrics.horizontalAdvance(itemText(item)) + 18);
 }
 
 /// Paints the punctuation glyph: crescent for half width, filled circle for
@@ -108,7 +113,7 @@ StatusWindow::StatusWindow(QWidget *parent) : QWidget(parent) {
     // Needed for the hand cursor on the grip: without tracking we get no move
     // events while hovering.
     setMouseTracking(true);
-    resize(180, kBaseHeight);
+    resize(200, kBaseHeight);
 }
 
 int StatusWindow::scaled(int value) const {
@@ -216,7 +221,7 @@ QSize StatusWindow::sizeHint() const {
         width += scaled(itemWidth(metrics, item, scale_)) + scaled(kBaseGap);
     }
     width += scaled(kBasePadding);
-    return QSize(std::max(scaled(110), width), scaled(kBaseHeight));
+    return QSize(std::max(scaled(126), width), scaled(kBaseHeight));
 }
 
 void StatusWindow::paintEvent(QPaintEvent *event) {

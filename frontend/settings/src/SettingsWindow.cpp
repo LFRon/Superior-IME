@@ -424,7 +424,9 @@ QWidget *SettingsWindow::buildAppearancePage() {
     themeState_ = makeLabel(QString(), "rowHint");
     skinCard->addWidget(themeState_);
 
-    QVBoxLayout *scaleCard = addCard(layout, tr("缩放"), tr("界面缩放会同时影响状态栏与候选栏。"));
+    QVBoxLayout *scaleCard =
+        addCard(layout, tr("缩放"),
+                tr("在系统缩放的基础上再乘一档；候选栏与状态栏一起变化。"));
     auto *scaleRow = new QWidget;
     auto *scaleLayout = new QHBoxLayout(scaleRow);
     scaleLayout->setContentsMargins(0, 0, 0, 0);
@@ -438,7 +440,8 @@ QWidget *SettingsWindow::buildAppearancePage() {
     scaleValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     scaleLayout->addWidget(scaleSlider_, 1);
     scaleLayout->addWidget(scaleValue_);
-    scaleCard->addWidget(makeRow(tr("界面比例"), tr("75% – 300%"), scaleRow));
+    scaleCard->addWidget(
+        makeRow(tr("界面比例"), tr("75% – 300%，相对系统缩放"), scaleRow));
     connect(scaleSlider_, &QSlider::valueChanged, this, [this](int value) {
         scaleValue_->setText(QString::number(value) + QStringLiteral("%"));
     });
