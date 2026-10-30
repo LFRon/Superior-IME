@@ -105,6 +105,14 @@ enum class GestureIntent {
     None,
     /// Switch Chinese/English, recording the choice.
     ToggleLanguage,
+    /// Commit the letters the pinyin engine is currently composing, as they
+    /// are, then switch to English.
+    ///
+    /// One intent rather than two because it is one product rule: Sogou's
+    /// "Shift mid-word gives me what I typed *and* the next letters are
+    /// English". Splitting it would let a port commit without switching, or
+    /// switch first and lose the letters.
+    CommitAndSwitchToEnglish,
     /// Open the dictation panel and start, or stop an ongoing recording.
     ToggleSpeech,
     /// Discard the utterance in flight without closing the panel.
@@ -116,8 +124,15 @@ enum class GestureIntent {
 struct GestureInput {
     Gesture gesture = Gesture::None;
     bool english = false;
+    /// The engine currently holds a non-empty composition.
+    ///
+    /// Only the Shift tap reads it today: a tap mid-word means "give me the
+    /// letters I typed, and keep going in English".
+    bool composing = false;
     /// `settings.json: inlineEnglish`.
     bool inlineEnglishEnabled = true;
+    /// `settings.json: shiftCommitPinyin`.
+    bool shiftCommitPinyin = true;
     /// `settings.json: speechRecognition`.
     bool speechEnabled = true;
     /// `settings.json: speechRecognitionHotkey`.
@@ -132,10 +147,14 @@ struct GestureInput {
 /// inside the Fcitx5 adapter, each with its own copy of the settings gate. A port
 /// to Windows would have had to reproduce all three.
 ///
-/// Rules: a Shift tap toggles language only when inline English is enabled (the
-/// feature it exists for); a right-Ctrl tap toggles dictation only when both the
-/// product switch and the hotkey switch are on; Escape cancels only while a
-/// session is live, so it keeps its normal meaning the rest of the time.
+/// Rules: a Shift tap while composing commits the typed letters and switches to
+/// English when `shiftCommitPinyin` is on; with it off the tap only toggles
+/// language, abandoning the pinyin without putting it on screen. Switching
+/// language at all requires inline English, since that feature is what the tap
+/// exists for. A right-Ctrl tap
+/// toggles dictation only when both the product switch and the hotkey switch are
+/// on; Escape cancels only while a session is live, so it keeps its normal
+/// meaning the rest of the time.
 [[nodiscard]] GestureIntent decideGesture(const GestureInput &input) noexcept;
 
 /// Sogou-style candidate paging: `+` (or keypad `+`) is "next page", keypad `-`

@@ -18,6 +18,13 @@ bool isEditingKey(KeyCode code) noexcept {
 GestureIntent decideGesture(const GestureInput &input) noexcept {
     switch (input.gesture) {
     case Gesture::ShiftTap:
+        // Mid-composition, with the switch on, the tap means "put the letters I
+        // typed on screen and continue in English". With it off the tap keeps
+        // its normal meaning: switch language, abandoning the pinyin without
+        // committing it.
+        if (input.composing && input.shiftCommitPinyin) {
+            return GestureIntent::CommitAndSwitchToEnglish;
+        }
         // The tap exists to type English inline; with that switched off a bare
         // Shift must stay a modifier, and silently switching language would be
         // the worst of both.

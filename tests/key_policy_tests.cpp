@@ -149,6 +149,26 @@ void testShiftTapGesture() {
     // Inline English switched off: a bare Shift must stay a modifier.
     input.inlineEnglishEnabled = false;
     CHECK(decideGesture(input) == GestureIntent::None);
+
+    // Mid-composition, switch on: the tap puts the typed letters on screen and
+    // keeps going in English. One intent, because committing without switching
+    // would leave the candidate window open for an abandoned composition, and
+    // switching first would lose the letters.
+    input.inlineEnglishEnabled = true;
+    input.composing = true;
+    CHECK(decideGesture(input) == GestureIntent::CommitAndSwitchToEnglish);
+    // Switch off: the tap keeps its old meaning — switch language, and the
+    // pinyin is abandoned rather than committed.
+    input.shiftCommitPinyin = false;
+    CHECK(decideGesture(input) == GestureIntent::ToggleLanguage);
+    // Inline English off as well: nothing to do, so Shift stays a modifier.
+    input.inlineEnglishEnabled = false;
+    CHECK(decideGesture(input) == GestureIntent::None);
+    input.inlineEnglishEnabled = true;
+    input.shiftCommitPinyin = true;
+    // With no composition the old rule is back.
+    input.composing = false;
+    CHECK(decideGesture(input) == GestureIntent::ToggleLanguage);
 }
 
 void testRightCtrlTapGesture() {
