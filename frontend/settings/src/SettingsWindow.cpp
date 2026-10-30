@@ -466,6 +466,20 @@ QWidget *SettingsWindow::buildInputPage() {
         tr("以英文模式输入的字母会直接上屏，不经过拼音候选。这与搜狗输入法的行为一致。"),
         "rowHint"));
 
+    QVBoxLayout *commitCard = addCard(
+        layout, tr("拼音"),
+        tr("这些开关只影响拼音组合中的行为，不改变方案本身。"));
+    shiftCommitToggle_ = new ToggleSwitch(true);
+    commitCard->addWidget(makeRow(
+        tr("字母上屏并切英文"),
+        tr("拼音还没选词时，轻按 Shift 把已输入的字母当作英文上屏，并切到英文模式"),
+        shiftCommitToggle_));
+    commitCard->addWidget(makeLabel(
+        tr("这是搜狗的习惯：按错拼音时不用先删掉，按一下 Shift 字母就留在输入框里，"
+           "接下来的字母直接上屏。关闭后，组合中轻按 Shift 只切换中英文，"
+           "已输入的字母随组合丢弃、不会上屏。"),
+        "rowHint"));
+
     addCard(layout, tr("输入方案"),
             tr("引擎是内置的 librime，方案为万象拼音。候选排序与用户词频由 Rime 维护，"
                "数据在 ~/.local/share/superior-ime/rime，与系统的 fcitx5-rime 完全隔离。"
@@ -610,6 +624,9 @@ void SettingsWindow::syncWidgets() {
     if (shiftToggle_ != nullptr) {
         shiftToggle_->setChecked(settings_.shiftToggle);
     }
+    if (shiftCommitToggle_ != nullptr) {
+        shiftCommitToggle_->setChecked(settings_.shiftCommitPinyin);
+    }
     if (cloudToggle_ != nullptr) {
         cloudToggle_->setChecked(settings_.cloudPinyinEnabled);
     }
@@ -717,6 +734,9 @@ config::Settings SettingsWindow::currentSettings() const {
     if (shiftToggle_ != nullptr) {
         result.shiftToggle = shiftToggle_->isChecked();
     }
+    if (shiftCommitToggle_ != nullptr) {
+        result.shiftCommitPinyin = shiftCommitToggle_->isChecked();
+    }
     if (cloudToggle_ != nullptr) {
         result.cloudPinyinEnabled = cloudToggle_->isChecked();
     }
@@ -760,6 +780,7 @@ void SettingsWindow::applyChanges() {
     SUPERIOR_INFO(diag::categories::Ui)
         .field("theme", settings_.themeName)
         .field("shift", settings_.shiftToggle)
+        .field("shiftCommitPinyin", settings_.shiftCommitPinyin)
         << "settings applied";
 }
 

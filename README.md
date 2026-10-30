@@ -203,6 +203,10 @@ superior-config pinyin lookup nihao   # 端到端自检
 - 只有 agent 管这个开关：Rime 引擎的 `ascii_composer` 被部署脚本设为 `noop`，
   否则两边状态会错位，出现“切回中文还在打英文”；
 - 长按 Shift 打大写字母、`Ctrl`/`Alt`/`Super` 组合键都不会触发切换；
+- 拼音还没选词时轻按 Shift，已输入的字母**直接上屏并切到英文**（设置页
+  「字母上屏并切英文」，`shiftCommitPinyin`，默认开启）：按错拼音不必先删，
+  按一下 Shift 字母就留在输入框里，接下来的字母直接上屏；
+- 关闭后回到原来的行为：只切换中英文，当前拼音被丢弃、不会上屏；
 - `Esc` 立刻回到中文；模式是**全局**的，切窗口不会改变；
 - 关闭设置页的「Shift 切换中英文」后，Shift 完全归还给应用。
 
@@ -228,6 +232,7 @@ superior-config pinyin lookup nihao   # 端到端自检
 | `showStatusBar` | 状态栏显隐（是设置项，不会被下一帧场景覆盖） |
 | `statusPlacement` | `bottomRight` / `bottomLeft` / `topRight` / `topLeft` |
 | `shiftToggle` | 内联中英文切换总开关 |
+| `shiftCommitPinyin` | 拼音组合中轻按 Shift：字母直接上屏并切到英文（默认开） |
 | `cloudPinyinEnabled` / `cloudPinyinBackend` | 云拼音开关与服务商，见 [docs/cloud-pinyin.md](docs/cloud-pinyin.md) |
 
 状态栏是可点击的。点击只发语义命令 `ToggleStatusItem{id}`，agent 找到 Fcitx5

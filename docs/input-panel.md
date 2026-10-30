@@ -281,6 +281,7 @@ UI 在 `superior_ui` 进程里，信号槽跨不过进程边界。inotify 是「
 | 模式归属 | **全局**（`englishMode_`），切窗口不改变，与搜狗一致 |
 | 退出 | `Esc`，或再次轻按 Shift |
 | 关闭 | 设置页「Shift 切换中英文」→ `shiftToggle`，500 ms 内热生效 |
+| 组合中轻按 | 上屏已输入的字母**并切到英文**（`shiftCommitPinyin`，默认开）；关掉后仍按上一行只切换中英文，字母随之丢弃、不上屏 |
 
 `ShiftTapDetector` 的规则（全部有单测，`tests/shift_tap_tests.cpp`）：
 

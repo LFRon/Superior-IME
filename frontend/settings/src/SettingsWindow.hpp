@@ -95,6 +95,7 @@ private:
     QLabel *status_ = nullptr;
 
     ToggleSwitch *shiftToggle_ = nullptr;
+    ToggleSwitch *shiftCommitToggle_ = nullptr;
     ToggleSwitch *statusBarToggle_ = nullptr;
     ToggleSwitch *voiceToggle_ = nullptr;
     ToggleSwitch *cloudToggle_ = nullptr;
