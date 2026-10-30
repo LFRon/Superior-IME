@@ -12,7 +12,7 @@
 详细设计：[PLAN.md](PLAN.md)、[docs/architecture.md](docs/architecture.md)、
 [docs/skin-format.md](docs/skin-format.md)、[docs/logging.md](docs/logging.md)、
 [docs/fcitx5-integration.md](docs/fcitx5-integration.md)、
-[docs/pinyin-engine.md](docs/pinyin-engine.md)。
+[docs/pinyin-engine.md](docs/pinyin-engine.md)、[docs/ui-scaling.md](docs/ui-scaling.md)。
 
 要往别的操作系统上搬：[docs/platform-onboarding.md](docs/platform-onboarding.md)
 （每个端口的确切签名、三种 `TextEdit` 的语义、验收清单、以及哪些端口现在**不该**实现）。
@@ -151,6 +151,9 @@ DISPLAY=:0 xprop -name "Superior-IME Status" WM_HINTS _NET_WM_STATE
 预期：`Override Redirect State: yes`、`Client accepts input or input focus: False`、
 `_NET_WM_STATE_ABOVE`。细节见 [docs/xwayland-ui.md](docs/xwayland-ui.md)。
 
+浮层跟随系统缩放：X11 读 X 资源的 `Xft.dpi`，Wayland 读 `wl_output.scale`，
+策略层只收到一个比例。见 [docs/ui-scaling.md](docs/ui-scaling.md)。
+
 Fcitx5 agent 是 `Category=Module` 的被动观察者：不注册输入法、不抢 UI addon、
 不修改预编辑。因此 Wayland 客户端继续使用 Fcitx5 的 wayland 前端，
 X11 客户端继续使用 XCB/XIM 前端，应用输入框内的预编辑行为不变。
@@ -228,7 +231,7 @@ superior-config pinyin lookup nihao   # 端到端自检
 | 键 | 作用 |
 |---|---|
 | `skinId` | 浮层重新加载皮肤 |
-| `uiScale` | 候选窗与状态栏的字号、内边距、命中区一起缩放（0.75–3.0） |
+| `uiScale` | 候选窗与状态栏的字号、内边距、命中区一起缩放（0.75–3.0），与桌面缩放相乘，见 [docs/ui-scaling.md](docs/ui-scaling.md) |
 | `showStatusBar` | 状态栏显隐（是设置项，不会被下一帧场景覆盖） |
 | `statusPlacement` | `bottomRight` / `bottomLeft` / `topRight` / `topLeft` |
 | `shiftToggle` | 内联中英文切换总开关 |
