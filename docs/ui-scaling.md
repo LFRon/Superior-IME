@@ -23,12 +23,16 @@ X11 下它来自启动那一刻的 `Xft.dpi`，可能已经被写坏或过期（
 ```
 frontend/desktop/src/main.cpp              组合根：算出唯一比例，交给 setScale()
         │
-        ├─ platform/ScreenScale.{hpp,cpp}      纯算术 + 运行时选择（不含任何 X11/Wayland 头）
+        ├─ platform/Scale.hpp                  纯算术 + 结果类型（不含任何 X11/Wayland 头）
         │      ├─ scaleForWindows()            比例补偿（见 §3）
         │      └─ parseXftDpi()                X 资源解析（纯函数，可单测）
         │
-        ├─ platform/ScreenScaleX11.cpp         X11：读 X 资源的 `Xft.dpi`
-        └─ platform/ScreenScaleWayland.cpp     Wayland：读 `wl_output.scale`
+        ├─ platform/Platform.cpp               门面：按窗口系统选实现
+        │      ├─ detectSession()              窗口系统 + 桌面（见 §5）
+        │      └─ readSystemScale()            唯一的平台入口
+        │
+        ├─ platform/x11/X11Scale.cpp           X11：读 X 资源的 `Xft.dpi`（XWayland 同样走这里）
+        └─ platform/wayland/WaylandScale.cpp   Wayland：读 `wl_output.scale`
 ```
 
 策略层（`StatusWindow` / `CandidateWindow` / `SpeechRecognitionPanel`）**只知道比例**，
@@ -71,9 +75,9 @@ applied = uiScale × systemScale / toolkitDpr
 
 ## 4. 各平台怎么拿
 
-**源跟着窗口系统走，不跟着会话走。** `main.cpp` 用
-`QGuiApplication::platformName()` 决定：`xcb` 插件 → 读 X11 的声明；`wayland`
-插件 → 读合成器的声明。原因是一个实测过的反例：Treeland 在 125% 缩放下
+**源跟着窗口系统走，不跟着会话走。** `Platform.cpp` 用
+`QGuiApplication::platformName()` 决定（`detectSession()`）：`xcb` 插件 → 读 X11 的声明；
+`wayland` 插件 → 读合成器的声明。原因是一个实测过的反例：Treeland 在 125% 缩放下
 `wl_output.scale=2`（整数缓冲倍数），而桌面真正的缩放写在 `Xft.dpi=120` 里。
 浮层跑在 XWayland（`xcb`）时若去读 Wayland 的值，会算出
 `2.0 / 1.25 = 1.6`，工具栏高 73px；按窗口系统读 `Xft.dpi` 则是 45px ——后者才是
@@ -93,9 +97,8 @@ applied = uiScale × systemScale / toolkitDpr
 
 ### Wayland
 
-`wl_output.scale` 是协议规定的输出缩放。浮层本身跑在 XWayland 上（override-redirect
-只能在 X11 语义下实现），但会话的缩放是合成器说了算，所以只要
-`WAYLAND_DISPLAY` 存在就优先读它：
+`wl_output.scale` 是协议规定的输出缩放，只有当浮层自己的窗口真的在合成器上时
+（Qt 加载的是 `wayland` 插件）才用它 —— 见 §4 开头的“源跟着窗口系统走”。实现：
 
 1. `wl_display_connect` + `wl_registry` → 绑定每个 `wl_output`；
 2. 读 `scale` 事件，取所有输出里的最大值（多屏混合缩放时取大的，保证可读）；

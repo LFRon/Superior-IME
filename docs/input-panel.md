@@ -270,15 +270,19 @@ UI 在 `superior_ui` 进程里，信号槽跨不过进程边界。inotify 是「
 
 | 优先级 | 情况 | 位置来自 |
 |---|---|---|
-| 1 | Treeland + Wayland 原生客户端 | **合成器**（`_DEEPIN_IM_CANDIDATE_PANEL`），它用应用自己的 `set_cursor_rectangle` 定位 |
+| 1 | Treeland + 浮层跑在 XWayland（默认选择） | **合成器**（`_DEEPIN_IM_CANDIDATE_PANEL`），它用应用自己的 `set_cursor_rectangle` 定位 |
 | 2 | X11 / XIM 客户端（含 XWayland） | Fcitx5 的 `cursorRect()`，我们自己贴着光标放 |
-| 3 | 其它 Wayland 桌面 | 右下角固定位置（协议边界，见下） |
+| 3 | 原生 Wayland 客户端 / 其它 Wayland 桌面 | 右下角固定位置（协议边界，见下） |
+
+三条来源由平台层统一选择，窗口自己不做判断：`platform/Platform.cpp` 的
+`compositorPlacesCandidatePanel()` 是唯一的表（见下一节末尾）。
 
 ### Treeland：把面板交给合成器
 
 Treeland（`IMCandidatePanelManager`）提供了一条**输入法候选面板**通道：
 
 - Wayland 客户端：`xdg_toplevel.set_tag("org.deepin.treeland.im-candidate-panel")`
+  （当前用不了：Qt 不暴露它自己建的 `xdg_toplevel*`，见上一节的 `Unreachable`）
 - XWayland 客户端：X11 属性 `_DEEPIN_IM_CANDIDATE_PANEL`（`CARDINAL`，值 1）
 
 被采纳的窗口会被移进 popup 容器、去掉装饰、移出任务栏、不接受键盘焦点，并且
@@ -308,6 +312,37 @@ Treeland 对一次几何变化的回应**不是唯一答案**。实测同一组�
 可输入 surface，`WInputMethodHelper::textInputCursorRect()` 会在它们之间取值。
 该通道没有 serial/时间戳，客户端无法分辨「中间答案」和「最终答案」，所以首帧偶尔会
 落在上一轮的位置上——**这是合成器侧的排序/归属问题**，客户端只能延迟绘制，无法修正。
+
+### 平台层怎么选：先分窗口系统，再按桌面分派
+
+Linux 后端的目录结构就是这条分派规则，`frontend/desktop` 只认识门面
+（`platform/Platform.hpp`），不认识 XCB、libwayland 或任何桌面私有约定：
+
+```text
+platform/Session.{hpp,cpp}      窗口系统 + 桌面，纯函数 classifySession()，可单测
+platform/Scale.hpp              比例算术与来源枚举（无平台头文件）
+platform/Platform.{hpp,cpp}     门面：detectSession / readSystemScale / 面板通道
+platform/x11/                   一个实现，XWayland 也算 X11
+        X11Scale.cpp            Xft.dpi（X 资源数据库）
+        X11Panel.cpp            _DEEPIN_IM_CANDIDATE_PANEL
+platform/wayland/               按桌面分派，因为“贴光标”没有共同答案
+        WaylandScale.cpp        wl_output.scale
+```
+
+**窗口系统优先于会话类型。** `QT_QPA_PLATFORM=wayland;xcb` 在 Wayland 会话里加载的
+是 `xcb`，浮层就有 X11 窗口、X11 像素、X11 坐标，缩放必须读 `Xft.dpi`；反过来把
+Wayland 的值套到 XWayland 窗口上会算出 1.6 倍。判据只有 `classifySession()` 一处。
+
+| 窗口系统 | 桌面 | 候选面板通道 |
+|---|---|---|
+| X11 | Treeland | `Applied` — 写 `_DEEPIN_IM_CANDIDATE_PANEL` |
+| X11 | 其它 | `Unsupported` — 没有这个约定，用 `cursorRect()` |
+| Wayland | Treeland | `Unreachable` — 约定存在，但 Qt 不暴露自己建的 `xdg_toplevel*`，拿不到 tag |
+| Wayland | 其它 | `Unsupported` — 协议上就没有 |
+
+`Unreachable` 与 `Unsupported` 分开，是因为两者的下一步不同：前者只要换回 XWayland
+就能用，后者换通道也没用。日志里会打一行 `linux platform backend windowSystem=…
+desktop=… panelChannel=…`。
 
 ### 其它 Wayland 桌面：没有任何来源
 
