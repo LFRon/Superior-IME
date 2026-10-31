@@ -225,7 +225,7 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     //
     // `winId()` has to be called after `show()`: the native window does not
     // exist before the first map, and the property would be written to nothing.
-    const bool caretKnown = panel.anchor.valid && panel.anchor.cursor.height >= 0;
+    const bool caretKnown = panel.anchor.valid;
     const bool compositorHandles = !caretKnown && compositorPlacesCandidatePanel(session_);
     if (compositorHandles) {
         // A compositor only manages windows it knows about, so the panel has to

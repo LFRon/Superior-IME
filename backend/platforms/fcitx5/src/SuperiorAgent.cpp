@@ -425,15 +425,18 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
                                 static_cast<double>(cursor.top()) * cursorScale,
                                 static_cast<double>(cursor.width()) * cursorScale,
                                 static_cast<double>(cursor.height()) * cursorScale};
-    // A caret always has height; a zero-height rect means "the frontend never
-    // reported one". Fcitx5's Wayland frontend is exactly that case: the
-    // text-input protocol carries `cursor_rectangle`, but `waylandim` ignores
-    // it (5.1.12 has no `setCursorRect` call at all), and a Wayland client
-    // cannot know its own position on the desktop anyway. Reporting (0,0) as a
-    // valid caret is what pinned our candidate window to the screen corner, so
-    // "no rect" has to travel as "no anchor" and let the UI pick a stable spot
-    // instead of pretending to follow a caret it cannot see.
-    host.cursorValid = inputContext->hasFocus() && cursor.width() > 0 && cursor.height() > 0;
+    // "Did the frontend report a caret at all?" — not "is this a rectangle?".
+    //
+    // A caret is a line: its width is legitimately zero. GTK through fcitx5's
+    // D-Bus frontend reports `0x34` at the caret's position, and requiring a
+    // non-zero width threw that away and dropped the panel in the corner. What
+    // must still count as "nothing reported" is the all-zero rect: fcitx5's
+    // Wayland frontend never calls `setCursorRect` (5.1.12 has no such call),
+    // so every Wayland client sends `(0,0,0,0)`, and treating that as a real
+    // caret is what pinned the panel to the screen corner.
+    const bool reported = cursor.width() > 0 || cursor.height() > 0 || cursor.left() != 0 ||
+                          cursor.top() != 0;
+    host.cursorValid = inputContext->hasFocus() && reported;
 
     const auto flags = inputContext->capabilityFlags();
     host.clientPreedit = flags.test(fcitx::CapabilityFlag::Preedit);
@@ -538,6 +541,12 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
         .field("im", host.inputMethod)
         .field("frontend", std::string(inputContext->frontend()))
         .field("cursorKnown", host.cursorValid)
+        // Shape only: where the client says its caret is, which is the whole
+        // question when a panel lands in the wrong place.
+        .field("cursorX", host.cursorRect.x)
+        .field("cursorY", host.cursorRect.y)
+        .field("cursorW", host.cursorRect.width)
+        .field("cursorH", host.cursorRect.height)
         .redacted("preedit", engine.preedit)
         .field("preeditSource", preedit.fromClient ? "client" : "panel")
         .field("candidates", static_cast<std::uint64_t>(engine.candidates.size()))
