@@ -77,9 +77,8 @@ if (instance_->inputMethod(ic) == "super-ime") {
 
 ## 位置
 
-`CandidateWindow` 使用 `Anchor::cursor`（Fcitx5 报告的插入点）放在光标下方，
-并夹在屏幕可用区域内。X11 下这是全局坐标；Wayland 原生客户端可能拿不到坐标，
-此时回退到右下角。状态栏始终固定在屏幕角落。
+候选窗的位置有三个来源，按准确度取用；完整规则与实测数据见下面的
+「候选窗位置」一节。状态栏始终固定在屏幕角落（或用户拖到的位置）。
 
 ## 组合文本由谁绘制
 
@@ -267,24 +266,56 @@ UI 在 `superior_ui` 进程里，信号槽跨不过进程边界。inotify 是「
 
 ---
 
-## 候选窗位置：Wayland 客户端没有光标坐标
+## 候选窗位置：三条来源，按准确度排序
 
-X11 / XIM 客户端由前端直接给出**全局**光标矩形，候选窗贴着光标走。
-Wayland 原生客户端做不到，这不是缺陷而是协议边界：
+| 优先级 | 情况 | 位置来自 |
+|---|---|---|
+| 1 | Treeland + Wayland 原生客户端 | **合成器**（`_DEEPIN_IM_CANDIDATE_PANEL`），它用应用自己的 `set_cursor_rectangle` 定位 |
+| 2 | X11 / XIM 客户端（含 XWayland） | Fcitx5 的 `cursorRect()`，我们自己贴着光标放 |
+| 3 | 其它 Wayland 桌面 | 右下角固定位置（协议边界，见下） |
 
-- `text_input` 里确实有 `cursor_rectangle`，但 Fcitx5 5.1.12 的 `waylandim`
-  从未消费它（整个目录没有一处 `setCursorRect`），所以 `cursorRect()` 是空的；
-- 即便消费了也仍是 **surface 局部坐标**——Wayland 客户端不知道自己在桌面上的位置；
-- 外部进程要贴光标只有一个正规办法：自己是 `zwp_input_method_v2` 的
-  input-method 端，用 `get_input_popup_surface` 拿到贴在输入框上的 popup。
-  我们是 Fcitx5 的被动观察者（`Category=Module`），不是 input method。
+### Treeland：把面板交给合成器
 
-因此 `SuperiorAgent::collect()` 把**零高度**的光标矩形判为“未知”
-（`host.cursorValid = hasFocus && width>0 && height>0`），候选窗据此退到一个确定的位置
-（右下角、状态栏上方）。早期版本把 `(0,0)` 当成有效光标，于是候选窗永远钉在屏幕左上角。
+Treeland（`IMCandidatePanelManager`）提供了一条**输入法候选面板**通道：
 
-已知取舍：Wayland 原生客户端里候选窗不跟随光标，但拼音本身仍显示在候选窗里；
-X11/XWayland 客户端（Telegram、基于 XIM 的工具）不受影响。
+- Wayland 客户端：`xdg_toplevel.set_tag("org.deepin.treeland.im-candidate-panel")`
+- XWayland 客户端：X11 属性 `_DEEPIN_IM_CANDIDATE_PANEL`（`CARDINAL`，值 1）
+
+被采纳的窗口会被移进 popup 容器、去掉装饰、移出任务栏、不接受键盘焦点，并且
+**由合成器按输入框光标矩形定位**——这正是外部进程在 Wayland 上拿不到的信息。
+
+两个实现约束（都踩过）：
+
+1. **必须是受管窗口**。override-redirect 窗口不被 WM 管理，Treeland 在自己的容器里
+   查不到它，属性写了也没人处理（`xprop` 能读到属性，但 `WM_STATE: not found` 暴露了
+   真相）。因此这种模式下候选窗改用普通无边框窗口，置顶/不抢焦点由采纳方提供。
+2. **不要在组合之间 unmap**。采纳是按“已映射的 surface”记的，隐藏会让它失效；空闲时
+   窗口缩成 1×1 且不着色，既不可见又保持被采纳。
+
+### 已知的合成器侧行为（不是我们能修的）
+
+Treeland 对一次几何变化的回应**不是唯一答案**。实测同一组合内：
+
+```text
+11:15:07.428 apply (pos 1471,878)        ← 上一轮组合的位置
+11:15:07.429 compositor → 1691,899
+11:15:07.430 compositor → 1468,878       ← 1ms 后给了另一个答案
+11:16:18.866 compositor → 1531,899
+11:16:19.611 compositor → 1441,878       ← 落定 700ms 后又改
+```
+
+两个 y（899 / 878）相差一行，来自不同的 text-input 焦点面：VSCode 这类应用有多个
+可输入 surface，`WInputMethodHelper::textInputCursorRect()` 会在它们之间取值。
+该通道没有 serial/时间戳，客户端无法分辨「中间答案」和「最终答案」，所以首帧偶尔会
+落在上一轮的位置上——**这是合成器侧的排序/归属问题**，客户端只能延迟绘制，无法修正。
+
+### 其它 Wayland 桌面：没有任何来源
+
+没有 Treeland 的通道时，Wayland 原生客户端既不给 Fcitx5 光标矩形
+（`src/frontend/waylandim` 在 5.1.12 里没有一处 `setCursorRect`），客户端自己也不知道
+桌面坐标。外部进程要贴光标只有一条路：`zwp_input_method_v2` 的
+`get_input_popup_surface`，而那个对象只在 fcitx5 进程内。此时候选窗退到右下角固定位置，
+拼音本身仍显示在候选窗里；X11/XWayland 客户端不受影响。
 
 ---
 

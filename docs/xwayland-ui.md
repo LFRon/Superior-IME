@@ -73,6 +73,13 @@ agent 自动拉起 overlay 时不会经过任何脚本，所以必须由进程�
 Wayland 原生会话下同样的 flags 只能退化成普通无边框窗口；真正的 Wayland
 状态栏需要 `wlr-layer-shell`，属于后续后端（见 §5）。
 
+**例外：候选窗在 Treeland 上不用 override-redirect。** Treeland 提供了输入法候选面板
+通道（X11 属性 `_DEEPIN_IM_CANDIDATE_PANEL`），但它只对**受管窗口**生效——override-redirect
+窗口在 WM 之外，合成器根本看不到它。所以 Wayland 原生客户端获得焦点时，候选窗切换成
+普通无边框窗口并交给合成器定位（置顶、不抢焦点、不进任务栏都由采纳方保证），
+X11 客户端获得焦点时切回 override-redirect 自己定位。细节见
+[docs/input-panel.md](input-panel.md)。
+
 候选窗由我们自己绘制（`setCustomInputPanelCallback`，见
 [docs/input-panel.md](input-panel.md)），classicui 不再为 `super-ime` 画候选。
 
