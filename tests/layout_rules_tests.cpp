@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <array>
+#include <cstddef>
+#include <span>
 #include <string_view>
 
 #include "LayoutRules.hpp"
@@ -37,25 +40,85 @@ void testPlacementRoundTrip() {
 }
 
 /// The anchor arrives in device pixels; Qt moves windows in logical pixels.
-void testDeviceToLogical() {
+void testCaretToLogical() {
+    using superior::ui::caretToLogical;
+    using superior::ui::ScreenSpace;
+
+    const ScreenSpace oneHundred{Rect{0, 0, 1920, 1080}, 1.0};
+    const ScreenSpace oneTwentyFive{Rect{0, 0, 1536, 864}, 1.25};
+
     // 100 %: the identity.
-    const auto one = superior::ui::deviceToLogical(1000, 500, 2, 20, 1.0);
+    const auto one = caretToLogical(1000, 500, 2, 20, std::span{&oneHundred, 1});
     CHECK(one.left == 1000);
     CHECK(one.top == 500);
     CHECK(one.height == 20);
 
     // 125 %: XWayland device pixels are 1.25x the logical grid Qt uses.
-    const auto x125 = superior::ui::deviceToLogical(2000, 1000, 125, 25, 1.25);
+    const auto x125 = caretToLogical(2000, 1000, 125, 25, std::span{&oneTwentyFive, 1});
     CHECK(x125.left == 1600);
     CHECK(x125.top == 800);
     CHECK(x125.width == 100);
     CHECK(x125.height == 20);
 
     // A nonsense ratio must not divide by zero or by 0.01.
-    const auto broken = superior::ui::deviceToLogical(800, 400, 10, 10, 0.0);
-    CHECK(broken.left == 800);
-    const auto absurd = superior::ui::deviceToLogical(800, 400, 10, 10, 1000.0);
-    CHECK(absurd.left == 800);
+    const ScreenSpace brokenDpr{Rect{0, 0, 1920, 1080}, 0.0};
+    CHECK(caretToLogical(800, 400, 10, 10, std::span{&brokenDpr, 1}).left == 800);
+    const ScreenSpace absurdDpr{Rect{0, 0, 1920, 1080}, 1000.0};
+    CHECK(caretToLogical(800, 400, 10, 10, std::span{&absurdDpr, 1}).left == 800);
+}
+
+/// Two 1.5x screens side by side: the ratio is the same everywhere, but the
+/// origin is not, and a caret on the second screen must not be divided against
+/// the desktop origin.
+void testCaretToLogicalSecondScreen() {
+    using superior::ui::caretToLogical;
+    using superior::ui::ScreenSpace;
+
+    const ScreenSpace left{Rect{0, 0, 1280, 720}, 1.5};
+    const ScreenSpace right{Rect{1280, 0, 1280, 720}, 1.5};
+    const std::array screens{left, right};
+
+    std::size_t index = 0;
+    const auto onLeft = caretToLogical(600, 300, 0, 36, screens, &index);
+    CHECK(index == 0);
+    CHECK(onLeft.left == 400);
+    CHECK(onLeft.top == 200);
+    CHECK(onLeft.height == 24);
+
+    // Device (2000, 300) is 80 device pixels into the right screen, which is 53
+    // logical pixels from its origin: 1280 + 53. Dividing the absolute 2000 by
+    // 1.5 would have answered 1333, i.e. one device pixel off here and much more
+    // further along.
+    const auto onRight = caretToLogical(2000, 300, 0, 36, screens, &index);
+    CHECK(index == 1);
+    CHECK(onRight.left == 1333);
+    CHECK(onRight.top == 200);
+}
+
+/// A second screen with a different factor: the ratio belongs to the screen, not
+/// to the desktop, so one global division cannot answer for both. (X11 itself
+/// only has one factor per session; this models the mapping, which is what the
+/// app has to get right if that ever changes.)
+void testCaretToLogicalMixedScaling() {
+    using superior::ui::caretToLogical;
+    using superior::ui::ScreenSpace;
+
+    const ScreenSpace left{Rect{0, 0, 1920, 1080}, 1.0};
+    const ScreenSpace right{Rect{1920, 0, 1280, 720}, 2.0};
+    const std::array screens{left, right};
+
+    std::size_t index = 0;
+    const auto onRight = caretToLogical(4000, 400, 0, 48, screens, &index);
+    CHECK(index == 1);
+    CHECK(onRight.left == 2000);
+    CHECK(onRight.top == 200);
+    CHECK(onRight.height == 24);
+
+    // A caret outside every screen still has to answer with a screen: the
+    // nearest one beats an arbitrary ratio.
+    const auto outside = caretToLogical(6000, -200, 0, 48, screens, &index);
+    CHECK(index == 1);
+    CHECK(outside.left > 1920);
 }
 
 void testBottomRight() {
@@ -124,7 +187,9 @@ int main() {
     testPlacementParsing();
     testUnknownPlacementFallsBack();
     testPlacementRoundTrip();
-    testDeviceToLogical();
+    testCaretToLogical();
+    testCaretToLogicalSecondScreen();
+    testCaretToLogicalMixedScaling();
     testBottomRight();
     testBottomLeft();
     testTopRight();
