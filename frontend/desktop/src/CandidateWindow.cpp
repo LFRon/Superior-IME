@@ -288,12 +288,20 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
         return;
     }
 
-    // A caret we can trust: place it ourselves. Treeland stops repositioning in
-    // this case because an X11 focus has no text-input surface.
+    // A caret we can trust (or no caret at all): place it ourselves. Treeland
+    // stops repositioning in this case because an X11 focus has no text-input
+    // surface.
     if (managedWindow_) {
         setCompositorPlacement(false);
     }
     compositorPlaced_ = false;
+    // Nothing else is going to place this window, so there is nothing to wait
+    // for, and `paintReady_` gate is what makes the window visible at all: a
+    // translucent window that paints nothing shows nothing. This is the only
+    // path on X11 and XWayland, where leaving the flag at "waiting for the
+    // compositor" hid the panel completely.
+    awaitingPlacement_ = false;
+    paintReady_ = true;
     selfMoving_ = true;
     placeAtCaret(*this, panel.anchor);
     stepAround(*this, avoid_);
