@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <QFont>
 #include <QSize>
 #include <QString>
 #include <QWidget>
@@ -69,6 +70,12 @@ protected:
 
 private:
     [[nodiscard]] int scaled(int value) const;
+
+    /// The font a candidate cell is measured and painted with.
+    ///
+    /// One function for both, because a cell measured without the emoji fallback
+    /// clips the emoji it then draws.
+    [[nodiscard]] QFont candidateFont() const;
 
     /// Painted cell, kept so a click can be mapped back to a candidate id
     /// without recomputing the layout (fonts may have changed since).

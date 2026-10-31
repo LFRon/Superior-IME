@@ -4,6 +4,7 @@
 #include "OverlayLayout.hpp"
 
 #include <QEvent>
+#include <QFontDatabase>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QMouseEvent>
@@ -24,6 +25,7 @@
 #include <string>
 
 #include "CandidateLabel.hpp"
+#include "EmojiFont.hpp"
 #include "PreeditLayout.hpp"
 #include "LayoutRules.hpp"
 #include "platform/Platform.hpp"
@@ -31,7 +33,11 @@
 #include "Overlay.hpp"
 #include "WheelStep.hpp"
 
+#include "superior/diagnostics/Log.hpp"
+
 namespace superior::ui {
+
+namespace diag = ::superior::diagnostics;
 
 namespace {
 
@@ -41,6 +47,34 @@ constexpr int kCellHeight = 28;
 constexpr int kPreeditRowHeight = 24;
 constexpr int kCellPadding = 20;
 constexpr int kMinCellWidth = 28;
+
+/// The colour emoji family to fall back to, resolved once.
+///
+/// `QFontDatabase::families()` walks fontconfig, so it is not something to call
+/// per frame; the answer cannot change without a font install, which needs a
+/// restart of the overlay anyway.
+QString emojiFamily() {
+    static const QString family = [] {
+        const QStringList families = QFontDatabase::families();
+        std::vector<std::string> installed;
+        installed.reserve(static_cast<std::size_t>(families.size()));
+        for (const QString &name : families) {
+            installed.push_back(name.toStdString());
+        }
+        const std::string picked = pickEmojiFamily(installed);
+        if (picked.empty()) {
+            // The candidate still draws; it just cannot be in colour. Worth a
+            // line, because "my emoji look like outlines" has exactly this cause.
+            SUPERIOR_WARN(diag::categories::Ui)
+                .field("families", static_cast<std::int64_t>(families.size()))
+                << "no emoji font installed; emoji candidates will be monochrome";
+        } else {
+            SUPERIOR_INFO(diag::categories::Ui).field("family", picked) << "emoji font";
+        }
+        return QString::fromStdString(picked);
+    }();
+    return family;
+}
 
 QString cellText(const api::Candidate &candidate, int index) {
     const auto parts = formatCandidateLabel(candidate.label, candidate.text, index);
@@ -326,9 +360,31 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     update();
 }
 
+QFont CandidateWindow::candidateFont() const {
+    QFont candidate = font();
+    candidate.setPointSizeF(kCandidatePointSize * scale_);
+    // A candidate can be an emoji, and Qt's own fallback picks a monochrome
+    // glyph for it even when a colour emoji font is installed. Naming the family
+    // is what turns the outline into the yellow face.
+    const QString emoji = emojiFamily();
+    if (!emoji.isEmpty()) {
+        QStringList families = candidate.families();
+        families.removeAll(QString());
+        if (families.isEmpty()) {
+            families << (candidate.family().isEmpty()
+                             ? QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()
+                             : candidate.family());
+        }
+        if (!families.contains(emoji)) {
+            families << emoji;
+            candidate.setFamilies(families);
+        }
+    }
+    return candidate;
+}
+
 QSize CandidateWindow::sizeHint() const {
-    QFont metricsFont = font();
-    metricsFont.setPointSizeF(kCandidatePointSize * scale_);
+    const QFont metricsFont = candidateFont();
     const QFontMetrics metrics(metricsFont);
     int width = scaled(theme_.paddingX) * 2;
     for (std::size_t index = 0; index < candidates_.size(); ++index) {
@@ -417,10 +473,9 @@ void CandidateWindow::paintEvent(QPaintEvent *event) {
         return;
     }
 
-    QFont candidateFont = font();
-    candidateFont.setPointSizeF(kCandidatePointSize * scale_);
-    painter.setFont(candidateFont);
-    const QFontMetrics metrics(candidateFont);
+    const QFont cellFont = candidateFont();
+    painter.setFont(cellFont);
+    const QFontMetrics metrics(cellFont);
 
     int x = scaled(theme_.paddingX);
     const int cellHeight = scaled(kCellHeight);

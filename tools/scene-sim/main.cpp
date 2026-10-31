@@ -44,7 +44,11 @@ void emit(protocol::SceneServer &server, State &state) {
     std::lock_guard<std::mutex> lock(state.mutex);
 
     const std::vector<std::string> preedits{"n", "ni", "nih", "niha", "nihao", "nihao!"};
-    const std::vector<std::string> words{"你", "泥", "拟", "妮", "逆", "呢", "尼", "倪", "溺"};
+    // An emoji is in the cycle on purpose: the engine can return one as a whole
+    // candidate (the schema's `emoji` filter), so the simulator has to be able to
+    // produce one — otherwise the overlay's emoji path is the one thing that
+    // cannot be worked on without a running Fcitx5.
+    const std::vector<std::string> words{"你", "泥", "😭", "妮", "逆", "呢", "😢", "倪", "溺"};
 
     api::UiSceneFrame frame;
     frame.frameId = state.frameId++;

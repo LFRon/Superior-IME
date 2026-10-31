@@ -25,6 +25,7 @@ add_executable(superior_ui
     src/platform/wayland/WaylandScale.cpp
     src/CandidateLabel.cpp
     src/CandidateWindow.cpp
+    src/EmojiFont.cpp
     src/DragHandle.cpp
     src/LayoutRules.cpp
     src/Logging.cpp

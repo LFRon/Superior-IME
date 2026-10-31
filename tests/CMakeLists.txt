@@ -92,6 +92,15 @@ target_include_directories(superior_candidate_label_tests PRIVATE
 target_compile_features(superior_candidate_label_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_candidate_label_tests)
 
+add_executable(superior_emoji_font_tests
+    emoji_font_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/EmojiFont.cpp")
+target_include_directories(superior_emoji_font_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
+target_compile_features(superior_emoji_font_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_emoji_font_tests)
+
 add_executable(superior_preedit_layout_tests
     preedit_layout_tests.cpp
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src/PreeditLayout.cpp")
@@ -299,6 +308,7 @@ add_test(NAME overlay-layout COMMAND superior_overlay_layout_tests)
 add_test(NAME ui-scale COMMAND superior_ui_scale_tests)
 add_test(NAME platform-session COMMAND superior_platform_session_tests)
 add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
+add_test(NAME emoji-font COMMAND superior_emoji_font_tests)
 add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
 add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)
 add_test(NAME status-bar-state COMMAND superior_status_bar_state_tests)
