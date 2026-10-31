@@ -18,6 +18,14 @@ void makeOverlay(QWidget &widget) {
     widget.setFocusPolicy(Qt::NoFocus);
 }
 
+void makeCompositorPlacedPanel(QWidget &widget) {
+    widget.setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                          Qt::WindowDoesNotAcceptFocus);
+    widget.setAttribute(Qt::WA_ShowWithoutActivating);
+    widget.setAttribute(Qt::WA_TranslucentBackground);
+    widget.setFocusPolicy(Qt::NoFocus);
+}
+
 void placeOverlay(QWidget &widget, Placement placement, int extraBottom) {
     QScreen *screen = QGuiApplication::primaryScreen();
     if (screen == nullptr) {

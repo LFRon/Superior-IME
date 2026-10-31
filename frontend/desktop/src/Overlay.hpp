@@ -16,6 +16,17 @@ namespace superior::ui {
 /// bar until the layer-shell backend lands.
 void makeOverlay(QWidget &widget);
 
+/// Window policy for a panel the **compositor** is expected to place.
+///
+/// Deliberately *not* override-redirect: a compositor only manages windows it
+/// knows about, so an override-redirect window cannot be adopted as an
+/// input-method candidate panel (Treeland looks the surface up in its own
+/// container and finds nothing). In exchange for giving up override-redirect,
+/// the adopting compositor supplies what that flag was buying: no decoration, no
+/// keyboard focus, a popup-level stacking, and — the reason this exists at all —
+/// a position derived from the application's own cursor rectangle.
+void makeCompositorPlacedPanel(QWidget &widget);
+
 /// Anchors `widget` inside the primary screen's available area.
 ///
 /// `extraBottom` lifts the window above another overlay (for example the

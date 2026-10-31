@@ -12,17 +12,21 @@
 #include <QPainterPath>
 #include <QPoint>
 #include <QRect>
+#include <QMoveEvent>
 #include <QScreen>
+#include <QTimer>
 #include <QString>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 
 #include "CandidateLabel.hpp"
 #include "PreeditLayout.hpp"
 #include "LayoutRules.hpp"
+#include "platform/CompositorPanel.hpp"
 
 #include "Overlay.hpp"
 #include "WheelStep.hpp"
@@ -45,6 +49,44 @@ QString cellText(const api::Candidate &candidate, int index) {
     }
     return QString::fromStdString(parts.prefix) + QLatin1Char(' ') +
            QString::fromStdString(parts.text);
+}
+
+/// How long a composition waits for the compositor before painting anywhere.
+///
+/// Treeland reads the candidate-panel property on a 50 ms asynchronous timer, so
+/// this only has to be longer than that; the wait is invisible because the window
+/// is painted empty until the placement arrives.
+constexpr int kPlacementTimeoutMs = 200;
+
+/// One-pixel detour used to make a size change observable.
+///
+/// Held for slightly longer than a compositor frame: a resize that is undone
+/// before the compositor composites is invisible to it, and an invisible change
+/// triggers no reposition.
+constexpr int kGeometryNudgePx = 2;
+constexpr int kGeometryNudgeMs = 30;
+
+/// How long the first frame of a composition may wait for the compositor.
+///
+/// Kept short on purpose: Treeland also re-arranges *later* (measured: a second,
+/// different position ~700 ms after the first), and the channel carries no
+/// serial, so a client cannot tell "settled" from "about to change again".
+constexpr int kSettleQuietMs = 20;
+
+const std::string &sessionDesktop() {
+    static const std::string value = [] {
+        const char *raw = std::getenv("XDG_SESSION_DESKTOP");
+        return std::string(raw != nullptr ? raw : "");
+    }();
+    return value;
+}
+
+const std::string &currentDesktop() {
+    static const std::string value = [] {
+        const char *raw = std::getenv("XDG_CURRENT_DESKTOP");
+        return std::string(raw != nullptr ? raw : "");
+    }();
+    return value;
 }
 
 /// Places the panel just below the caret, clamped to the screen.
@@ -171,13 +213,108 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
 
     const bool shouldShow = panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty());
     if (!shouldShow) {
+        if (managedWindow_) {
+            // Staying mapped is the whole point: the compositor adopts a mapped
+            // surface, and an unmap drops the adoption permanently. An empty
+            // 1x1 translucent window costs nothing and follows the caret, so the
+            // next composition starts from the right place.
+            paintReady_ = false;
+            awaitingPlacement_ = false;
+            resize(1, 1);
+            update();
+            return;
+        }
         hide();
         return;
     }
 
     resize(sizeHint());
+
+    // Placement has three possible owners, in decreasing order of accuracy:
+    //
+    // 1. the compositor, when it implements the IM candidate-panel channel and
+    //    the caret is unknown to us — it sees the application's own
+    //    `set_cursor_rectangle`, which an external process cannot obtain on
+    //    Wayland;
+    // 2. our own placement at the caret Fcitx5 reported (X11/XIM clients);
+    // 3. a fixed corner, when there is neither.
+    //
+    // `winId()` has to be called after `show()`: the native window does not
+    // exist before the first map, and the property would be written to nothing.
+    const bool caretKnown = panel.anchor.valid && panel.anchor.cursor.height >= 0;
+    const bool compositorHandles =
+        !caretKnown && compositorPlacesCandidatePanel(sessionDesktop(), currentDesktop());
+    if (compositorHandles) {
+        // A compositor only manages windows it knows about, so the panel has to
+        // give up override-redirect to be adopted; everything that flag bought
+        // (no decoration, no focus, stays on top) the adopting compositor
+        // supplies itself. Hiding between compositions is *not* an option either:
+        // Treeland adopts a mapped surface, and an unmap drops the adoption.
+        if (!managedWindow_) {
+            setCompositorPlacement(true);
+        }
+        if (!isVisible()) {
+            // Nothing has been adopted yet, so map it somewhere harmless: the
+            // previous answer beats a corner, and it is invisible until painted.
+            if (haveCompositorPos_) {
+                move(lastCompositorPos_);
+            } else {
+                placeAtCaret(*this, panel.anchor);
+            }
+            paintReady_ = false;
+            show();
+        }
+        // Write once per window: every write makes Treeland re-read the atom on
+        // a 50 ms timer, and a keystroke must not trigger a polling round.
+        const auto currentWindow = static_cast<std::uintptr_t>(winId());
+        if (currentWindow != candidatePanelWindow_) {
+            if (setCandidatePanelHint(currentWindow, true)) {
+                candidatePanelWindow_ = currentWindow;
+            }
+        }
+        compositorPlaced_ = true;
+        if (!paintReady_) {
+            awaitingPlacement_ = true;
+            // Treeland repositions on a geometry change, but only when it
+            // observes one: a composition whose size equals the previous one
+            // produces no event and no reposition. A two-pixel detour, held for
+            // one compositor frame, guarantees the observation (restoring on the
+            // next event-loop turn is coalesced away and produces no change).
+            const QSize target = sizeHint();
+            resize(target.width() + kGeometryNudgePx, target.height());
+            QTimer::singleShot(kGeometryNudgeMs, this, [this, target] {
+                if (awaitingPlacement_) {
+                    resize(target);
+                }
+            });
+            // Paint as soon as the compositor answers. It can answer more than
+            // once — including *after* this composition — and there is no serial
+            // in the channel to tell a stale answer from the settling one, so
+            // waiting only delays the first frame without making it correct.
+            armPlacementSettle();
+            QTimer::singleShot(kPlacementTimeoutMs, this, [this] {
+                if (!awaitingPlacement_) {
+                    return;
+                }
+                awaitingPlacement_ = false;
+                paintReady_ = true;
+                update();
+            });
+        }
+        update();
+        return;
+    }
+
+    // A caret we can trust: place it ourselves. Treeland stops repositioning in
+    // this case because an X11 focus has no text-input surface.
+    if (managedWindow_) {
+        setCompositorPlacement(false);
+    }
+    compositorPlaced_ = false;
+    selfMoving_ = true;
     placeAtCaret(*this, panel.anchor);
     stepAround(*this, avoid_);
+    selfMoving_ = false;
     show();
     update();
 }
@@ -211,6 +348,11 @@ QSize CandidateWindow::sizeHint() const {
 }
 
 void CandidateWindow::paintEvent(QPaintEvent *event) {
+    if (!paintReady_) {
+        // Nothing painted on a translucent window keeps it invisible while the
+        // compositor is still deciding where it goes.
+        return;
+    }
     Q_UNUSED(event);
 
     QPainter painter(this);
@@ -355,6 +497,52 @@ void CandidateWindow::mouseMoveEvent(QMouseEvent *event) {
         update();
     }
     QWidget::mouseMoveEvent(event);
+}
+
+void CandidateWindow::armPlacementSettle() {
+    if (placementSettle_ == nullptr) {
+        placementSettle_ = new QTimer(this);
+        placementSettle_->setSingleShot(true);
+        placementSettle_->setInterval(kSettleQuietMs);
+        connect(placementSettle_, &QTimer::timeout, this, [this] {
+            if (!awaitingPlacement_) {
+                return;
+            }
+            awaitingPlacement_ = false;
+            paintReady_ = true;
+            update();
+        });
+    }
+    placementSettle_->start();
+}
+
+void CandidateWindow::setCompositorPlacement(bool managed) {
+    managedWindow_ = managed;
+    if (managed) {
+        makeCompositorPlacedPanel(*this);
+    } else {
+        makeOverlay(*this);
+    }
+    // `setWindowFlags` hides the widget and drops the native window; the caller
+    // re-shows it, and the property is written again on the next frame because
+    // the new window has never been seen by the compositor.
+    winId();
+}
+
+void CandidateWindow::moveEvent(QMoveEvent *event) {
+    if (compositorPlaced_ && !selfMoving_) {
+        // Not ours: the compositor placed us from the application's cursor
+        // rectangle. That is the answer this composition was waiting for.
+        lastCompositorPos_ = event->pos();
+        haveCompositorPos_ = true;
+        if (awaitingPlacement_) {
+            // Another arrangement is probably on its way; wait for silence
+            // instead of painting the first answer (which is the previous
+            // caret's position).
+            armPlacementSettle();
+        }
+    }
+    QWidget::moveEvent(event);
 }
 
 void CandidateWindow::leaveEvent(QEvent *event) {
