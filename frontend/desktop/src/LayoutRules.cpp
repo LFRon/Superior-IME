@@ -2,6 +2,7 @@
 #include "LayoutRules.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace superior::ui {
 
@@ -42,6 +43,15 @@ Point overlayPosition(Point windowSize, Placement placement, Rect available, int
     // the screen: prefer the top-left edge over an unreachable position.
     return Point{std::max(available.left + margin, x),
                  std::max(available.top + margin, y)};
+}
+
+Rect deviceToLogical(double left, double top, double width, double height,
+                      double dpr) noexcept {
+    const double factor = (dpr > 0.0 && dpr < 100.0) ? dpr : 1.0;
+    const auto toLogical = [factor](double value) {
+        return static_cast<int>(std::lround(value / factor));
+    };
+    return Rect{toLogical(left), toLogical(top), toLogical(width), toLogical(height)};
 }
 
 double clampScale(double scale) noexcept {

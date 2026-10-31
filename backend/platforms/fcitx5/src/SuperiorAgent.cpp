@@ -416,11 +416,24 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
     }
 
     const auto &cursor = inputContext->cursorRect();
-    host.cursorRect = api::Rect{static_cast<double>(cursor.left()),
-                                static_cast<double>(cursor.top()),
-                                static_cast<double>(cursor.width()),
-                                static_cast<double>(cursor.height())};
-    host.cursorValid = inputContext->hasFocus();
+    // `scaleFactor` is the factor the frontend sent with the rect: 1.0 for
+    // X11/XIM (already device pixels), the client's own scale for the D-Bus V2
+    // path. Multiplying normalises the anchor to device pixels, which is what
+    // the scene promises; the overlay divides by its `devicePixelRatio`.
+    const double cursorScale = host.scale > 0.0 ? host.scale : 1.0;
+    host.cursorRect = api::Rect{static_cast<double>(cursor.left()) * cursorScale,
+                                static_cast<double>(cursor.top()) * cursorScale,
+                                static_cast<double>(cursor.width()) * cursorScale,
+                                static_cast<double>(cursor.height()) * cursorScale};
+    // A caret always has height; a zero-height rect means "the frontend never
+    // reported one". Fcitx5's Wayland frontend is exactly that case: the
+    // text-input protocol carries `cursor_rectangle`, but `waylandim` ignores
+    // it (5.1.12 has no `setCursorRect` call at all), and a Wayland client
+    // cannot know its own position on the desktop anyway. Reporting (0,0) as a
+    // valid caret is what pinned our candidate window to the screen corner, so
+    // "no rect" has to travel as "no anchor" and let the UI pick a stable spot
+    // instead of pretending to follow a caret it cannot see.
+    host.cursorValid = inputContext->hasFocus() && cursor.width() > 0 && cursor.height() > 0;
 
     const auto flags = inputContext->capabilityFlags();
     host.clientPreedit = flags.test(fcitx::CapabilityFlag::Preedit);
@@ -523,6 +536,8 @@ void SuperiorAgent::collect(fcitx::InputContext *inputContext, core::EngineFacts
     SUPERIOR_TRACE(diag::categories::Fcitx5)
         .field("program", host.program)
         .field("im", host.inputMethod)
+        .field("frontend", std::string(inputContext->frontend()))
+        .field("cursorKnown", host.cursorValid)
         .redacted("preedit", engine.preedit)
         .field("preeditSource", preedit.fromClient ? "client" : "panel")
         .field("candidates", static_cast<std::uint64_t>(engine.candidates.size()))

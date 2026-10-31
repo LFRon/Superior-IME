@@ -23,6 +23,7 @@
 #include "CandidateLabel.hpp"
 #include "PreeditLayout.hpp"
 #include "LayoutRules.hpp"
+
 #include "Overlay.hpp"
 #include "WheelStep.hpp"
 
@@ -57,10 +58,19 @@ void placeAtCaret(QWidget &widget, const api::Anchor &anchor) {
         return;
     }
 
-    const QPoint caret(static_cast<int>(anchor.cursor.x), static_cast<int>(anchor.cursor.y));
+    // The scene publishes the caret in session device pixels (an X server has no
+    // logical layer); Qt moves windows in logical pixels. Skipping this divides
+    // by nothing is what left a gap that grew with the distance from the origin
+    // on a fractional-scale desktop.
+    QScreen *primary = QGuiApplication::primaryScreen();
+    const double dpr = primary != nullptr ? primary->devicePixelRatio() : 1.0;
+    const Rect caretRect = deviceToLogical(anchor.cursor.x, anchor.cursor.y, anchor.cursor.width,
+                                           anchor.cursor.height, dpr);
+    const QPoint caret(caretRect.left, caretRect.top);
+
     QScreen *screen = QGuiApplication::screenAt(caret);
     if (screen == nullptr) {
-        screen = QGuiApplication::primaryScreen();
+        screen = primary;
     }
     if (screen == nullptr) {
         return;
@@ -68,8 +78,7 @@ void placeAtCaret(QWidget &widget, const api::Anchor &anchor) {
     const QRect available = screen->availableGeometry();
 
     int x = caret.x() + static_cast<int>(anchor.offsetX);
-    int y = caret.y() + static_cast<int>(anchor.cursor.height) + 6 +
-            static_cast<int>(anchor.offsetY);
+    int y = caret.y() + caretRect.height + 6 + static_cast<int>(anchor.offsetY);
 
     x = std::clamp(x, available.left() + 4, available.right() - widget.width() - 4);
     y = std::clamp(y, available.top() + 4, available.bottom() - widget.height() - 4);

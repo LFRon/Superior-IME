@@ -47,4 +47,16 @@ struct Size {
 /// Keeps `uiScale` inside the range the settings page allows.
 [[nodiscard]] double clampScale(double scale) noexcept;
 
+/// Converts a caret rectangle from session device pixels to the overlay's own
+/// logical pixels.
+///
+/// Qt places windows in logical coordinates and multiplies by
+/// `devicePixelRatio` on the way out, while an X server (and XIM, and every
+/// Fcitx5 frontend that is not the D-Bus V2 path) speaks device pixels. Feeding
+/// the device rect straight to `move()` therefore pushed the candidate window
+/// `(dpr - 1) × position` away from the caret — invisible at 100 %, a visible
+/// gap at 125 %.
+[[nodiscard]] Rect deviceToLogical(double left, double top, double width, double height,
+                                   double dpr) noexcept;
+
 } // namespace superior::ui

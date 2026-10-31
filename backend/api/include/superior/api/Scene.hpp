@@ -30,6 +30,15 @@ struct Rect {
 /// Where the panel should be placed. `cursor` is the anchor reported by the
 /// platform. `offset` is a user drag offset persisted per application.
 struct Anchor {
+    /// Caret rectangle in **session device pixels**, i.e. the pixel grid the
+    /// platform reported it on, not the overlay's coordinate space.
+    ///
+    /// X11 and XIM frontends report device pixels already (an X server has no
+    /// logical layer); a client that reports logical coordinates sends its
+    /// scale with them, and the adapter multiplies before publishing. The UI
+    /// divides by its own `devicePixelRatio` — the one place that knows how Qt
+    /// maps its logical pixels onto that grid, which is why the conversion does
+    /// not live here.
     Rect cursor;
     double offsetX = 0.0;
     double offsetY = 0.0;

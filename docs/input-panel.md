@@ -267,6 +267,27 @@ UI 在 `superior_ui` 进程里，信号槽跨不过进程边界。inotify 是「
 
 ---
 
+## 候选窗位置：Wayland 客户端没有光标坐标
+
+X11 / XIM 客户端由前端直接给出**全局**光标矩形，候选窗贴着光标走。
+Wayland 原生客户端做不到，这不是缺陷而是协议边界：
+
+- `text_input` 里确实有 `cursor_rectangle`，但 Fcitx5 5.1.12 的 `waylandim`
+  从未消费它（整个目录没有一处 `setCursorRect`），所以 `cursorRect()` 是空的；
+- 即便消费了也仍是 **surface 局部坐标**——Wayland 客户端不知道自己在桌面上的位置；
+- 外部进程要贴光标只有一个正规办法：自己是 `zwp_input_method_v2` 的
+  input-method 端，用 `get_input_popup_surface` 拿到贴在输入框上的 popup。
+  我们是 Fcitx5 的被动观察者（`Category=Module`），不是 input method。
+
+因此 `SuperiorAgent::collect()` 把**零高度**的光标矩形判为“未知”
+（`host.cursorValid = hasFocus && width>0 && height>0`），候选窗据此退到一个确定的位置
+（右下角、状态栏上方）。早期版本把 `(0,0)` 当成有效光标，于是候选窗永远钉在屏幕左上角。
+
+已知取舍：Wayland 原生客户端里候选窗不跟随光标，但拼音本身仍显示在候选窗里；
+X11/XWayland 客户端（Telegram、基于 XIM 的工具）不受影响。
+
+---
+
 ## 内联英文模式（Shift 切换中英文）
 
 搜狗的 Shift 是**输入法内部**的中英文切换，不是切换输入法、也不是加载英文键盘
