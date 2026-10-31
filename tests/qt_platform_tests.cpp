@@ -28,6 +28,24 @@ void testWaylandSessionKeepsSessionX11Plugin() {
     CHECK(decision.reason == "session-x11-plugin");
 }
 
+/// Treeland exports exactly this: a *preference list* whose first entry is
+/// Wayland. Keeping it ran the overlay on Wayland, where nothing is
+/// override-redirect — the toolbar lost always-on-top, dragging and its
+/// "not an application window" status at once.
+void testWaylandFirstPreferenceListStillUsesX11() {
+    const auto decision = chooseQtPlatform("", "wayland;xcb", "treeland.socket", ":1", "wayland");
+    CHECK(decision.value == "xcb");
+    CHECK(decision.reason == "xwayland");
+}
+
+void testX11FirstPreferenceListIsKept() {
+    // The other order really does select X11, so a distribution tuning it keeps
+    // its plugin.
+    const auto decision = chooseQtPlatform("", "xcb;wayland", "treeland.socket", ":1", "wayland");
+    CHECK(decision.value == "xcb;wayland");
+    CHECK(decision.reason == "session-x11-plugin");
+}
+
 void testWaylandSessionOverridesNativeWaylandRequest() {
     // A globally exported QT_QPA_PLATFORM=wayland is not a choice made for this
     // overlay; taking it would silently lose always-on-top.
@@ -89,6 +107,8 @@ int main() {
     testOurKnobWins();
     testWaylandSessionForcesX11();
     testWaylandSessionKeepsSessionX11Plugin();
+    testWaylandFirstPreferenceListStillUsesX11();
+    testX11FirstPreferenceListIsKept();
     testWaylandSessionOverridesNativeWaylandRequest();
     testWaylandSessionWithoutSessionType();
     testWaylandSessionWithoutXwaylandAvailable();

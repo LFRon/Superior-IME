@@ -43,13 +43,24 @@ agent 自动拉起 overlay 时不会经过任何脚本，所以必须由进程�
 | 情况 | 选择 | `reason` |
 |---|---|---|
 | `SUPERIOR_UI_PLATFORM` 非空 | 原样使用 | `override` |
-| Wayland 会话 + `DISPLAY`，且 `QT_QPA_PLATFORM` 已是 X11 插件（含 `xcb`，如 Deepin 的 `dxcb;xcb`） | 保留该值 | `session-x11-plugin` |
+| Wayland 会话 + `DISPLAY`，且 `QT_QPA_PLATFORM` 的**第一个**插件是 X11（含 `xcb`，如 Deepin 的 `dxcb;xcb`） | 保留该值 | `session-x11-plugin` |
 | Wayland 会话 + `DISPLAY` | `xcb` | `xwayland` |
 | Wayland 会话、无 `DISPLAY`，`QT_QPA_PLATFORM` 非空 | 保留该值 | `session-default` |
 | Wayland 会话、无 `DISPLAY` | `wayland` | `wayland-only` |
 | X11 会话，`QT_QPA_PLATFORM` 非空 | 保留该值 | `session-default` |
 | X11 会话，仅有 `DISPLAY` | `xcb` | `x11` |
 | 都没有（无头环境） | 交给 Qt | `default` |
+
+**只看第一个插件**，因为 Qt 把该变量当“偏好列表”：`wayland;xcb` 会用 Wayland 启动
+（Treeland 导出的正好是这个值）。早期实现检查整串里有没有 `xcb`，于是把
+`wayland;xcb` 当成 X11 保留下来，浮层实际跑在 **原生 Wayland** 上：
+
+- 没有 override-redirect → 不置顶；
+- 应用自己 `move()` 在 Wayland 下无效 → 拖不动（xdg_toplevel 的位置归合成器）；
+- 它是普通 toplevel → dde-shell 的任务栏把它当成“新窗口”。
+
+三者是同一个根因。修复后浮层在 Treeland 上回到 XWayland，`xwininfo` 再次显示
+`Override Redirect State: yes`，159×45、贴右下角。
 
 要点：**Wayland 会话下 `QT_QPA_PLATFORM` 即使等于 `wayland` 也会被覆盖成 `xcb`**。
 全局导出 `QT_QPA_PLATFORM=wayland` 不是针对这个浮层做的选择，照做会静默丢掉

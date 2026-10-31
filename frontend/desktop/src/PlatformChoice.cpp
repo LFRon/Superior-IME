@@ -8,8 +8,17 @@ namespace {
 /// True when a `QT_QPA_PLATFORM` value already selects an X11 plugin
 /// (`xcb`, `dxcb;xcb`, …). Those values are left untouched so a distribution's
 /// own tuning (Deepin's `dxcb`) keeps working.
+///
+/// Only the **first** entry counts. Qt reads the value as a preference list and
+/// uses the first plugin that loads, so `wayland;xcb` runs Wayland. Testing the
+/// whole string for "xcb" accepted exactly that and quietly produced a native
+/// Wayland window: no override-redirect, so the toolbar could not stay on top,
+/// could not be moved (there is no compositor move for it), and the dock listed
+/// it as another application window. Treeland exports precisely
+/// `QT_QPA_PLATFORM=wayland;xcb`.
 bool selectsX11(const std::string &value) {
-    return value.find("xcb") != std::string::npos;
+    const std::string first = value.substr(0, value.find(';'));
+    return first.find("xcb") != std::string::npos;
 }
 
 } // namespace
