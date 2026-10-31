@@ -344,6 +344,32 @@ Wayland 的值套到 XWayland 窗口上会算出 1.6 倍。判据只有 `classif
 就能用，后者换通道也没用。日志里会打一行 `linux platform backend windowSystem=…
 desktop=… panelChannel=…`。
 
+### 光标锚点：什么算“客户端报了光标”
+
+`InputContext::cursorRect()` 给的是**矩形**，但光标是**一条线**：宽度天然为 0。所以
+判定标准不是“是不是一个正常矩形”，而是“客户端到底报没报”：
+
+| 前端 | 实测 `cursorRect` | 结论 |
+|---|---|---|
+| GTK（`dbus`） | `x, y, 0, 34` | 有光标 |
+| XIM（xterm） | `x, y, 0, 0` | 有光标（只有位置） |
+| Wayland（`waylandim`） | `0, 0, 0, 0` | **没有**，全零就是“从没设置过” |
+
+只有全零才算没报。曾经要求 `width > 0 && height > 0`，结果所有 X11 客户端都被判成
+“没有光标”，候选窗一律退到屏幕角落 —— 位置永远错。`SUPERIOR_LOG=superior.fcitx5=trace`
+会打出 `cursorKnown/cursorX/cursorY/cursorW/cursorH`，这是排查“位置不对”的第一手数据。
+
+### 锚点怎么换算成窗口位置
+
+1. **按屏幕换算**，不是按桌面：Fcitx5 给的是设备像素，Qt 移动窗口用逻辑像素，而两个
+   缩放比不同的屏幕不共享同一个比例。`caretToLogical()` 先把每块屏幕按
+   `geometry × dpr` 还原成设备矩形，用光标的设备坐标选出所在屏幕，再从那块屏幕自己的
+   原点换算（`logical = 屏幕原点 + (设备 − 设备原点) / dpr`）。全局除以
+   `primaryScreen()` 的比例，在第二块屏上会偏，选屏也会选错。
+2. **优先放在光标下方**，下方放不下就翻到光标上方：最后一行终端、聊天框底部正是最不
+   该被候选窗盖住的位置。
+3. 结果最后夹到该屏幕的 `availableGeometry()` 里，避开任务栏/面板。
+
 ### 其它 Wayland 桌面：没有任何来源
 
 没有 Treeland 的通道时，Wayland 原生客户端既不给 Fcitx5 光标矩形
