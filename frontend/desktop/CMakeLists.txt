@@ -17,6 +17,7 @@ if(PkgConfig_FOUND)
 endif()
 
 add_executable(superior_ui
+    src/platform/CompositorPanel.cpp
     src/platform/ScreenScale.cpp
     src/platform/ScreenScaleX11.cpp
     src/platform/ScreenScaleWayland.cpp
@@ -64,7 +65,9 @@ endif()
 
 if(SUPERIOR_XCB_FOUND)
     target_link_libraries(superior_ui PRIVATE PkgConfig::SUPERIOR_XCB)
-    target_compile_definitions(superior_ui PRIVATE SUPERIOR_HAVE_XCB_SCALE=1)
+    target_compile_definitions(superior_ui PRIVATE
+        SUPERIOR_HAVE_XCB_SCALE=1
+        SUPERIOR_HAVE_XCB_PANEL=1)
 endif()
 
 if(SUPERIOR_WAYLAND_CLIENT_FOUND)
