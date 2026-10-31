@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "ScalePlatform.hpp"
+#include "WaylandPlatform.hpp"
 
 #if defined(SUPERIOR_HAVE_WAYLAND_SCALE)
 
@@ -14,7 +14,7 @@
 #include <poll.h>
 #include <vector>
 
-namespace superior::ui::detail {
+namespace superior::ui::wayland {
 
 namespace {
 
@@ -183,7 +183,7 @@ bool roundtripBounded(wl_display *display, std::chrono::milliseconds budget) {
 
 } // namespace
 
-int waylandOutputScale() noexcept {
+int outputScale() noexcept {
     // Read once per process: the overlay is restarted with the session, and a
     // desktop scale change on X11/XWayland means logging out anyway.
     static const int scale = [] {
@@ -208,14 +208,14 @@ int waylandOutputScale() noexcept {
     return scale;
 }
 
-} // namespace superior::ui::detail
+} // namespace superior::ui::wayland
 
 #else
 
-namespace superior::ui::detail {
+namespace superior::ui::wayland {
 
-int waylandOutputScale() noexcept { return 0; }
+int outputScale() noexcept { return 0; }
 
-} // namespace superior::ui::detail
+} // namespace superior::ui::wayland
 
 #endif

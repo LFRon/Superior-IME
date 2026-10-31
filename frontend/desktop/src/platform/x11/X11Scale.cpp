@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "ScalePlatform.hpp"
-#include "ScreenScale.hpp"
+#include "X11Platform.hpp"
 
 #if defined(SUPERIOR_HAVE_XCB_SCALE)
+
+#include "../Scale.hpp"
+#include "X11Connection.hpp"
 
 #include <xcb/xcb.h>
 
@@ -11,43 +13,16 @@
 #include <cstring>
 #include <string>
 
-namespace superior::ui::detail {
+namespace superior::ui::x11 {
 
 namespace {
-
-/// One connection for the life of the overlay.
-///
-/// The scale is polled, and reconnecting on every poll would open a socket per
-/// second for no reason. Only the main thread calls this, which is why a plain
-/// function-local static is enough.
-class Connection {
-public:
-    Connection() : handle_(xcb_connect(nullptr, nullptr)) {
-        if (handle_ != nullptr && xcb_connection_has_error(handle_)) {
-            xcb_disconnect(handle_);
-            handle_ = nullptr;
-        }
-    }
-    ~Connection() {
-        if (handle_ != nullptr) {
-            xcb_disconnect(handle_);
-        }
-    }
-    Connection(const Connection &) = delete;
-    Connection &operator=(const Connection &) = delete;
-
-    [[nodiscard]] xcb_connection_t *get() const noexcept { return handle_; }
-
-private:
-    xcb_connection_t *handle_ = nullptr;
-};
 
 /// Reads one string property of the root window.
 ///
 /// `RESOURCE_MANAGER` is what `xrdb` writes and what Xft-based toolkits read;
 /// `SCREEN_RESOURCES` is the per-screen override a few setups use instead.
 std::string readRootString(xcb_connection_t *connection, xcb_window_t root, const char *name) {
-    const std::uint16_t length = static_cast<std::uint16_t>(std::strlen(name));
+    const auto length = static_cast<std::uint16_t>(std::strlen(name));
     xcb_intern_atom_reply_t *atom = xcb_intern_atom_reply(
         connection, xcb_intern_atom(connection, 0, length, name), nullptr);
     if (atom == nullptr) {
@@ -75,9 +50,8 @@ std::string readRootString(xcb_connection_t *connection, xcb_window_t root, cons
 
 } // namespace
 
-int x11XftDpi() noexcept {
-    static Connection connection;
-    xcb_connection_t *handle = connection.get();
+int xftDpi() noexcept {
+    xcb_connection_t *handle = connection();
     if (handle == nullptr) {
         return 0;
     }
@@ -93,14 +67,14 @@ int x11XftDpi() noexcept {
     return parseXftDpi(readRootString(handle, root, "SCREEN_RESOURCES"));
 }
 
-} // namespace superior::ui::detail
+} // namespace superior::ui::x11
 
 #else
 
-namespace superior::ui::detail {
+namespace superior::ui::x11 {
 
-int x11XftDpi() noexcept { return 0; }
+int xftDpi() noexcept { return 0; }
 
-} // namespace superior::ui::detail
+} // namespace superior::ui::x11
 
 #endif

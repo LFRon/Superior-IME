@@ -24,7 +24,7 @@ namespace superior::ui {
 
 namespace {
 // Base metrics are the 100 % size: the desktop's scale factor multiplies them
-// (`platform/ScreenScale`), and the user's `uiScale` multiplies them again. They
+// (`platform/Scale.hpp`), and the user's `uiScale` multiplies them again. They
 // are sized next to the system's own bars, not as small as they used to be: at
 // 30 px / 9.5 pt the toolbar was visibly smaller than every other panel on a
 // 125 % desktop.

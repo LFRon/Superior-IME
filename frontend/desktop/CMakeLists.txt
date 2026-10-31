@@ -17,10 +17,12 @@ if(PkgConfig_FOUND)
 endif()
 
 add_executable(superior_ui
-    src/platform/CompositorPanel.cpp
-    src/platform/ScreenScale.cpp
-    src/platform/ScreenScaleX11.cpp
-    src/platform/ScreenScaleWayland.cpp
+    src/platform/Platform.cpp
+    src/platform/Session.cpp
+    src/platform/x11/X11Connection.cpp
+    src/platform/x11/X11Panel.cpp
+    src/platform/x11/X11Scale.cpp
+    src/platform/wayland/WaylandScale.cpp
     src/CandidateLabel.cpp
     src/CandidateWindow.cpp
     src/DragHandle.cpp

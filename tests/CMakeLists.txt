@@ -45,14 +45,16 @@ superior_set_warnings(superior_layout_rules_tests)
 
 # The scale helpers stay pure so the platform-specific readers can be replaced
 # without a display: what is tested here is the arithmetic every port shares.
-add_executable(superior_compositor_panel_tests
-    compositor_panel_tests.cpp
-    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/platform/CompositorPanel.cpp")
-target_include_directories(superior_compositor_panel_tests PRIVATE
+# The platform layer's only policy is "which implementation answers", and it is a
+# pure table: Qt, XCB and libwayland stay out of the test.
+add_executable(superior_platform_session_tests
+    platform_session_tests.cpp
+    "${PROJECT_SOURCE_DIR}/frontend/desktop/src/platform/Session.cpp")
+target_include_directories(superior_platform_session_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${PROJECT_SOURCE_DIR}/frontend/desktop/src")
-target_compile_features(superior_compositor_panel_tests PRIVATE cxx_std_20)
-superior_set_warnings(superior_compositor_panel_tests)
+target_compile_features(superior_platform_session_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_platform_session_tests)
 
 add_executable(superior_ui_scale_tests ui_scale_tests.cpp)
 target_include_directories(superior_ui_scale_tests PRIVATE
@@ -295,7 +297,7 @@ add_test(NAME layout-rules COMMAND superior_layout_rules_tests)
 add_test(NAME drag-handle COMMAND superior_drag_handle_tests)
 add_test(NAME overlay-layout COMMAND superior_overlay_layout_tests)
 add_test(NAME ui-scale COMMAND superior_ui_scale_tests)
-add_test(NAME compositor-panel COMMAND superior_compositor_panel_tests)
+add_test(NAME platform-session COMMAND superior_platform_session_tests)
 add_test(NAME candidate-label COMMAND superior_candidate_label_tests)
 add_test(NAME wheel-step COMMAND superior_wheel_step_tests)
 add_test(NAME preedit-layout COMMAND superior_preedit_layout_tests)

@@ -12,6 +12,7 @@
 
 #include "superior/api/Scene.hpp"
 #include "LayoutRules.hpp"
+#include "platform/Session.hpp"
 #include "SkinTheme.hpp"
 
 namespace superior::ui {
@@ -40,6 +41,12 @@ public:
     /// panel is lifted above it instead of covering it; an empty rect disables
     /// the rule. Set by the host, because only the host sees all three windows.
     void setAvoidRect(const Rect &rect);
+
+    /// Which platform implementation answers "where does this panel go".
+    ///
+    /// Set once by the host after it classified the session; the window itself
+    /// never reads the environment or a platform API.
+    void setPlatformSession(const Session &session);
 
     [[nodiscard]] QSize sizeHint() const override;
 
@@ -70,6 +77,7 @@ private:
         api::CandidateId id = 0;
     };
 
+    Session session_{};
     SkinTheme theme_ = SkinTheme::fallback();
     api::Anchor lastAnchor_;
     /// The compositor owns this window's position (Treeland candidate panel).

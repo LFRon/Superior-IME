@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <string_view>
 
-#include "platform/ScreenScale.hpp"
+#include "platform/Scale.hpp"
 #include "support/TestSupport.hpp"
 
 namespace {

@@ -26,7 +26,7 @@
 #include "CandidateLabel.hpp"
 #include "PreeditLayout.hpp"
 #include "LayoutRules.hpp"
-#include "platform/CompositorPanel.hpp"
+#include "platform/Platform.hpp"
 
 #include "Overlay.hpp"
 #include "WheelStep.hpp"
@@ -72,22 +72,6 @@ constexpr int kGeometryNudgeMs = 30;
 /// different position ~700 ms after the first), and the channel carries no
 /// serial, so a client cannot tell "settled" from "about to change again".
 constexpr int kSettleQuietMs = 20;
-
-const std::string &sessionDesktop() {
-    static const std::string value = [] {
-        const char *raw = std::getenv("XDG_SESSION_DESKTOP");
-        return std::string(raw != nullptr ? raw : "");
-    }();
-    return value;
-}
-
-const std::string &currentDesktop() {
-    static const std::string value = [] {
-        const char *raw = std::getenv("XDG_CURRENT_DESKTOP");
-        return std::string(raw != nullptr ? raw : "");
-    }();
-    return value;
-}
 
 /// Places the panel just below the caret, clamped to the screen.
 ///
@@ -242,8 +226,7 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     // `winId()` has to be called after `show()`: the native window does not
     // exist before the first map, and the property would be written to nothing.
     const bool caretKnown = panel.anchor.valid && panel.anchor.cursor.height >= 0;
-    const bool compositorHandles =
-        !caretKnown && compositorPlacesCandidatePanel(sessionDesktop(), currentDesktop());
+    const bool compositorHandles = !caretKnown && compositorPlacesCandidatePanel(session_);
     if (compositorHandles) {
         // A compositor only manages windows it knows about, so the panel has to
         // give up override-redirect to be adopted; everything that flag bought
@@ -268,7 +251,7 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
         // a 50 ms timer, and a keystroke must not trigger a polling round.
         const auto currentWindow = static_cast<std::uintptr_t>(winId());
         if (currentWindow != candidatePanelWindow_) {
-            if (setCandidatePanelHint(currentWindow, true)) {
+            if (adoptAsCandidatePanel(session_, currentWindow) == PanelChannel::Applied) {
                 candidatePanelWindow_ = currentWindow;
             }
         }
@@ -514,6 +497,10 @@ void CandidateWindow::armPlacementSettle() {
         });
     }
     placementSettle_->start();
+}
+
+void CandidateWindow::setPlatformSession(const Session &session) {
+    session_ = session;
 }
 
 void CandidateWindow::setCompositorPlacement(bool managed) {

@@ -33,7 +33,7 @@
 #include "SkinTheme.hpp"
 #include "OverlayLayout.hpp"
 #include "StatusWindow.hpp"
-#include "platform/ScreenScale.hpp"
+#include "platform/Platform.hpp"
 
 #include "superior/diagnostics/Log.hpp"
 
@@ -159,25 +159,26 @@ int main(int argc, char **argv) {
     // --------------------------------------------------------------- scale
     //
     // The strategy layer only ever sees one ratio (`setScale`). Where the
-    // desktop's own factor comes from is the platform's business: X11 reads
-    // `Xft.dpi`, Wayland reads `wl_output.scale` (`platform/ScreenScale*`).
+    // desktop's own factor comes from is the platform layer's business, and it
+    // answers per window system, not per session type: an overlay on XWayland
+    // has X11 windows, X11 pixels and X11 coordinates, so it reads `Xft.dpi`
+    // like any other X11 client — Treeland's `wl_output.scale` (2) does not
+    // describe them, the desktop there really scales by 1.25.
     //
-    // It is asked here rather than taken from Qt: Qt derives its DPR from the
-    // same resource at start-up but cannot tell a stale `Xft.dpi` from a real
-    // one, and it never re-reads either. Reading the desktop's own declaration
-    // keeps the toolbar the same size as the applications that honour it.
+    // It is asked rather than taken from Qt: Qt derives its DPR from the same
+    // resource at start-up but cannot tell a stale `Xft.dpi` from a real one,
+    // and it never re-reads either. Reading the desktop's own declaration keeps
+    // the toolbar the same size as the applications that honour it.
     // `scaleForWindows` divides by Qt's cached ratio, so the final size is
     // `system × uiScale` exactly once. The scale is read once: on X11 changing
     // it needs a logout, and the overlay restarts with the session.
-    // The scale source follows the plugin Qt actually loaded: an overlay on
-    // XWayland has X11 windows and X11 pixels, and Treeland's `wl_output.scale`
-    // (2) does not describe them — the desktop there really scales by 1.25.
-    const superior::ui::WindowSystem windowSystem =
-        QGuiApplication::platformName().startsWith(QLatin1String("wayland"))
-            ? superior::ui::WindowSystem::Wayland
-            : superior::ui::WindowSystem::X11;
-    const superior::ui::SystemScale systemScale =
-        superior::ui::readSystemScale(windowSystem);
+    const superior::ui::Session session = superior::ui::detectSession();
+    const superior::ui::SystemScale systemScale = superior::ui::readSystemScale(session.system);
+    SUPERIOR_INFO(diag::categories::Ui)
+        .field("windowSystem", std::string(superior::ui::windowSystemName(session.system)))
+        .field("desktop", std::string(superior::ui::desktopName(session.desktop)))
+        .field("panelChannel", std::string(superior::ui::panelChannelReason(session)))
+        << "linux platform backend";
     double appliedScale = 1.0;
     const auto resolvedScale = [&]() {
         double dpr = 1.0;
@@ -211,6 +212,8 @@ int main(int argc, char **argv) {
             << "overlay scale resolved";
     };
     applyScale("startup");
+
+    candidates.setPlatformSession(session);
 
     status.setPlacement(superior::ui::placementFromString(settings.statusPlacement));
     status.setEnabled(settings.showStatusBar);
