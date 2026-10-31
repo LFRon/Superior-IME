@@ -100,6 +100,10 @@ if(SUPERIOR_ENABLE_FCITX5)
     target_link_libraries(superior_fcitx5_pinyin PRIVATE
         Fcitx5::Core
         Superior::Core
+        # `emojiCandidates` and the rest of `settings.json`. The engine addon
+        # reads the file itself (there is no watcher to piggyback on), so it needs
+        # the same parser the agent uses.
+        Superior::Config
         # The keysym -> KeyCode table lives with the other Fcitx5 translations,
         # so both addons agree on what a key means.
         Superior::Fcitx5Mapping

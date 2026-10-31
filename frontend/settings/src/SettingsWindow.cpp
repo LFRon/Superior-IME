@@ -471,7 +471,7 @@ QWidget *SettingsWindow::buildInputPage() {
 
     QVBoxLayout *commitCard = addCard(
         layout, tr("拼音"),
-        tr("这些开关只影响拼音组合中的行为，不改变方案本身。"));
+        tr("这些开关只影响拼音组合中的行为。表情候选是例外：它对应方案自带的 emoji 开关。"));
     shiftCommitToggle_ = new ToggleSwitch(true);
     commitCard->addWidget(makeRow(
         tr("字母上屏并切英文"),
@@ -481,6 +481,15 @@ QWidget *SettingsWindow::buildInputPage() {
         tr("这是搜狗的习惯：按错拼音时不用先删掉，按一下 Shift 字母就留在输入框里，"
            "接下来的字母直接上屏。关闭后，组合中轻按 Shift 只切换中英文，"
            "已输入的字母随组合丢弃、不会上屏。"),
+        "rowHint"));
+    emojiToggle_ = new ToggleSwitch(true);
+    commitCard->addWidget(makeRow(
+        tr("表情候选"), tr("输入 哭 这类词时，候选里同时给出 😭 这样的表情"),
+        emojiToggle_));
+    commitCard->addWidget(makeLabel(
+        tr("表情来自万象方案自带的 emoji 词表，与汉字一起参与排序，所以位置会随词频变化；"
+           "关闭后候选只剩文字。表情画在候选窗里，需要系统装有彩色 emoji 字体"
+           "（通常是 Noto Color Emoji），否则会显示为单色轮廓。"),
         "rowHint"));
 
     addCard(layout, tr("输入方案"),
@@ -585,7 +594,8 @@ QWidget *SettingsWindow::buildAdvancedPage() {
         addCard(layout, tr("重置"), tr("只重置本程序的设置，不触碰 Fcitx5 输入法配置。"));
     auto *resetButton = new QPushButton(tr("恢复默认设置"));
     resetButton->setCursor(Qt::PointingHandCursor);
-    resetCard->addWidget(makeRow(tr("恢复默认"), tr("皮肤、缩放、状态栏与日志级别"), resetButton));
+    resetCard->addWidget(
+        makeRow(tr("恢复默认"), tr("皮肤、缩放、拼音、状态栏与日志级别"), resetButton));
     connect(resetButton, &QPushButton::clicked, this, [this] {
         settings_ = config::Settings{};
         syncWidgets();
@@ -629,6 +639,9 @@ void SettingsWindow::syncWidgets() {
     }
     if (shiftCommitToggle_ != nullptr) {
         shiftCommitToggle_->setChecked(settings_.shiftCommitPinyin);
+    }
+    if (emojiToggle_ != nullptr) {
+        emojiToggle_->setChecked(settings_.emojiCandidates);
     }
     if (cloudToggle_ != nullptr) {
         cloudToggle_->setChecked(settings_.cloudPinyinEnabled);
@@ -740,6 +753,9 @@ config::Settings SettingsWindow::currentSettings() const {
     if (shiftCommitToggle_ != nullptr) {
         result.shiftCommitPinyin = shiftCommitToggle_->isChecked();
     }
+    if (emojiToggle_ != nullptr) {
+        result.emojiCandidates = emojiToggle_->isChecked();
+    }
     if (cloudToggle_ != nullptr) {
         result.cloudPinyinEnabled = cloudToggle_->isChecked();
     }
@@ -779,11 +795,12 @@ void SettingsWindow::applyChanges() {
     // Deliberately does NOT touch classicui.conf: the skin is painted by our own
     // overlay, so other input methods keep their Fcitx5 appearance.
     reloadFcitxState();
-    setStatus(tr("已保存。界面与 Shift 切换即时生效。"));
+    setStatus(tr("已保存。界面与拼音开关即时生效。"));
     SUPERIOR_INFO(diag::categories::Ui)
         .field("theme", settings_.themeName)
         .field("shift", settings_.shiftToggle)
         .field("shiftCommitPinyin", settings_.shiftCommitPinyin)
+        .field("emojiCandidates", settings_.emojiCandidates)
         << "settings applied";
 }
 

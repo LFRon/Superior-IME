@@ -77,6 +77,7 @@ SettingsLoad loadSettings(const fs::path &path) {
     settings.shiftToggle = document.value("shiftToggle", settings.shiftToggle);
     settings.shiftCommitPinyin =
         document.value("shiftCommitPinyin", settings.shiftCommitPinyin);
+    settings.emojiCandidates = document.value("emojiCandidates", settings.emojiCandidates);
     settings.showStatusBar = document.value("showStatusBar", settings.showStatusBar);
     settings.statusPlacement = document.value("statusPlacement", settings.statusPlacement);
     settings.uiScale = document.value("uiScale", settings.uiScale);
@@ -135,6 +136,7 @@ bool saveSettings(const fs::path &path, const Settings &settings, std::string &e
     document["themeName"] = settings.themeName;
     document["shiftToggle"] = settings.shiftToggle;
     document["shiftCommitPinyin"] = settings.shiftCommitPinyin;
+    document["emojiCandidates"] = settings.emojiCandidates;
     document["showStatusBar"] = settings.showStatusBar;
     document["statusPlacement"] = settings.statusPlacement;
     document["uiScale"] = settings.uiScale;

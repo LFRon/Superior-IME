@@ -135,6 +135,7 @@ void testSettingsRoundTrip() {
     settings.themeName = "org.example.skin";
     settings.shiftToggle = false;
     settings.shiftCommitPinyin = false;
+    settings.emojiCandidates = false;
     settings.uiScale = 1.25;
     settings.statusPlacement = "topLeft";
     settings.logLevel = "debug";
@@ -149,9 +150,30 @@ void testSettingsRoundTrip() {
     CHECK(loaded.settings.skinId == settings.skinId);
     CHECK(!loaded.settings.shiftToggle);
     CHECK(!loaded.settings.shiftCommitPinyin);
+    CHECK(!loaded.settings.emojiCandidates);
     CHECK(superior::test::near(loaded.settings.uiScale, 1.25));
     CHECK(loaded.settings.statusPlacement == "topLeft");
     CHECK(loaded.settings.logLevel == "debug");
+}
+
+/// A file that predates a key keeps the *product* default, not `false`. The emoji
+/// switch has to arrive on for someone who never saw it.
+void testSettingsDefaultsAreOnForNewKeys() {
+    TempTree tree;
+    const fs::path file = tree.root() / "config/superior-ime/settings.json";
+    tree.write("config/superior-ime/settings.json",
+               R"({"schema":"superior.settings/1","shiftToggle":false})");
+
+    const auto loaded = superior::config::loadSettings(file);
+    CHECK(loaded.existed);
+    CHECK(loaded.settings.emojiCandidates);
+    CHECK(!loaded.settings.shiftToggle);
+
+    // And a file without the key round-trips it back on.
+    std::string error;
+    CHECK(superior::config::saveSettings(file, loaded.settings, error));
+    CHECK(tree.read("config/superior-ime/settings.json").find(R"("emojiCandidates": true)") !=
+          std::string::npos);
 }
 
 void testSettingsRejectsBadValues() {
@@ -212,6 +234,7 @@ int main() {
     testSetThemeWritesAndBacksUp();
     testInspectState();
     testSettingsRoundTrip();
+    testSettingsDefaultsAreOnForNewKeys();
     testSettingsRejectsBadValues();
     testSettingsVersionStamps();
     testSkinRootsPriority();

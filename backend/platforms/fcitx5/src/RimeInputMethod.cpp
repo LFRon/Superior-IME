@@ -12,6 +12,7 @@
 #include <functional>
 #include <utility>
 
+#include "superior/config/Settings.hpp"
 #include "superior/core/KeyPolicy.hpp"
 #include "superior/diagnostics/Log.hpp"
 #include "superior/pinyin/Layout.hpp"
@@ -280,6 +281,13 @@ RimeInputMethod::Session *RimeInputMethod::sessionFor(fcitx::InputContext *input
 
     Session *raw = session.get();
     sessions_.emplace(inputContext, std::move(session));
+    // A session born here has not been through `activate` yet, and librime's own
+    // default for a switch is its *first* state — for `emoji` that is "off". So
+    // the preferences are applied at birth as well: a client that is typed into
+    // without ever activating (or a context whose activation we missed) must not
+    // silently disagree with the settings file.
+    refreshSettings();
+    applyPreferences(*raw);
     return raw;
 }
 
@@ -379,6 +387,12 @@ void RimeInputMethod::keyEvent(const fcitx::InputMethodEntry &entry, fcitx::KeyE
     if (session == nullptr) {
         return;
     }
+
+    // Also on the key path, not only on activation: a composition can stay open
+    // across a settings change, and "I flipped the switch but the next word still
+    // has emoji" is exactly the bug that produces. Throttled, so a typing burst
+    // pays for one stat per 200 ms.
+    refreshSettings();
 
     // Selection keys are routed through the visible list, not through librime.
     // Cloud pinyin and learned words are rows the engine has never seen; letting
@@ -619,6 +633,15 @@ void RimeInputMethod::updatePanel(fcitx::InputContext *inputContext, Session &se
 }
 
 void RimeInputMethod::attachPunctuation(fcitx::InputContext *inputContext, Session &session) {
+    // Before the early return: the settings are not punctuation's business, and
+    // an addon that failed to register the action still reads them. This runs on
+    // activation, and the settings window has to be focused to change a value, so
+    // an activation always precedes the next composition — no per-keystroke check
+    // is needed for the switch to feel immediate.
+    refreshSettings();
+    // Not punctuation's business, and not conditional on owning the action: see
+    // `applyPreferences`.
+    applyPreferences(session);
     if (!punctuationRegistered_) {
         return;
     }
@@ -633,6 +656,67 @@ void RimeInputMethod::applyModes(Session &session) {
     // pushing `ascii_mode` from here would be a second writer again.
     session.engine.setOption("ascii_punct", modes_.halfPunctuation());
     session.engine.setOption("full_shape", modes_.fullShape());
+}
+
+void RimeInputMethod::applyPreferences(Session &session) {
+    // The schema ships the emoji filter and remembers its own state in
+    // `user.yaml`; being told on every activation is what makes `settings.json`
+    // the winner without having to disable that memory.
+    session.engine.setOption("emoji", emojiCandidates_);
+}
+
+void RimeInputMethod::refreshSettings() {
+    // Called from the key path, so the stat is throttled: a burst of typing must
+    // not turn into one `stat(2)` per character, and a switch flipped in the
+    // settings window is still picked up within one human tap.
+    const auto now = std::chrono::steady_clock::now();
+    constexpr auto kCheckInterval = std::chrono::milliseconds(200);
+    if (settingsLoaded_ && now - settingsChecked_ < kCheckInterval) {
+        return;
+    }
+    settingsChecked_ = now;
+
+    const std::filesystem::path path = config::defaultSettingsPath();
+    std::error_code error;
+    const auto stamp = std::filesystem::last_write_time(path, error);
+    if (settingsLoaded_ && (error || stamp == settingsStamp_)) {
+        return;
+    }
+    settingsStamp_ = stamp;
+    settingsLoaded_ = true;
+
+    const auto loaded = config::loadSettings(path);
+    for (const auto &warning : loaded.warnings) {
+        SUPERIOR_WARN(diag::categories::Pinyin)
+            .field("settings", path.string())
+            .field("warning", warning)
+            << "settings rejected part of the file";
+    }
+    // Assign first, then log: an info line that reports the value *before* the
+    // read is worse than no line at all.
+    const bool firstRead = !emojiLogged_;
+    emojiLogged_ = true;
+    const bool changed = loaded.settings.emojiCandidates != emojiCandidates_;
+    emojiCandidates_ = loaded.settings.emojiCandidates;
+
+    if (firstRead) {
+        SUPERIOR_INFO(diag::categories::Pinyin)
+            .field("emoji", emojiCandidates_)
+            .field("settings", path.string())
+            << "schema switches read from settings";
+    }
+    if (!changed) {
+        return;
+    }
+    SUPERIOR_INFO(diag::categories::Pinyin)
+        .field("emoji", emojiCandidates_)
+        .field("sessions", static_cast<std::int64_t>(sessions_.size()))
+        << "emoji candidates switched";
+    // Every open session has to agree: the switch is schema-wide, and a stale
+    // session would put emoji back the next time that window is typed in.
+    for (auto &entry : sessions_) {
+        applyPreferences(*entry.second);
+    }
 }
 
 void RimeInputMethod::refreshPunctuationAction() {

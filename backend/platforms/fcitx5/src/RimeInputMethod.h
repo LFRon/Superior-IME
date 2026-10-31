@@ -17,6 +17,8 @@
 
 #include <fcitx-utils/handlertable.h>
 
+#include <chrono>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -100,7 +102,25 @@ private:
     /// Attaches the punctuation action to a context and syncs its state.
     void attachPunctuation(fcitx::InputContext *inputContext, Session &session);
     /// Pushes the decision layer's punctuation mode into one engine session.
+    ///
+    /// Only the switches the punctuation action governs: it is what the action
+    /// shows, so whoever owns the action must be the only writer.
     void applyModes(Session &session);
+    /// Pushes the schema switches that come from `settings.json` instead of from
+    /// a toolbar control.
+    ///
+    /// Applied unconditionally, unlike `applyModes`: `emoji` is ours even when
+    /// another addon registered the `punctuation` action first, and skipping it
+    /// there would make the setting silently do nothing.
+    void applyPreferences(Session &session);
+    /// Re-reads `settings.json` when it changed since the last read.
+    ///
+    /// The engine addon is loaded by Fcitx5 and has no settings watcher, so the
+    /// file's mtime is the notification. Called on activation and (throttled) on
+    /// the key path, because a composition can stay open across a settings
+    /// change: flipping a switch takes effect on the next key, not the next
+    /// login.
+    void refreshSettings();
     /// Mirrors `modes_` into the toolbar action.
     void refreshPunctuationAction();
     /// Toggles Chinese (full-width) vs ASCII (half-width) punctuation.
@@ -126,6 +146,20 @@ private:
     pinyin::Paths paths_;
     bool libraryReady_ = false;
     std::string startError_;
+    /// Schema switches owned by `settings.json` rather than by the toolbar.
+    ///
+    /// `emoji` is one: the wanxiang schema ships an emoji filter and reports its
+    /// state through its own panel, but the product-level switch lives in our
+    /// settings, so this is the value every session is told.
+    bool emojiCandidates_ = true;
+    bool settingsLoaded_ = false;
+    /// The first read is logged once: a default-on value leaves no other trace,
+    /// and "is the emoji switch even reaching librime" is the first question.
+    bool emojiLogged_ = false;
+    std::filesystem::file_time_type settingsStamp_{};
+    /// When the file was last stat'ed, so the per-keystroke check costs nothing
+    /// on a normal typing burst.
+    std::chrono::steady_clock::time_point settingsChecked_{};
 };
 
 } // namespace superior::fcitx5

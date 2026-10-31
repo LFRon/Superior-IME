@@ -24,6 +24,15 @@ struct Settings {
     /// all mid-composition — Shift stays a plain modifier, and Esc is the way to
     /// abandon the pinyin.
     bool shiftCommitPinyin = true;
+    /// Emoji candidates, produced by the schema's own `emoji` filter.
+    ///
+    /// On by default: the wanxiang schema ships that filter (a `simplifier@emoji`
+    /// over its emoji dictionary), so 哭 legitimately offers 😭 next to it, and a
+    /// user who does not want them can say so once. The value is pushed into
+    /// librime as the `emoji` switch, which is also what the schema's own state
+    /// panel toggles — the schema has no opinion about which one wins, so this
+    /// setting is the single writer.
+    bool emojiCandidates = true;
     bool showStatusBar = true;
     std::string statusPlacement = "bottomRight";
     double uiScale = 1.0;
