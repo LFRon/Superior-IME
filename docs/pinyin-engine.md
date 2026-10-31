@@ -144,6 +144,53 @@ patch:
 `activate` 时（以及确实需要重建会话时）会复制工具栏状态，所以切窗口不会让标点
 突然变回另一种宽度。状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
 
+## 表情候选（`emoji`）
+
+万象方案自带表情词表：`wanxiang_pure.schema.yaml` 的 `filters` 里有
+`simplifier@emoji`，`switches` 里有 `emoji`（`表情关`/`表情开`）。打开之后 librime
+会把表情当成**独立候选**返回，所以输入 `ku` 时列表里会同时出现 `哭` 和 `😭`：
+
+```text
+emoji=false → 库 苦 哭 酷 裤 枯
+emoji=true  → 库 苦 哭 😢 😭 酷      （实测，同一份词库）
+```
+
+这个开关默认**开**，唯一的所有者是 `settings.json` 的 `emojiCandidates`：
+
+| 项 | 位置 |
+|---|---|
+| 偏好 | `$XDG_CONFIG_HOME/superior-ime/settings.json` → `"emojiCandidates": true/false` |
+| 设置页 | 「拼音」卡片 → 「表情候选」 |
+| 下发 | `RimeInputMethod::applyModes()` 每次激活写一次 `setOption("emoji", …)` |
+| 热生效 | `refreshSettings()` 按 `settings.json` 的 mtime 重读，最多 200 ms 一次 |
+
+有两个细节值得记下：
+
+1. **方案自己也会记这个开关**。`default.yaml` 的 `switcher/save_options` 包含
+   `emoji`，所以 librime 会把状态存进 `user.yaml`。我们每次激活都显式写一遍，谁最后
+   写谁生效——这就是"设置文件是唯一所有者"的机制，不需要禁用方案的记忆功能。
+2. **切换后只影响下一个组合**。已经显示在屏幕上的候选列表是上一次按键算出来的，
+   不会凭空重排；再按一个键就正常了。
+
+### 彩色渲染：为什么要显式指定字体
+
+候选文字是纯文本，表情也是一段 UTF-8（例如 `😭` = `f0 9f 98 ad`）。Qt 会为缺字回退，
+但在装了多个 emoji 字体的桌面上，回退**不保证**落到彩色那一个。实测（同一段文本、
+同一个 10.5 pt 字号）：
+
+| 字体设置 | 画出来 |
+|---|---|
+| 只给系统默认族 | 单色轮廓（看起来像个"空框"） |
+| `setFamilies({默认族, "Noto Color Emoji"})` | 黄脸 `😭` |
+
+所以 `EmojiFont.{hpp,cpp}` 里有一张偏好表（`Noto Color Emoji` / `Apple Color Emoji`
+/ `Segoe UI Emoji` / …），`CandidateWindow::candidateFont()` 把**实际装有**的那一族
+追加到候选字体族列表末尾。注意测量与绘制必须用同一个 `QFontMetrics`，否则格子按没有
+表情的宽度算，表情会被裁掉——这也是两者共用一个 `candidateFont()` 的原因。
+
+没有装任何 emoji 字体时不会报错，候选照常显示，只是单色；日志里会有一条
+`no emoji font installed; emoji candidates will be monochrome`。
+
 ## 翻页
 
 `RimeApi::change_page()` 在 librime 1.17 里是空实现（返回 false，菜单不动）。
@@ -188,6 +235,8 @@ scripts/fetch-wanxiang-schema.sh --gram
   设置页；当前的「打错能纠正」来自 `cuoyin` 词库和 librime 自身。
 - `super-ime` 的 `Configurable=False`：还没有引擎专用的配置页。
 - 用户词典按方案名存放（`user/wanxiang_pure.userdb`），删除该目录即清空学习。
+- 表情候选只是"把方案自带的表情当成候选"，不做 emoji 搜索、不做分类联想；想要
+  `:smile` 这类输入法式表情，需要方案里另加 recognizer，本版没有。
 
 ## 许可
 
