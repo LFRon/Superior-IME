@@ -71,6 +71,14 @@ applied = uiScale × systemScale / toolkitDpr
 
 ## 4. 各平台怎么拿
 
+**源跟着窗口系统走，不跟着会话走。** `main.cpp` 用
+`QGuiApplication::platformName()` 决定：`xcb` 插件 → 读 X11 的声明；`wayland`
+插件 → 读合成器的声明。原因是一个实测过的反例：Treeland 在 125% 缩放下
+`wl_output.scale=2`（整数缓冲倍数），而桌面真正的缩放写在 `Xft.dpi=120` 里。
+浮层跑在 XWayland（`xcb`）时若去读 Wayland 的值，会算出
+`2.0 / 1.25 = 1.6`，工具栏高 73px；按窗口系统读 `Xft.dpi` 则是 45px ——后者才是
+用户看到的“跟系统一致”。
+
 ### X11（含 Wayland 会话下的 XWayland）
 
 `Xft.dpi` 是 X 桌面上事实标准的缩放声明：Xft、GTK、Qt 都读它，DDE/GNOME/KDE 的
@@ -138,4 +146,9 @@ xwininfo -name "Superior-IME Status" | grep -E 'Width|Height'
 - 桌面缩放只在启动时读取：改完缩放要注销重登（X11 的常规做法），或者至少执行
   `../restart-ime.sh` 重启 agent 与浮层。
 - 多屏不同缩放时取最大值，浮层固定在主屏右下角/用户拖到的位置，不做逐屏切换。
+- **原生 Wayland 下没有分数缩放**：`wl_output.scale` 是整数（本例为 2），
+  `wp_fractional_scale_v1` 是正确来源，但 Treeland 目前把 `preferred_scale` 也报成
+  `output->scale`，拿不到 125%。所以 Wayland 插件只适合整倍缩放；
+  分数缩放的桌面（包括 Deepin 的 125%）应让浮层跑在 XWayland 上，这正是
+  `docs/xwayland-ui.md` 的默认选择。
 - 系统缩放只影响本项目的浮层；Fcitx5 classicui 主题、其他输入法的外观不受影响。

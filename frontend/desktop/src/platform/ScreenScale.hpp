@@ -32,6 +32,19 @@ enum class ScaleSource {
     return "fallback";
 }
 
+/// Which window system the overlay's windows actually live on.
+///
+/// The scale source follows the **windows**, not the session: an overlay forced
+/// onto XWayland keeps X11 coordinates and X11 pixels, so the X server's own
+/// declaration is the only one that describes it. Reading the session's Wayland
+/// scale there made the toolbar 1.6x too tall on a 125 % Treeland desktop,
+/// because Treeland reports `wl_output.scale=2` for an output the desktop is
+/// really scaling by 1.25.
+enum class WindowSystem {
+    X11,
+    Wayland,
+};
+
 /// The desktop's own scale factor, as the platform reported it.
 struct SystemScale {
     /// 1.0 = 96 dpi / output scale 1. Never zero or negative.
@@ -90,13 +103,17 @@ struct SystemScale {
     return user * os / dpr;
 }
 
-/// Asks the running desktop for its scale factor.
+/// Asks the window system the overlay is running on for its scale factor.
 ///
 /// This is the only place that names a platform API for scaling; the windows
 /// never see anything but the resulting ratio (`setScale`). The platform
 /// modules behind it are compiled in when their library is available:
 /// `ScreenScaleX11.cpp` reads the X resource database over XCB, and
 /// `ScreenScaleWayland.cpp` reads `wl_output.scale` from the compositor.
-[[nodiscard]] SystemScale readSystemScale();
+///
+/// `system` comes from the Qt platform plugin in use, not from the session
+/// type: `QT_QPA_PLATFORM=xcb` inside a Wayland session means X11 windows with
+/// X11 pixels.
+[[nodiscard]] SystemScale readSystemScale(WindowSystem system);
 
 } // namespace superior::ui

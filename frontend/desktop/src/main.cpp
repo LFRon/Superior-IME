@@ -169,7 +169,15 @@ int main(int argc, char **argv) {
     // `scaleForWindows` divides by Qt's cached ratio, so the final size is
     // `system × uiScale` exactly once. The scale is read once: on X11 changing
     // it needs a logout, and the overlay restarts with the session.
-    const superior::ui::SystemScale systemScale = superior::ui::readSystemScale();
+    // The scale source follows the plugin Qt actually loaded: an overlay on
+    // XWayland has X11 windows and X11 pixels, and Treeland's `wl_output.scale`
+    // (2) does not describe them — the desktop there really scales by 1.25.
+    const superior::ui::WindowSystem windowSystem =
+        QGuiApplication::platformName().startsWith(QLatin1String("wayland"))
+            ? superior::ui::WindowSystem::Wayland
+            : superior::ui::WindowSystem::X11;
+    const superior::ui::SystemScale systemScale =
+        superior::ui::readSystemScale(windowSystem);
     double appliedScale = 1.0;
     const auto resolvedScale = [&]() {
         double dpr = 1.0;
