@@ -14,7 +14,8 @@
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 纯逻辑 | `backend/cloudpinyin/{Cloud,CloudState}.{hpp,cpp}` | URL 构造、响应解析、拼音规范化、LRU 缓存、错误预算 |
+| 纯逻辑 | `backend/cloudpinyin/{Cloud,CloudState}.{hpp,cpp}` | 请求构造（GET/POST）、响应解析、拼音规范化、LRU 缓存、错误预算 |
+| 纯逻辑 | `backend/cloudpinyin/{Match}.{hpp,cpp}` | 候选与输入是否对得上：音节对齐、字数核对、按输入类型选服务商（全是纯函数，可单测） |
 | 传输 | `backend/cloudpinyin/src/Fetcher.cpp` | libcurl `multi` + **独立工作线程**，请求/结果队列 |
 | 引擎适配 | `backend/platforms/fcitx5/src/SuperiorAgent.cpp` | 候选插入、结果回填、去重、提交 |
 | 界面 | `frontend/settings` | 开关与服务商选择 |
@@ -65,27 +66,96 @@ UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` �
 | 拼音规范化处理 `ü` | 引擎的 preedit 写 `lü`，服务商只认 `lv`；早期版本把整串判成"非拼音"直接跳过，于是所有带 ü 的词都没有云候选 |
 | 失败三次即暂停 60 秒，网络类错误一次顶三次 | 上游是十次错误 + 5 分钟冷却：用户看到的是"开了但没反应"，而且很难等回来 |
 | 只接受含中文的候选 | 纯 ASCII 的"候选"一定是解析错位（通常是拼音被原样返回），插进去毫无意义 |
-| 服务商可显式探测 | 百度接口已经失效，用户不该靠猜来判断是"没打开"还是"打不开" |
+| 候选要过"读法对不对得上输入"这一关 | 云端列表顺序不可靠：`yyds` 的第一条是拼音回显，`zhongguoren` 的第一条是同音词，按位置取会插进一个读音完全不同的词 |
+| 按输入类型选服务商 | 两个词库在两个方向上强弱相反（见 §4），一次请求拿到正确的那一家，比并发问两家再投票便宜 |
+| 服务商可显式探测 | 用户不该靠猜来判断是"没打开"还是"打不开"；`cloud probe` 现在连 `auto` 解析到哪一家一起打出来 |
 
 ---
 
-## 4. 服务商现状（2026-10 实测）
+## 4. 服务商（2026-11 实测）
 
-| 服务商 | 端点 | 状态 |
-|---|---|---|
-| `googlecn`（默认） | `www.google.cn/inputtools` | 可用，直连约 0.2 s，解析到国内 CDN |
-| `baidu` | `olime.baidu.com/py` | **失效**：任何输入都返回 `{"status":"F","errno":"19"}`，解析为"无候选" |
-| `sogou` | 无公开端点 | 占位，选中即跳过 |
+| 服务商 | 端点 / 形状 | 强项 | 弱项 |
+|---|---|---|---|
+| `sogou` | `shouji.sogou.com/web_ime/mobile.php`，**二进制 POST** | 完整拼音：`zhongguoren` → 中国人 | 简拼只给通用短语：`yyds` → 永远都是 |
+| `baidu` | `olimenew.baidu.com/py?inputtype=py&input=`，GET | 简拼：`yyds` → 永远的神、`zhrmghg` → 中华人民共和国 | 完整拼音会给同音词：`zhongguoren` → 中果人 |
+| `googlecn` | `www.google.cn/inputtools`，GET | 国内可直连，回答稳定 | 只有候选列表，没有音节信息 |
+| `auto`（默认） | 按输入类型分派 | 见下 | — |
 
-一条命令验证：
+**`auto` 的规则**：整音节输入（`nihao`、`zhongguoren`、`xi'an`）→ 搜狗；其余
+（`yyds`、`zhrmghg`、末音节没打完的 `yuanshenqd`）→ 百度。判断"是不是整音节"用的是
+一张音节表 + 分词，不猜、不联网。
+
+两个服务商在两个方向上的强弱是**实测**的，不是偏好问题：
+
+```text
+zhongguoren   百度: 中果人（同音）      搜狗: 中国人
+yyds          百度: 永远的神            搜狗: 永远都是
+zhrmghg       百度: 中华人民共和国      搜狗: 无结果
+```
+
+### 响应形状
+
+- **百度**：`{"status":"T","errno":"0","result":[[["你好",5,{"pinyin":"ni'hao"}],...]]}`。
+  数字是候选覆盖的读法长度；`pinyin` 字段直接给出音节边界。
+- **搜狗**：20 字节头（记录数在偏移 18，u16 LE），每条记录是
+  `u16 字长 | UTF-16LE 词 | u16 音节 id 字节数 | u16 位置字节数 | u16[] 累计位置 | 1 旗标`。
+  它**不发读音**，只发音节 id 和位置，所以读法是拿位置去切输入拼回来的。
+- **Google**：`["SUCCESS",[["nihao",["你好","拟好"],[],{...}]]]`，没有音节边界，
+  读法就是回显的那串，靠音节表分词。
+
+### 一条命令验证
 
 ```bash
-./build/linux-ui/tools/superior-config/superior_config_cli cloud probe --backend googlecn nihao
-# backend   : googlecn
+./build/linux-ui/tools/superior-config/superior_config_cli cloud probe --backend auto yyds
+# backend   : auto (resolved to baidu)
+# query     : yyds
+# endpoint  : https://olimenew.baidu.com/py?inputtype=py&input=yyds
 # http      : 200
-# candidate : 你好
+# candidate : 永远的神
 # verdict   : available
 ```
+
+`auto` 会把解析到的服务商一起打出来：结果不对劲时，第一个要看的就是这个。
+
+---
+
+## 4.1 候选与输入对不对得上
+
+云端返回的是一个**列表**，而且列表顺序不可靠：`yyds` 的第一条是拼音原样回显，
+`zhongguoren` 的第一条是同音词。所以不取第 0 条，而是逐条过一遍
+`usableCandidate()`，第一个通过的才用：
+
+| 关卡 | 拒绝什么 | 为什么 |
+|---|---|---|
+| 覆盖整段输入 | `jintianqhh` → 今天 | 剩下的输入没人解释 |
+| 读法能对齐输入 | 见下 | 对不上就是别的词的读音 |
+| 至少两个汉字、只有汉字 | 单字、中英混排、符号 | 单字本地必有；混排无法"一个音节一个字" |
+| 字数 == 音节数 | `gan'jing` → 干二净 | 同上 |
+
+**对齐**（`alignReading`）要求每个音节按顺序出现，可以只打前缀，合起来必须覆盖整段：
+
+```text
+nihao        ni'hao             → 完整
+yyds         yong'yuan'dou'shi  → 缩写（每个音节都出现了，只是打了前缀）
+jintianqhh   jin'tian'qu        → 对不上（少了一个音节）
+deepseek     de'e'pi'se'e'ka    → 对不上（元音开头的音节缺分隔符）
+```
+
+最后一条是故意的：`deepseek` 这种英文串按拼音切能切出一堆音节，但真正的拼音不会
+在没有分隔符的情况下让一个元音开头的音节跟在别的音节后面。所以 `xi'an` 必须带
+分隔符——`normalizeSegments()` 保留分隔符正是为了这个（`normalizePinyin()` 给 URL
+用的是去掉分隔符的版本）。
+
+搜狗的简拼结果**没有**可用读法（音节位置每段只有一个字母，那是首字母不是读音），
+所以它会被"读法能对齐"这一关拒掉。这是正确的：没有读法就无法验证，而没有验证的
+候选不值得占一格。`auto` 本来也不会把简拼交给搜狗。
+
+### 为什么不做多源投票
+
+微软拼音的做法是同时问两个词库，只采纳"至少两个词库都排在前两名"的词。那需要一个
+并行的 fan-out 和一套确认规则，而我们的传输层是单请求队列 —— 为一个候选把延迟翻倍
+不划算。按输入类型分派拿到了大部分收益（完整拼音走搜狗、简拼走百度），代价是一次
+请求。
 
 ---
 
@@ -164,7 +234,7 @@ commit observed bytes=3 ours=true                     ← 事件里已经读不�
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `cloudPinyinEnabled` | `false` | 总开关 |
-| `cloudPinyinBackend` | `"googlecn"` | `googlecn` / `baidu` / `sogou` |
+| `cloudPinyinBackend` | `"auto"` | `auto` / `sogou` / `baidu` / `googlecn` |
 | `cloudPinyinMinLength` | `2` | 少于这个长度不查 |
 | `cloudPinyinIndex` | `2` | 云端候选出现的位置（1 起） |
 
@@ -177,6 +247,10 @@ commit observed bytes=3 ours=true                     ← 事件里已经读不�
 - 云端候选上屏走 `commitString()`，**不进入引擎的用户词频学习**：我们没有引擎内部
   句柄，硬塞会有副作用。代价是选过的云端词不会因此提升引擎的权重——所以才有
   第 6 节那套自己的记录。
-- 只取服务商返回的**第一条**候选，不铺开整个列表：云端一次返回十几条会把本地
-  排序冲掉，而那正是本地语言模型更擅长的部分。
+- 只取服务商返回的**一条**候选（第一条通过校验的），不铺开整个列表：云端一次
+  返回十几条会把本地排序冲掉，而那正是本地语言模型更擅长的部分。
+- 不做跨源投票：那要并行 fan-out，为一个候选把延迟翻倍不划算（见 §4.1 末尾）。
+- 缓存只有容量上限（256 条），没有 TTL：同一拼音的云词几乎不会变，换服务商时整表
+  清空已经足够。上游按"完整/部分/空"分 30 分钟 / 60 秒 / 2 秒三档，是因为它的答案
+  综合了多个词库的投票，晚到的结果还可能回填；我们只有一个来源，重试没有新信息。
 - 不再有上游 `fcitx5-cloudpinyin` 共存的问题；占位符检测保留，用于识别列表里已有的云标记。
