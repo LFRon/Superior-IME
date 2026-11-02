@@ -208,6 +208,13 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
         }));
 
     handlers_.emplace_back(instance_->watchEvent(
+        fcitx::EventType::InputContextCommitString, fcitx::EventWatcherPhase::PostInputMethod,
+        [this](fcitx::Event &event) {
+            auto &commit = static_cast<fcitx::CommitStringEvent &>(event);
+            learnFromCommit(commit.inputContext(), commit.text());
+        }));
+
+    handlers_.emplace_back(instance_->watchEvent(
         fcitx::EventType::InputContextFocusIn, fcitx::EventWatcherPhase::PostInputMethod,
         [this](fcitx::Event &event) {
             auto *inputContext = static_cast<fcitx::InputContextEvent &>(event).inputContext();
@@ -359,6 +366,7 @@ SuperiorAgent::SuperiorAgent(fcitx::AddonManager *manager)
             shiftTaps_.erase(inputContext);
             ctrlTaps_.erase(inputContext);
             cloudContexts_.erase(inputContext);
+            composing_.erase(inputContext);
             if (cloudPendingContext_ == inputContext) {
                 cloudPendingContext_ = nullptr;
                 cloudPendingPinyin_.clear();
@@ -1020,6 +1028,10 @@ void SuperiorAgent::refresh(fcitx::InputContext *inputContext) {
     }
     activeContext_ = inputContext;
     outbox_.setDestination(api::SessionKey{epoch_, sessionFor(inputContext).key().context});
+    // Snapshot what is on screen, but only while something is. An empty preedit
+    // is how both "the user deleted the letters" and "a commit is in flight"
+    // look, and the second one still needs the pinyin — see `Composing`.
+    captureComposing(inputContext);
 
     refreshing_ = true;
     syncPanelOwnership(inputContext);
@@ -1461,29 +1473,51 @@ void SuperiorAgent::syncCloudCandidate(fcitx::InputContext *inputContext) {
     // ---------------------------------------------------------------- local
     //
     // A word this user already picked for this pinyin goes to the very front:
-    // that is what "the second time 原神 comes first" means. This part runs even
-    // with cloud pinyin switched off — it is local history, not a network
-    // feature.
+    // that is what "pick 握 once and the next `wo` offers it first" means. This
+    // part runs even with cloud pinyin switched off — it is local history, not a
+    // network feature.
     if (state.learnedIndex >= 0 && !slotHolds(state.learnedIndex, state.learnedText)) {
         // The engine rebuilt the list and our row is gone.
         state.learnedIndex = -1;
         state.learnedText.clear();
     }
     if (state.learnedIndex < 0) {
-        if (const auto preferred = config::preferredWord(learned_, state.pinyin);
-            preferred && !containsText(*preferred)) {
-            modifiable->insert(
-                0, std::make_unique<CloudCandidateWord>(
-                       fcitx::Text(*preferred), *preferred,
-                       [this](fcitx::InputContext *context, std::string_view text) {
-                           commitCloudText(context, text);
-                       }));
-            state.learnedIndex = 0;
-            state.learnedText = *preferred;
-            SUPERIOR_TRACE(diag::categories::Cloud)
-                .field("index", static_cast<std::int64_t>(0))
-                .field("length", static_cast<std::int64_t>(preferred->size()))
-                << "learned word promoted to the front";
+        if (const auto preferred = config::preferredWord(learned_, state.pinyin); preferred) {
+            // The engine's own row for this word moves to the front instead of
+            // being shadowed by a second copy. A plain "insert only if absent"
+            // cannot satisfy "the next `wo` shows 握 first": 握 is already in
+            // the list at index 1, so the insert was skipped and it stayed
+            // behind 我 forever.
+            int existing = -1;
+            const int total = modifiable->totalSize();
+            for (int index = 0; index < total; ++index) {
+                if (modifiable->candidateFromAll(index).text().toString() == *preferred) {
+                    existing = index;
+                    break;
+                }
+            }
+            if (existing == 0) {
+                // Already first: nothing to move, but remember that it is where
+                // the user wants it so this block is not re-entered every frame.
+                state.learnedIndex = 0;
+                state.learnedText = *preferred;
+            } else {
+                if (existing > 0) {
+                    modifiable->remove(existing);
+                }
+                modifiable->insert(
+                    0, std::make_unique<CloudCandidateWord>(
+                           fcitx::Text(*preferred), *preferred,
+                           [this](fcitx::InputContext *context, std::string_view text) {
+                               commitCloudText(context, text);
+                           }));
+                state.learnedIndex = 0;
+                state.learnedText = *preferred;
+                SUPERIOR_TRACE(diag::categories::Cloud)
+                    .field("from", static_cast<std::int64_t>(existing))
+                    .field("length", static_cast<std::int64_t>(preferred->size()))
+                    << "learned word promoted to the front";
+            }
         }
     }
 
@@ -1758,6 +1792,96 @@ void SuperiorAgent::dropCloudCandidate(fcitx::InputContext *inputContext) {
     state = CloudContext{};
 }
 
+void SuperiorAgent::rememberPick(std::string_view pinyin, std::string_view text) {
+    if (pinyin.empty() || text.empty()) {
+        return;
+    }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+    config::recordLearnedWord(learned_, std::string(pinyin), std::string(text), nowMs);
+    std::string error;
+    if (!config::saveLearning(config::defaultLearningPath(), learned_, error)) {
+        SUPERIOR_WARN(diag::categories::Cloud)
+            .field("error", error)
+            << "cannot persist the learning file";
+        return;
+    }
+    // Shape only, like every other log line here: the word itself is in the
+    // learning file, which is where someone debugging would look anyway.
+    SUPERIOR_DEBUG(diag::categories::Cloud)
+        .field("entries", static_cast<std::int64_t>(learned_.size()))
+        .field("pinyinLen", static_cast<std::int64_t>(pinyin.size()))
+        .field("wordLen", static_cast<std::int64_t>(text.size()))
+        << "pick remembered";
+}
+
+void SuperiorAgent::captureComposing(fcitx::InputContext *inputContext) {
+    if (inputContext == nullptr) {
+        return;
+    }
+    const auto &panel = inputContext->inputPanel();
+    const auto pinyin = cloudpinyin::normalizePinyin(panel.preedit().toString());
+    if (!pinyin) {
+        // Nothing on screen. Either the letters were deleted or a commit already
+        // cleared the engine's composition; either way the previous snapshot is
+        // the one a pending commit still needs.
+        return;
+    }
+    Composing &snapshot = composing_[inputContext];
+    if (snapshot.pinyin == *pinyin) {
+        // Keep the candidate list current across keystrokes, without rebuilding
+        // the string each time.
+        snapshot.candidates.clear();
+    } else {
+        snapshot = Composing{};
+        snapshot.pinyin = *pinyin;
+    }
+    if (const auto list = panel.candidateList()) {
+        const int total = list->size();
+        snapshot.candidates.reserve(static_cast<std::size_t>(total));
+        for (int index = 0; index < total; ++index) {
+            snapshot.candidates.push_back(list->candidate(index).text().toString());
+        }
+    }
+}
+
+void SuperiorAgent::learnFromCommit(fcitx::InputContext *inputContext, const std::string &text) {
+    if (text.empty() || inputContext == nullptr || !isOurs(inputContext)) {
+        return;
+    }
+    // The file is plain JSON, so a password field never reaches it.
+    // `PasswordOrSensitive` is both flags, and a field that claims either is off
+    // limits.
+    if (inputContext->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        return;
+    }
+
+    // The composition this commit belongs to: the panel is empty by now, so it
+    // comes from the snapshot taken while the composition was live.
+    const auto composing = composing_.find(inputContext);
+    if (composing == composing_.end() || composing->second.pinyin.empty()) {
+        return;
+    }
+    // Move out before erasing: the entry is the only owner, and a second commit
+    // (an application echoing our text) must not learn the same pick again.
+    std::string pinyin = std::move(composing->second.pinyin);
+    const std::vector<std::string> offered = std::move(composing->second.candidates);
+    composing_.erase(composing);
+
+    // `commit_code` style commits emit the letters themselves. Remembering those
+    // would put "ni" in the list as a candidate for `ni`.
+    if (pinyin == text) {
+        return;
+    }
+    // Only a row that was on screen counts as a pick: punctuation, an engine-side
+    // auto-commit or a speech fragment is not "this user wants this word here".
+    if (std::find(offered.begin(), offered.end(), text) == offered.end()) {
+        return;
+    }
+    rememberPick(pinyin, text);
+}
+
 void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::string_view text) {
     if (instance_ == nullptr || inputContext == nullptr || text.empty()) {
         return;
@@ -1783,24 +1907,10 @@ void SuperiorAgent::commitCloudText(fcitx::InputContext *inputContext, std::stri
     }
 
     // Remember the pick, so the next `yuanshen` offers 原神 first without a
-    // request. The engine cannot learn this one: we committed it, not rime.
-    if (!pinyin.empty()) {
-        const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::system_clock::now().time_since_epoch())
-                               .count();
-        config::recordLearnedWord(learned_, pinyin, std::string(text), nowMs);
-        std::string error;
-        if (!config::saveLearning(config::defaultLearningPath(), learned_, error)) {
-            SUPERIOR_WARN(diag::categories::Cloud)
-                .field("error", error)
-                << "cannot persist the learning file";
-        } else {
-            SUPERIOR_DEBUG(diag::categories::Cloud)
-                .field("entries", static_cast<std::int64_t>(learned_.size()))
-                .field("length", static_cast<std::int64_t>(text.size()))
-                << "learning updated";
-        }
-    }
+    // request. This path clears the composition before committing, so the
+    // commit event has no pinyin left to key on — recording it here is the only
+    // chance.
+    rememberPick(pinyin, text);
 
     if (const auto it = cloudContexts_.find(inputContext); it != cloudContexts_.end()) {
         it->second = CloudContext{};

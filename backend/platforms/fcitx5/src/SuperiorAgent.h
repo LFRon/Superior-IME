@@ -187,6 +187,23 @@ private:
     /// Commits a cloud candidate: drop the half-typed pinyin, then insert the
     /// text. Kept in one place so the policy cannot drift between call sites.
     void commitCloudText(fcitx::InputContext *inputContext, std::string_view text);
+    /// Records "for this pinyin the user picked this word" and persists it.
+    ///
+    /// One entry per pinyin: the table answers "what does this user want for
+    /// `wo`", not "how often did they type it".
+    void rememberPick(std::string_view pinyin, std::string_view text);
+    /// Snapshots the live composition (pinyin + visible candidates), or leaves
+    /// the previous snapshot alone when nothing is on screen.
+    void captureComposing(fcitx::InputContext *inputContext);
+    /// Learns from everything this input method commits.
+    ///
+    /// Wired to `InputContextCommitString`. The event itself cannot say which
+    /// pinyin produced the text — measured, the engine has already cleared its
+    /// composition by then — so it works off the snapshot `captureComposing()`
+    /// took while the composition was still on screen. Clicks on the rows we
+    /// inserted record in `commitCloudText` instead: that path clears the
+    /// composition *before* committing, so no snapshot survives to key on.
+    void learnFromCommit(fcitx::InputContext *inputContext, const std::string &text);
 
     /// Commits the candidate the user clicked. The id is re-validated against
     /// the live list, never trusted as an index.
@@ -222,12 +239,28 @@ private:
     std::map<fcitx::InputContext *, ModifierTap> ctrlTaps_;
     std::map<fcitx::InputContext *, PreeditOwnership> preeditOwnership_;
     std::map<fcitx::InputContext *, CloudContext> cloudContexts_;
-    /// What this user picked from a cloud candidate, in `$XDG_CONFIG_HOME`.
+    /// What this context has on screen right now, captured while it is there.
     ///
-    /// The engine already learns its own candidates (librime writes its userdb),
-    /// so the only gap is a word that did not exist locally: it is committed by
-    /// us, and the engine never saw it. Recording it here is what makes the
-    /// second `yuanshen` offer 原神 without asking the network again.
+    /// Measured, and not obvious: by the time `InputContextCommitString` arrives
+    /// the panel is *already empty* — `preedit=0`, no candidate list (the engine
+    /// clears its composition before the commit reaches us). Reading the pinyin
+    /// or the candidates inside the event therefore returns nothing, so both are
+    /// snapshotted on every refresh while a composition is live.
+    struct Composing {
+        std::string pinyin;
+        /// Candidate texts on the visible page. Used to tell "the user picked a
+        /// row" from punctuation or an engine-side commit: only a word that was
+        /// on screen counts as a choice.
+        std::vector<std::string> candidates;
+    };
+    std::map<fcitx::InputContext *, Composing> composing_;
+    /// What this user picked, per pinyin, in `$XDG_CONFIG_HOME`.
+    ///
+    /// Deliberately not "what the engine would also learn": librime's userdb
+    /// adjusts frequencies over many picks, so `wo` → 握 needed several choices
+    /// before 我 stopped being first. One pick is a decision here, and keeping
+    /// it ourselves is also the only way a word the engine never produced (a
+    /// cloud candidate) can come back without asking the network again.
     std::vector<config::LearnedWord> learned_;
 
     cloudpinyin::Fetcher cloudFetcher_;
