@@ -3,6 +3,7 @@ find_package(CURL 7.60 REQUIRED)
 add_library(superior_cloudpinyin STATIC
     src/Cloud.cpp
     src/CloudState.cpp
+    src/Match.cpp
     src/Fetcher.cpp)
 
 add_library(Superior::CloudPinyin ALIAS superior_cloudpinyin)

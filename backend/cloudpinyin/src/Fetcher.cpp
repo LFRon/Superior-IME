@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "superior/cloudpinyin/Match.hpp"
 #include "superior/diagnostics/Log.hpp"
 
 namespace superior::cloudpinyin {
@@ -51,7 +52,12 @@ std::size_t writeBody(char *data, std::size_t size, std::size_t count, void *use
 struct Fetcher::Transfer {
     CURL *easy = nullptr;
     std::string pinyin;
+    /// Response bytes.
     std::string body;
+    /// Request body, for the providers that want a POST. Kept alive until the
+    /// handle is removed: curl reads it for as long as the transfer runs.
+    std::string requestBody;
+    curl_slist *headers = nullptr;
     Backend backend = Backend::GoogleCn;
     std::uint64_t generation = 0;
 };
@@ -86,8 +92,10 @@ Fetcher::~Fetcher() {
 }
 
 bool Fetcher::submit(std::string pinyin, Backend backend) {
-    if (backend == Backend::Sogou) {
-        // No public endpoint: nothing to queue.
+    // `requestFor` is the only thing that knows whether a provider can be asked
+    // at all (Sogou needs a body, `Auto` needs a decision), so the check lives
+    // there instead of being duplicated as a list of "supported" providers.
+    if (!requestFor(backend, pinyin).ok()) {
         return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -133,14 +141,17 @@ void Fetcher::cancelAll() {
 
 bool Fetcher::startTransfer(void *multiPtr, const Request &request) {
     auto *multi = static_cast<CURLM *>(multiPtr);
-    const std::string url = requestUrl(request.backend, request.pinyin);
-    if (url.empty()) {
+    // `Auto` is resolved here, once: the result has to be parsed by the parser of
+    // the provider that actually answered, so the choice travels with the
+    // transfer instead of being re-derived at completion time.
+    const HttpRequest spec = requestFor(request.backend, request.pinyin);
+    if (!spec.ok()) {
         return false;
     }
 
     auto transfer = std::make_unique<Transfer>();
     transfer->pinyin = request.pinyin;
-    transfer->backend = request.backend;
+    transfer->backend = spec.backend;
     transfer->generation = request.generation;
     transfer->easy = curl_easy_init();
     if (transfer->easy == nullptr) {
@@ -149,7 +160,7 @@ bool Fetcher::startTransfer(void *multiPtr, const Request &request) {
 
     CURL *easy = transfer->easy;
     const bool configured =
-        curl_easy_setopt(easy, CURLOPT_URL, url.c_str()) == CURLE_OK &&
+        curl_easy_setopt(easy, CURLOPT_URL, spec.url.c_str()) == CURLE_OK &&
         curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, &writeBody) == CURLE_OK &&
         curl_easy_setopt(easy, CURLOPT_WRITEDATA, &transfer->body) == CURLE_OK &&
         curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(timeoutMs_)) == CURLE_OK &&
@@ -163,9 +174,27 @@ bool Fetcher::startTransfer(void *multiPtr, const Request &request) {
         curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
         curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, &xferInfo) == CURLE_OK &&
         curl_easy_setopt(easy, CURLOPT_XFERINFODATA, &abortRequested_) == CURLE_OK;
-    if (!configured || curl_multi_add_handle(multi, easy) != CURLM_OK) {
+    // Sogou only answers the mobile client's binary POST. Everything curl needs
+    // must stay alive until the transfer is removed, so the body and the header
+    // list live in `Transfer`.
+    bool posted = true;
+    if (configured && !spec.body.empty()) {
+        transfer->requestBody = spec.body;
+        transfer->headers = curl_slist_append(
+            transfer->headers, ("Content-Type: " + spec.contentType).c_str());
+        posted = transfer->headers != nullptr &&
+                 curl_easy_setopt(easy, CURLOPT_POST, 1L) == CURLE_OK &&
+                 curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE,
+                                  static_cast<long>(transfer->requestBody.size())) == CURLE_OK &&
+                 curl_easy_setopt(easy, CURLOPT_POSTFIELDS,
+                                  transfer->requestBody.data()) == CURLE_OK &&
+                 curl_easy_setopt(easy, CURLOPT_HTTPHEADER, transfer->headers) == CURLE_OK;
+    }
+    if (!configured || !posted || curl_multi_add_handle(multi, easy) != CURLM_OK) {
         curl_easy_cleanup(easy);
         transfer->easy = nullptr;
+        curl_slist_free_all(transfer->headers);
+        transfer->headers = nullptr;
         return false;
     }
 
@@ -205,6 +234,8 @@ void Fetcher::cancelTransfers(void *multiPtr) {
             curl_easy_cleanup(transfer->easy);
             transfer->easy = nullptr;
         }
+        curl_slist_free_all(transfer->headers);
+        transfer->headers = nullptr;
     }
     abortRequested_.store(false, std::memory_order_relaxed);
 }
@@ -314,11 +345,19 @@ void Fetcher::run() {
                 result.ok = result.httpCode == 200;
             }
             if (result.ok) {
-                if (const auto text = parseTopCandidate(transfer->backend, transfer->body)) {
+                // The provider's order is kept; the first entry that survives the
+                // match check wins. Verification happens here, on the worker, so
+                // the agent thread never walks a candidate list.
+                const auto segments = normalizeSegments(transfer->pinyin);
+                const auto proposals =
+                    parseCandidates(transfer->backend, transfer->pinyin, transfer->body);
+                if (const auto text = segments ? pickCandidate(*segments, proposals)
+                                               : std::nullopt) {
                     result.text = *text;
                 } else {
-                    // A 200 without a candidate is not an error: the provider simply
-                    // had nothing for this input. Keep it distinguishable in logs.
+                    // A 200 with nothing usable is not an error: the provider
+                    // simply had no word that matches this input. Keep it
+                    // distinguishable in the logs.
                     result.ok = false;
                 }
             }
@@ -333,6 +372,8 @@ void Fetcher::run() {
 
             curl_multi_remove_handle(multi, easy);
             curl_easy_cleanup(easy);
+            curl_slist_free_all(transfer->headers);
+            transfer->headers = nullptr;
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);

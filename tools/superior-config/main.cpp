@@ -224,14 +224,24 @@ int handleCloudProbe(const std::string &backendName, const std::string &pinyin) 
         return 2;
     }
 
-    std::cout << "backend   : " << cloudpinyin::backendName(*backend) << '\n';
+    const cloudpinyin::HttpRequest request = cloudpinyin::requestFor(*backend, *normalized);
+    std::cout << "backend   : " << cloudpinyin::backendName(*backend);
+    if (request.backend != *backend) {
+        // `auto` picks per query, and which provider answered is the first thing
+        // to know when a result looks wrong.
+        std::cout << " (resolved to " << cloudpinyin::backendName(request.backend) << ')';
+    }
+    std::cout << '\n';
     std::cout << "query     : " << *normalized << '\n';
-    const std::string url = cloudpinyin::requestUrl(*backend, *normalized);
-    if (url.empty()) {
-        std::cout << "endpoint  : (none) — this backend has no public endpoint\n";
+    if (!request.ok()) {
+        std::cout << "endpoint  : (none) — this backend has no endpoint for this input\n";
         return 1;
     }
-    std::cout << "endpoint  : " << url << '\n';
+    std::cout << "endpoint  : " << request.url << '\n';
+    if (!request.body.empty()) {
+        std::cout << "request   : POST " << request.body.size() << " bytes ("
+                  << request.contentType << ")\n";
+    }
 
     cloudpinyin::Fetcher fetcher(5000);
     if (!fetcher.submit(*normalized, *backend)) {
