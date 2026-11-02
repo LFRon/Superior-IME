@@ -1750,6 +1750,7 @@ void SuperiorAgent::applyCloudResult(fcitx::InputContext *inputContext,
     state.text = text;
     SUPERIOR_DEBUG(diag::categories::Cloud)
         .field("index", static_cast<std::int64_t>(insertAt))
+        .field("rows", static_cast<std::int64_t>(total))
         .field("length", static_cast<std::int64_t>(text.size()))
         << "cloud candidate inserted";
     // A cloud answer arrives outside any key event. Calling the host's

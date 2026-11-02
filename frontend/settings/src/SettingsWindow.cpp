@@ -159,9 +159,10 @@ struct CloudBackendChoice {
 /// `Settings`, so the list is restated here rather than pulling the networking
 /// module into the UI process.
 constexpr CloudBackendChoice kCloudBackends[] = {
+    {"auto", "自动（全拼用搜狗，简拼用百度）"},
+    {"sogou", "搜狗"},
+    {"baidu", "百度"},
     {"googlecn", "Google (google.cn)"},
-    {"baidu", "百度（接口失效）"},
-    {"sogou", "搜狗（暂不可用）"},
 };
 
 constexpr Placement kPlacements[] = {
@@ -515,11 +516,12 @@ QWidget *SettingsWindow::buildInputPage() {
                                     QString::fromUtf8(backend.value));
     }
     cloudCard->addWidget(
-        makeRow(tr("服务"), tr("百度接口目前失效，选择它会一直查不到结果"),
+        makeRow(tr("服务"), tr("自动按输入类型选服务：完整拼音用搜狗，简拼用百度"),
                 cloudBackendCombo_));
     cloudCard->addWidget(makeLabel(
-        tr("连续失败三次后会自动暂停一分钟，避免每次打字都去撞一个连不上的服务。"
-           "查到的结果会缓存，同一个词再打一次不再联网。"),
+        tr("云词只有在读法对得上输入时才显示：整句拼音、简拼（yyds）、末音节没打完"
+           "（yuanshenqd）都可以，只覆盖一部分输入的候选会被丢掉，单字与中英混排也会丢掉。"
+           "连续失败三次后会自动暂停一分钟；查到的结果会缓存，同一个词再打一次不再联网。"),
         "rowHint"));
 
     layout->addStretch();

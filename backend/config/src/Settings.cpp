@@ -110,10 +110,10 @@ SettingsLoad loadSettings(const fs::path &path) {
     // to throw away the rest of the file.
     settings.cloudPinyinMinLength = std::clamp(settings.cloudPinyinMinLength, 1, 32);
     settings.cloudPinyinIndex = std::clamp(settings.cloudPinyinIndex, 1, 9);
-    if (settings.cloudPinyinBackend != "googlecn" && settings.cloudPinyinBackend != "baidu" &&
-        settings.cloudPinyinBackend != "sogou") {
-        result.warnings.push_back("invalid cloudPinyinBackend, falling back to googlecn");
-        settings.cloudPinyinBackend = "googlecn";
+    if (settings.cloudPinyinBackend != "auto" && settings.cloudPinyinBackend != "googlecn" &&
+        settings.cloudPinyinBackend != "baidu" && settings.cloudPinyinBackend != "sogou") {
+        result.warnings.push_back("invalid cloudPinyinBackend, falling back to auto");
+        settings.cloudPinyinBackend = "auto";
     }
     static const std::vector<std::string> kLevels{"trace", "debug", "info", "warning", "error",
                                                   "off"};

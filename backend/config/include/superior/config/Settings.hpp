@@ -66,8 +66,10 @@ struct Settings {
     /// Cloud pinyin. Off by default: enabling it sends what you type to a third
     /// party, so it is an explicit choice, never a surprise.
     bool cloudPinyinEnabled = false;
-    /// `googlecn` / `baidu` / `sogou`; see `superior/cloudpinyin/Cloud.hpp`.
-    std::string cloudPinyinBackend = "googlecn";
+    /// `auto` / `googlecn` / `baidu` / `sogou`; see
+    /// `superior/cloudpinyin/Cloud.hpp`. `auto` routes per query, because the
+    /// two usable providers are good at opposite kinds of input.
+    std::string cloudPinyinBackend = "auto";
     /// Two characters is the floor: one letter matches far too much to be a
     /// useful candidate. Longer strings are debounced, not skipped.
     int cloudPinyinMinLength = 2;
