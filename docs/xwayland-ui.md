@@ -116,7 +116,7 @@ _NET_WM_STATE(ATOM) = _NET_WM_STATE_ABOVE
 
 ## 3. 为什么不会影响输入
 
-Superior 的后端是一个 **被动观察者**：
+Superior 的后端是一个 **宿主 + 内核**：
 
 | 约束 | 实现 |
 |---|---|
@@ -143,7 +143,7 @@ UI 进程崩溃、重启、卡住，都不会阻塞按键或提交；最坏情�
 Fcitx5 进程
   ├─ 拼音/Rime 引擎（原样）
   ├─ waylandim / xcb / xim 前端（原样，负责客户端预编辑）
-  └─ superioragent (Category=Module, 无 Qt)
+  └─ superiorpinyin (Category=InputMethod, 无 Qt)
         └─ Unix socket: $XDG_RUNTIME_DIR/superior-ime.sock
               └─ superior-ui (Qt, 自动选择 xcb)
                     ├─ 右下角状态栏（override-redirect）

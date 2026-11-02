@@ -32,7 +32,11 @@ backend/pinyin/                纯逻辑，不含 Qt / Fcitx5，可单测
   LibrimePort.{hpp,cpp}      dlopen + RimeApi 函数表；公共头不出现 rime_api.h
 
 backend/platforms/fcitx5/
-  RimeInputMethod.{h,cpp}    Fcitx5 适配层，一个 IC 一个 librime session
+  Fcitx5Addon.{h,cpp}        Fcitx5 宿主 + 组装根：按键翻译、文本、面板、场景
+  RimeComposer.{hpp,cpp}     api::Composer 实现：一个输入框一个 librime session
+  CandidatePipeline.{hpp,cpp} engine + learned + cloud 合成一页
+  LearningStore.{hpp,cpp}    选中即学习的持久化
+  CloudService.{hpp,cpp}     云去抖、请求、缓存、错误预算
 ```
 
 `backend/pinyin` 的公共头禁止包含 `rime_api.h` / `dlfcn.h`，也禁止 Qt/Fcitx5，
@@ -81,22 +85,24 @@ superior-config pinyin lookup nihao
 
 ## 候选与按键：为什么选中要绕过引擎
 
-云端词和学习词是 agent 插入到**可见列表**里的行，librime 根本不知道它们存在。
-如果数字键直接交给 librime，按 `2` 会选中引擎自己的第 2 个词，而不是屏幕上
-显示的第 2 行。
+云端词和学习词是 `CandidatePipeline` 合成到**可见页**里的行，librime 根本不知道
+它们存在。如果数字键直接交给 librime，按 `2` 会选中引擎自己的第 2 个词，而不是
+屏幕上显示的第 2 行。
 
-所以 `RimeInputMethod::keyEvent()` 先处理选择键：
+v3 的分工：
 
-- `1`–`9`、`0`：按**可见行**调用 `CandidateWord::select()`；
-- `Space`：选中当前高亮行；
-- `↑`/`↓`：只移动可见列表的光标；
-- 其他键：交给 librime。
+- 内核（`runtime::Runtime`）先识别选择/翻页键：
+  `1`–`9`/`0` → `Composer::select(row)`，`Space` → 选中高亮行，
+  `↑`/`↓` → `Composer::moveSelection()`，`+`/小键盘 `-` → `Composer::page()`；
+- `CandidatePipeline` 保存每一行的 `source` 与 `engineRow`：
+  - `Engine` 行：`engine.selectCandidate(engineRow)`，再取引擎真正产出的文本；
+  - `Learned`/`Cloud` 行：直接提交该文本；
+- 学习发生在 `select()` 里，pinyin 与最终文本都在手里，不依赖 commit 事件的快照；
+- 浮层点击和数字键走同一条 `select()` 路径，键盘和鼠标行为一致。
 
-引擎词保存的是 **librime 的索引**而不是行号，所以前面插入了学习词也不会错位。
-点击候选走同一条 `select()` 路径，键盘和鼠标行为一致。
-
-列表对象在候选集合不变时**复用**（比较 `builtTexts`），否则每次按键都重建，
-agent 插入的云端行会立刻消失。
+引擎行保存的是 **librime 当前页的行号**而不是合成后的行号，所以前面插入学习词
+或云端词也不会错位。候选页由 `CandidatePipeline` 重建，宿主不再比较
+`builtTexts`、也不再往 `fcitx::CandidateList` 里插行。
 
 ## 中英文切换：只有一个所有者
 
@@ -122,10 +128,9 @@ patch:
   再跑一次，否则旧部署里仍是 `commit_code`。
 - `default.custom.yaml` 属于内置引擎自己的数据目录，不要复制到
   `~/.config/fcitx5/rime`。
-- 运行期还有一道保险：`RimeInputMethod` 在 Shift/CapsLock 事件后如果发现
-  `ascii_mode` 被打开，会立即关掉并记一条 debug 日志；`RimeEngine::start` 也会
-  在会话开始时强制 `ascii_mode=false`。这是为了照顾还没来得及重新部署的数据目录，
-  不是替代上面的 patch。
+- `RimeEngine::start` 在会话开始时强制 `ascii_mode=false`；内核是语言模式的
+  唯一 owner，不会把 `Shift` 交给 librime 去翻转。`default.custom.yaml` 仍把
+  `Shift`/`CapsLock` 绑成 `noop`，是为了照顾还没来得及重新部署的数据目录。
 
 ## 标点全角/半角
 
@@ -134,15 +139,14 @@ patch:
 - `ascii_punct=false`（默认，中标/全角）：`,` → `，`、`.` → `。`；
 - `ascii_punct=true`（英标/半角）：`,` → `,`、`.` → `.`。
 
-`RimeInputMethod` 注册一个名为 `punctuation` 的 `SimpleAction`，agent 已有的
-`StatusMapping` 直接把它画成月牙/实心圆；点击时：
+标点宽度由内核的 `core::Modes` 唯一持有：
 
-1. 读取当前会话的 `ascii_punct` 并取反；
-2. 把这个值写入**所有**打开的 session（这个开关是方案级的，下一个窗口也必须一致）；
-3. 更新 action 的 checked/短文本/图标，触发 `StatusArea` 重绘。
+1. 点击状态栏的月牙/实心圆 → `runtime.command(ToggleStatusItem{"punctuation"})`；
+2. 内核 `togglePunctuation()`，再把 `ascii_punct` 下发给该会话的 composer；
+3. 宿主把 runtime 的状态项映射成 Fcitx5 tray action，并重绘状态区。
 
-`activate` 时（以及确实需要重建会话时）会复制工具栏状态，所以切窗口不会让标点
-突然变回另一种宽度。状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
+切窗口不会让标点突然变回另一种宽度：新建 composer 时内核会重新下发 `Modes`。
+状态目前不跨 Fcitx5 重启持久化：重启后回到方案默认的中标/全角。
 
 ## 表情候选（`emoji`）
 
@@ -161,8 +165,8 @@ emoji=true  → 库 苦 哭 😢 😭 酷      （实测，同一份词库）
 |---|---|
 | 偏好 | `$XDG_CONFIG_HOME/superior-ime/settings.json` → `"emojiCandidates": true/false` |
 | 设置页 | 「拼音」卡片 → 「表情候选」 |
-| 下发 | `RimeInputMethod::applyModes()` 每次激活写一次 `setOption("emoji", …)` |
-| 热生效 | `refreshSettings()` 按 `settings.json` 的 mtime 重读，最多 200 ms 一次 |
+| 下发 | `runtime::Runtime::applyPreferences()` 在创建/激活会话时写一次 `setOption("emoji", …)` |
+| 热生效 | 内核 `reloadSettings()` 按 `settings.json` 的 mtime 重读，最多 200 ms 一次 |
 
 有两个细节值得记下：
 

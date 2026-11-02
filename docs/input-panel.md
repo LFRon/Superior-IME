@@ -32,7 +32,7 @@ if (ic->inputPanel().customInputPanelCallback()) {
 
 ## 我们的实现
 
-`backend/platforms/fcitx5/src/SuperiorAgent.cpp`：
+`backend/platforms/fcitx5/src/Fcitx5Addon.cpp`：
 
 ```cpp
 if (instance_->inputMethod(ic) == "super-ime") {
@@ -90,7 +90,7 @@ if (instance_->inputMethod(ic) == "super-ime") {
 （有 client preedit）里就会长得不一样：VSCode 把 `ni hao` 画进编辑器，我们的窗口
 只剩候选行。
 
-做法（`SuperiorAgent::takePreeditOwnership`）：
+做法（`Fcitx5Addon::takePreeditOwnership`）：
 
 1. 接管面板时取走当前上下文的 `Preedit` capability → 引擎改走 `No` 分支，
    组合文本进 `InputPanel::preedit`；
@@ -214,7 +214,7 @@ Fcitx 标点模块只翻图标、不暴露 checked，所以两种来源都要认
 | 显示工具栏 | `superior-toolbar` | `settings.json: showStatusBar` | 写回该键 |
 | 语音输入 | `superior-speech` | `core::SpeechState::visible()` | 开关语音面板 |
 
-`SuperiorAgent::registerTrayActions()` 在启动时注册这两个 checkable action，
+`Fcitx5Addon::registerActions()` 在启动时注册这两个 checkable action，
 `attachTrayActions()` 在 `refresh()` 里把它们挂到**属于我们的**上下文上——别的
 输入法的托盘菜单不该出现我们的开关。
 

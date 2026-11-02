@@ -50,7 +50,13 @@ void SpeechController::setEnabled(bool enabled) {
     }
     enabled_ = enabled;
     if (!enabled_) {
+        // Hiding the panel is not enough: the child process owns the
+        // microphone, so a live session has to be cancelled as well.
+        if (state_.busy()) {
+            cancel("feature disabled");
+        }
         state_.hide();
+        repaint();
     }
 }
 

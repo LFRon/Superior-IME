@@ -3,30 +3,12 @@
 
 #include <cstdint>
 
+#include "superior/api/Key.hpp"
 #include "superior/core/KeyCode.hpp"
 
 namespace superior::core {
 
-/// One key press, already stripped of toolkit types *and* of platform values.
-///
-/// `text` is the single source of "this key produces something the user can
-/// see". It used to be a separate `printable` flag computed by the adapter from
-/// the same helper, which meant two fields could disagree; now there is one.
-///
-/// A non-zero `text` is what inline English commits and what starts a new
-/// composition. The adapter fills it only for keys whose text it can actually
-/// produce (`InlineText.cpp` covers printable ASCII), so an unknown layout key
-/// arrives with `text == 0` and is forwarded untouched — same behaviour as
-/// before, with one field fewer to get wrong.
-struct KeyPress {
-    KeyCode code = KeyCode::Other;
-    char32_t text = 0;
-    bool shift = false;
-    bool control = false;
-    bool alt = false;
-    bool super = false;
-    bool release = false;
-};
+using api::KeyPress;
 
 /// What the decision layer wants to happen with a key.
 enum class KeyIntent {
@@ -84,21 +66,7 @@ struct KeyPolicyInput {
 /// text support.
 [[nodiscard]] bool isEditingKey(KeyCode code) noexcept;
 
-/// A gesture the platform's input layer recognised: a *translated* fact, not a
-/// decision (`dtd §6.1` — the gate translates, it does not decide).
-///
-/// A "tap" is press+release with nothing in between; detecting it needs raw
-/// event timing, so it stays in the adapter. What a tap *means* is a product
-/// rule, and it lives here so Windows and Android cannot invent their own.
-enum class Gesture {
-    None,
-    /// Bare Shift press+release.
-    ShiftTap,
-    /// Bare right-Ctrl press+release.
-    RightCtrlTap,
-    /// Escape pressed while the microphone is live.
-    EscapeWhileSpeaking,
-};
+using api::Gesture;
 
 /// What the decision layer wants the gesture to do.
 enum class GestureIntent {

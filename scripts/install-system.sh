@@ -47,8 +47,8 @@ libdir="$(sed -n 's/^CMAKE_INSTALL_LIBDIR:PATH=//p' "$build/CMakeCache.txt")"
 echo "install-system:"
 echo "  prefix : $prefix"
 echo "  libdir : $libdir"
-echo "  addon  : $prefix/$libdir/fcitx5/libsuperioragent.so"
-echo "  config : $prefix/share/fcitx5/addon/superioragent.conf"
+echo "  addon  : $prefix/$libdir/fcitx5/libsuperiorpinyin.so"
+echo "  config : $prefix/share/fcitx5/addon/superiorpinyin.conf"
 echo "  binary : $prefix/bin/superior_ui"
 
 if (( dry_run )); then

@@ -17,12 +17,13 @@
 | 纯逻辑 | `backend/cloudpinyin/{Cloud,CloudState}.{hpp,cpp}` | 请求构造（GET/POST）、响应解析、拼音规范化、LRU 缓存、错误预算 |
 | 纯逻辑 | `backend/cloudpinyin/{Match}.{hpp,cpp}` | 候选与输入是否对得上：音节对齐、字数核对、按输入类型选服务商（全是纯函数，可单测） |
 | 传输 | `backend/cloudpinyin/src/Fetcher.cpp` | libcurl `multi` + **独立工作线程**，请求/结果队列 |
-| 引擎适配 | `backend/platforms/fcitx5/src/SuperiorAgent.cpp` | 候选插入、结果回填、去重、提交 |
+| 候选合成 | `backend/pinyin/src/CandidatePipeline.cpp` | engine + learned + cloud 合成一页、去重、位置 |
+| 引擎适配 | `backend/pinyin/src/RimeComposer.cpp` | 云去抖、结果回填、选中即学习 |
 | 界面 | `frontend/settings` | 开关与服务商选择 |
 | 诊断 | `superior-config cloud probe` | 一条命令判断当前网络能不能用 |
 
 UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` 的四个字段，
-网络全部发生在 agent 里。
+网络全部发生在拼音能力包（`CloudService`）里。宿主不链接云模块，也不参与候选插入。
 
 ---
 
@@ -57,7 +58,7 @@ UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` �
 
 | 差异 | 原因 |
 |---|---|
-| **独立工作线程** + 请求/结果队列 | 同步解析 DNS 或等待 TLS 握手会把 Fcitx5 主循环卡住；agent 是共享库，Fcitx5 会 `dlclose`，所以 `Fetcher` 的析构必须停止并 `join` 工作线程，不能让线程活过卸载（浮层回收线程踩过同一个坑） |
+| **独立工作线程** + 请求/结果队列 | 同步解析 DNS 或等待 TLS 握手会把 Fcitx5 主循环卡住；宿主是共享库，Fcitx5 会 `dlclose`，所以 `Fetcher` 的析构必须停止并 `join` 工作线程，不能让线程活过卸载（浮层回收线程踩过同一个坑） |
 | 40 ms 事件定时器每次回调都 `setNextInterval()` | Fcitx5 的 `addTimeEvent` 是**单次**时间源，第三个参数是精度不是周期。只靠重复 `setEnabled(true)` 续命会把 deadline 留在过去，sd-event 就会在云请求期间反复回调、饿死 XCB/XIM（Telegram 按键约 200 ms 才到一个） |
 | **不插占位符**，结果到了才插入 | 占位符会把你要按的第 2 位换成云朵，并把它后面所有候选挤后一格 |
 | 状态以「拼音」而不是「列表指针」为身份 | 引擎可能原地重建列表内容，指针不变；只认指针会让过期的插入位置指向真实候选，云端候选直接消失 |
@@ -210,20 +211,27 @@ $XDG_CONFIG_HOME/superior-ime/pinyin/learning.json   # 默认 ~/.config/superior
 查询只是"发现新词"的途径。早期版本把整段逻辑塞在 `if (cloudEnabled_)` 里面，导致
 关掉云拼音就把用户积累的偏好一起废掉了。
 
-### 为什么要在"组合还活着"的时候快照
+### 为什么学习发生在 select() 里
 
-抓取点不是 `commitString` 的当下，而是每次 `refresh()` 里、组合还在屏幕上时。这是
-实测出来的：`InputContextCommitString` 到达时，引擎已经把自己的组合清空了——
+v2 曾在 `InputContextCommitString` 事件里学习，实测发现事件到达时引擎已经把自己的
+组合清空了——`preedit=0`、`candidateList()` 也没了。于是 v2 只能在组合可见时
+快照 `{pinyin, candidates}`，再用文本比对判断「用户是不是选了屏幕上的词」。这个
+快照有时序 bug，而且只对 Fcitx5 有效。
+
+v3 把学习放回它本来该在的位置：`Composer::select(row)`。
 
 ```text
-composing pinyin captured panelPreedit=1 stored=1     ← 输入 w 时
-composing pinyin captured panelPreedit=0 stored=0     ← 按下选择键之后、commit 之前
-commit observed bytes=3 ours=true                     ← 事件里已经读不到拼音
+select(row)
+  ├─ pipeline.selectionAt(row) → { source=Engine, engineRow=N } 或 { source=Learned/Cloud, text }
+  ├─ Engine: engine.selectCandidate(N) → takeCommit() → 引擎真正产出的文本
+  ├─ Learned/Cloud: 直接提交该文本
+  ├─ LearningStore.record(normalizedPinyin, commit)
+  └─ pipeline.rebuild()
 ```
 
-所以 `Composing{pinyin, candidates}` 快照在组合可见时做，commit 时取用后即销毁；
-"这个词当时在候选里"也来自同一份快照（事件里的 `candidateList()` 同样已经没了）。
-没有这条快照，"用户选了什么"在事件里根本无从得知。
+pinyin 和最终文本都在手里，不需要快照、不需要事件、也不需要判断「这个词当时在
+不在候选里」。由 `processKey` 产生的提交（标点、空格上屏）不学习，因为用户没有选词。
+这条规则在 Fcitx5、TSF、Android 上完全一致。
 
 ---
 
@@ -237,6 +245,9 @@ commit observed bytes=3 ours=true                     ← 事件里已经读不�
 | `cloudPinyinBackend` | `"auto"` | `auto` / `sogou` / `baidu` / `googlecn` |
 | `cloudPinyinMinLength` | `2` | 少于这个长度不查 |
 | `cloudPinyinIndex` | `2` | 云端候选出现的位置（1 起） |
+
+运行时把这四个值折成 `api::PipelineOptions`，通过 `Composer::setOptions()` 推给
+现有会话；改设置后不需要重建输入框，也不会留下第二份会过期的设置。
 
 改动 500 ms 内生效，不需要重启。
 

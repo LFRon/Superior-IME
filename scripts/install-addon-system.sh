@@ -2,9 +2,8 @@
 # Installs the Fcitx5 pieces into the system directories.
 #
 # Three different things are installed:
-#   1. superioragent  - Category=Module observer addon (not an input method)
-#   2. superiorpinyin   - Category=InputMethod engine addon (bundled librime)
-#   3. super-ime.conf - the only input method entry, bound to superiorpinyin;
+#   1. superiorpinyin - one Category=InputMethod addon: host + runtime + engine
+#   2. super-ime.conf - the only input method entry, bound to superiorpinyin;
 #                       the file name is the unique name ("super-ime")
 #
 # Requires root. Nothing is restarted automatically.
@@ -30,10 +29,8 @@ done
 
 build="$root/build/$preset"
 
-so="$(find "$build" -name 'libsuperioragent.so' -print -quit 2>/dev/null || true)"
-addon_conf="$(find "$build" -name 'superioragent.conf' -print -quit 2>/dev/null || true)"
-rime_so="$(find "$build" -name 'libsuperiorpinyin.so' -print -quit 2>/dev/null || true)"
-rime_addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/dev/null || true)"
+so="$(find "$build" -name 'libsuperiorpinyin.so' -print -quit 2>/dev/null || true)"
+addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/dev/null || true)"
 entry_conf="$(find "$build" -name 'super-ime.conf' -print -quit 2>/dev/null || true)"
 icon="$root/backend/platforms/fcitx5/data/icons/org.superior.ime.svg"
 
@@ -52,10 +49,8 @@ inputmethod_dir="${SUPERIOR_FCITX5_INPUTMETHOD_DIR:-/usr/share/fcitx5/inputmetho
 icon_dir="${SUPERIOR_ICON_DIR:-/usr/share/icons/hicolor/scalable/apps}"
 
 echo "install-addon-system:"
-echo "  $so -> $addon_dir/libsuperioragent.so"
-echo "  $addon_conf -> $data_dir/superioragent.conf"
-echo "  $rime_so -> $addon_dir/libsuperiorpinyin.so"
-echo "  $rime_addon_conf -> $data_dir/superiorpinyin.conf"
+echo "  $so -> $addon_dir/libsuperiorpinyin.so"
+echo "  $addon_conf -> $data_dir/superiorpinyin.conf"
 echo "  $entry_conf -> $inputmethod_dir/super-ime.conf"
 echo "  $icon -> $icon_dir/org.superior.ime.svg"
 
@@ -64,10 +59,10 @@ if (( dry_run )); then
     exit 0
 fi
 
-sudo install -Dm755 "$so" "$addon_dir/libsuperioragent.so"
-sudo install -Dm644 "$addon_conf" "$data_dir/superioragent.conf"
-sudo install -Dm755 "$rime_so" "$addon_dir/libsuperiorpinyin.so"
-sudo install -Dm644 "$rime_addon_conf" "$data_dir/superiorpinyin.conf"
+sudo install -Dm755 "$so" "$addon_dir/libsuperiorpinyin.so"
+sudo install -Dm644 "$addon_conf" "$data_dir/superiorpinyin.conf"
+sudo rm -f "$addon_dir/libsuperioragent.so" "$data_dir/superioragent.conf" \
+           "$addon_dir/libsuperiorrime.so" "$data_dir/superiorrime.conf"
 sudo install -Dm644 "$entry_conf" "$inputmethod_dir/super-ime.conf"
 sudo install -Dm644 "$icon" "$icon_dir/org.superior.ime.svg"
 

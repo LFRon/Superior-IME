@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "superior/api/SpeechCapability.hpp"
 #include "superior/core/SpeechState.hpp"
 #include "superior/speech_recognition/Layout.hpp"
 
@@ -17,23 +18,7 @@ class TextOutbox;
 
 namespace superior::fcitx5 {
 
-/// The recogniser child, as the controller sees it.
-///
-/// Only four things ever happen to it: start it, ask whether it is alive, write
-/// one command line, stop it. `SpeechProcess` is the real implementation; the
-/// tests use a fake, which is the whole point of the interface — the panel's
-/// state machine is not allowed to depend on a spawned model.
-class SpeechCapability {
-public:
-    using LineHandler = std::function<void(std::string_view)>;
-
-    virtual ~SpeechCapability() = default;
-
-    [[nodiscard]] virtual bool running() const = 0;
-    virtual bool start(LineHandler handler, std::string &error) = 0;
-    virtual bool send(std::string_view line) = 0;
-    virtual void stop() = 0;
-};
+using SpeechCapability = api::SpeechCapability;
 
 /// The speech panel's decision layer, plus the capability it needs.
 ///
@@ -72,7 +57,7 @@ public:
         /// Repaints whatever shows speech state; called after every transition.
         std::function<void()> repaint;
         /// Creates the recogniser child on first use.
-        std::function<std::unique_ptr<SpeechCapability>()> createCapability;
+        std::function<std::unique_ptr<api::SpeechCapability>()> createCapability;
         /// Monotonic milliseconds, for "how long has this been in this state".
         std::function<std::uint64_t()> nowMs;
         Layout layout;

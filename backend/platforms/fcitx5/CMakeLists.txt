@@ -56,59 +56,32 @@ if(SUPERIOR_ENABLE_FCITX5)
     target_compile_features(superior_fcitx5_speech PUBLIC cxx_std_20)
     superior_set_warnings(superior_fcitx5_speech)
 
-    add_library(superior_fcitx5_agent MODULE
+    # One addon per host process: it is both the input method engine and the
+    # runtime's host. Keeping two addons made the candidate list an implicit,
+    # untyped channel between them (the v2 `CloudContext` hacks). One addon
+    # means one composition owner.
+    add_library(superior_fcitx5_pinyin MODULE
+        src/Fcitx5Addon.cpp
         src/OverlayController.cpp
         src/SpeechProcess.cpp
-        src/SuperiorAgent.cpp
         src/TextSession.cpp)
-
-    target_include_directories(superior_fcitx5_agent PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
-
-    target_link_libraries(superior_fcitx5_agent PRIVATE
-        Fcitx5::Core
-        Superior::Fcitx5Mapping
-        Superior::Fcitx5Speech
-        Superior::SpeechRecognition
-        Superior::Protocol
-        Superior::Config
-        Superior::CloudPinyin
-        Superior::Paths
-        Superior::Diagnostics
-        nlohmann_json::nlohmann_json)
-
-    set_target_properties(superior_fcitx5_agent PROPERTIES
-        OUTPUT_NAME superioragent)
-
-    target_compile_features(superior_fcitx5_agent PRIVATE cxx_std_20)
-    superior_set_warnings(superior_fcitx5_agent)
-
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/data/superioragent.conf.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/superioragent.conf"
-        @ONLY)
-
-    # librime engine. A separate addon library, so a machine without librime
-    # still loads the agent and Fcitx5 reports what is missing instead of failing
-    # the whole addon tree.
-    add_library(superior_fcitx5_pinyin MODULE
-        src/RimeInputMethod.cpp)
 
     target_include_directories(superior_fcitx5_pinyin PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
     target_link_libraries(superior_fcitx5_pinyin PRIVATE
         Fcitx5::Core
-        Superior::Core
-        # `emojiCandidates` and the rest of `settings.json`. The engine addon
-        # reads the file itself (there is no watcher to piggyback on), so it needs
-        # the same parser the agent uses.
-        Superior::Config
-        # The keysym -> KeyCode table lives with the other Fcitx5 translations,
-        # so both addons agree on what a key means.
         Superior::Fcitx5Mapping
+        Superior::Fcitx5Speech
+        Superior::Runtime
         Superior::Pinyin
-        Superior::Diagnostics)
+        Superior::CloudPinyin
+        Superior::Config
+        Superior::Protocol
+        Superior::SpeechRecognition
+        Superior::Paths
+        Superior::Diagnostics
+        nlohmann_json::nlohmann_json)
 
     set_target_properties(superior_fcitx5_pinyin PROPERTIES
         OUTPUT_NAME superiorpinyin)
@@ -128,10 +101,9 @@ if(SUPERIOR_ENABLE_FCITX5)
         "${CMAKE_CURRENT_BINARY_DIR}/super-ime.conf"
         COPYONLY)
 
-    install(TARGETS superior_fcitx5_agent superior_fcitx5_pinyin
+    install(TARGETS superior_fcitx5_pinyin
         LIBRARY DESTINATION "${SUPERIOR_FCITX5_ADDON_DIR}")
     install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/superioragent.conf"
         "${CMAKE_CURRENT_BINARY_DIR}/superiorpinyin.conf"
         DESTINATION "${SUPERIOR_FCITX5_DATA_DIR}")
 

@@ -225,6 +225,45 @@ target_include_directories(superior_scene_input_tests PRIVATE "${CMAKE_CURRENT_S
 target_compile_features(superior_scene_input_tests PRIVATE cxx_std_20)
 superior_set_warnings(superior_scene_input_tests)
 
+add_executable(superior_candidate_pipeline_tests candidate_pipeline_tests.cpp)
+target_link_libraries(superior_candidate_pipeline_tests PRIVATE
+    Superior::Pinyin
+    Superior::Config)
+target_include_directories(superior_candidate_pipeline_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_candidate_pipeline_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_candidate_pipeline_tests)
+
+add_executable(superior_learning_store_tests learning_store_tests.cpp)
+target_link_libraries(superior_learning_store_tests PRIVATE
+    Superior::Pinyin
+    Superior::Config)
+target_include_directories(superior_learning_store_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_learning_store_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_learning_store_tests)
+
+add_executable(superior_rime_composer_tests rime_composer_tests.cpp)
+target_link_libraries(superior_rime_composer_tests PRIVATE
+    Superior::Pinyin
+    Superior::CloudPinyin
+    Superior::Config)
+target_include_directories(superior_rime_composer_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_rime_composer_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_rime_composer_tests)
+
+add_executable(superior_rime_keys_tests rime_keys_tests.cpp)
+target_link_libraries(superior_rime_keys_tests PRIVATE Superior::Pinyin)
+target_include_directories(superior_rime_keys_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_rime_keys_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_rime_keys_tests)
+
+add_executable(superior_runtime_tests runtime_tests.cpp)
+target_link_libraries(superior_runtime_tests PRIVATE
+    Superior::Runtime
+    Superior::PlatformStub)
+target_include_directories(superior_runtime_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(superior_runtime_tests PRIVATE cxx_std_20)
+superior_set_warnings(superior_runtime_tests)
+
 add_executable(superior_pinyin_layout_tests pinyin_layout_tests.cpp)
 target_link_libraries(superior_pinyin_layout_tests PRIVATE Superior::Pinyin)
 target_include_directories(superior_pinyin_layout_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -325,6 +364,11 @@ add_test(NAME key-policy COMMAND superior_key_policy_tests)
 add_test(NAME text-outbox COMMAND superior_text_outbox_tests)
 add_test(NAME paths COMMAND superior_paths_tests)
 add_test(NAME scene-input COMMAND superior_scene_input_tests)
+add_test(NAME candidate-pipeline COMMAND superior_candidate_pipeline_tests)
+add_test(NAME learning-store COMMAND superior_learning_store_tests)
+add_test(NAME rime-composer COMMAND superior_rime_composer_tests)
+add_test(NAME rime-keys COMMAND superior_rime_keys_tests)
+add_test(NAME runtime COMMAND superior_runtime_tests)
 add_test(NAME pinyin-layout COMMAND superior_pinyin_layout_tests)
 add_test(NAME golden-pinyin
     COMMAND superior_golden_pinyin_tests "${PROJECT_SOURCE_DIR}/tests/golden/pinyin.txt")

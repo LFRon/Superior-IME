@@ -27,6 +27,26 @@ scan() {
         \( -name '*.h' -o -name '*.hpp' -o -name '*.cpp' -o -name '*.cc' \) -print0)
 }
 
+# Same as `scan`, but skips paths matching a regex. Used for the one file per
+# host that is allowed to be the composition root.
+scan_except() {
+    local dir="$1" pattern="$2" label="$3" skip="$4"
+    local path="$root/$dir"
+    [[ -d "$path" ]] || return 0
+    while IFS= read -r -d '' file; do
+        if [[ "$file" =~ $skip ]]; then
+            continue
+        fi
+        checked=$((checked + 1))
+        if grep -nE -- "$pattern" "$file" >/dev/null 2>&1; then
+            echo "boundary violation [$label]: ${file#"$root/"}" >&2
+            grep -nE -- "$pattern" "$file" >&2
+            fail=1
+        fi
+    done < <(find "$path" -type f \
+        \( -name '*.h' -o -name '*.hpp' -o -name '*.cpp' -o -name '*.cc' \) -print0)
+}
+
 # The UI must not reach the engine, the runtime, or the framework adapter.
 # Pure data modules (api, skin, config, theme, protocol) are allowed.
 scan "frontend" 'superior/(core|runtime|platforms)/' "frontend -> backend internals"
@@ -35,11 +55,12 @@ scan "frontend" '#include[[:space:]]*[<"]fcitx' "frontend -> fcitx5"
 scan "frontend" '#include[[:space:]]*[<"]Fcitx5' "frontend -> fcitx5"
 
 # Contracts must not depend on an implementation.
-scan "backend/api" '#include[[:space:]]*[<"]superior/(core|runtime|skin|config|theme)/' "api -> implementation"
+scan "backend/api" '#include[[:space:]]*[<"](superior/(core|runtime|skin|config|theme|pinyin|cloudpinyin|speech-recognition|platforms)/|fcitx)' "api -> implementation"
 scan "backend/api" '#include[[:space:]]*[<"]fcitx' "api -> fcitx5"
 
 # Core logic must stay platform- and clock-free.
 scan "backend/core" '#include[[:space:]]*[<"](Q|Qt)' "core -> Qt"
+scan "backend/core" '#include[[:space:]]*[<"](superior/(runtime|platforms)/|fcitx)' "core -> runtime/platform"
 scan "backend/core" '#include[[:space:]]*[<"]fcitx' "core -> fcitx5"
 scan "backend/core" 'std::chrono::(system_clock|steady_clock)' "core -> wall clock"
 scan "backend/core" 'std::this_thread::sleep' "core -> blocking sleep"
@@ -80,12 +101,14 @@ scan "backend/skin" '\bQImage\b|\bQPixmap\b|\bQPainter\b' "skin -> pixel decodin
 # Cloud pinyin is transport + parsing only: it must not know about the framework
 # or the UI toolkit, otherwise it cannot be unit tested or reused on Windows.
 scan "backend/cloudpinyin" '#include[[:space:]]*[<"](Q|Qt)' "cloudpinyin -> Qt"
+scan "backend/cloudpinyin" '#include[[:space:]]*[<"](platforms|fcitx)' "cloudpinyin -> platform"
 scan "backend/cloudpinyin" '#include[[:space:]]*[<"]fcitx' "cloudpinyin -> fcitx5"
 
 # The Rime engine must stay free of any toolkit and of Fcitx5: it is the piece
 # that has to be reusable on Windows/Android later. librime itself is reached
 # only through a port, and only in a .cpp file.
 scan "backend/pinyin" '#include[[:space:]]*[<"](Q|Qt)' "pinyin -> Qt"
+scan "backend/pinyin" '#include[[:space:]]*[<"](platforms|fcitx)' "pinyin -> platform"
 scan "backend/pinyin" '#include[[:space:]]*[<"]fcitx' "pinyin -> fcitx5"
 scan "backend/pinyin/include" '#include[[:space:]]*[<"](rime_api|dlfcn)' "pinyin public header -> librime/dlfcn"
 
@@ -111,9 +134,15 @@ scan "backend/api" '#include[[:space:]]*[<"]superior/(linux|windows|android|fcit
 # depend on a concrete capability either.
 scan "backend/core" '#include[[:space:]]*[<"]superior/(pinyin|speech-recognition|cloudpinyin)/' "core -> capability"
 
-# Runtime may use core, but its public headers must not expose core types.
-scan "backend/runtime/include" '#include[[:space:]]*[<"]superior/core/' "runtime public header -> core"
-scan "backend/runtime/include" 'superior::core' "runtime public header -> core"
+# The runtime is allowed to include `core` (it is the state and routing centre).
+# What it must not do is link a capability implementation: it talks to
+# `api::Composer` and `speech::SpeechPort` only.
+scan "backend/runtime" '#include[[:space:]]*[<"]superior/(pinyin|cloudpinyin|speech-recognition)/' "runtime -> capability implementation"
+
+# A host shell may not include a capability implementation. The one exception is
+# the composition root: the file that wires `ComposerFactory` / `SpeechPort`
+# into the runtime. Keeping it explicit is what makes the rule honest.
+scan_except "backend/platforms" '#include[[:space:]]*[<"]superior/(pinyin|cloudpinyin|speech-recognition)/' "platform -> capability implementation (only the composition root may)" 'Fcitx5Addon|SpeechController'
 
 # The host-neutral stub is the proof that the contract layer stands alone: it may
 # include `superior/api/` and itself, nothing else. If it ever needs a capability,

@@ -28,13 +28,12 @@ for argument in "$@"; do
     esac
 done
 
-so="$(find "$build" -name 'libsuperioragent.so' -print -quit 2>/dev/null || true)"
-addon_conf="$(find "$build" -name 'superioragent.conf' -print -quit 2>/dev/null || true)"
+# v3 merges the observer and the engine into one addon: it is both the
+# InputMethodEngine and the runtime host. The old agent addon is removed on
+# install so Fcitx5 cannot load two hosts for the same input method.
+so="$(find "$build" -name 'libsuperiorpinyin.so' -print -quit 2>/dev/null || true)"
+addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/dev/null || true)"
 entry_conf="$(find "$build" -name 'super-ime.conf' -print -quit 2>/dev/null || true)"
-# The pinyin engine is optional: a build with SUPERIOR_ENABLE_FCITX5 always
-# produces it, but an older build tree may not, and the agent must still install.
-pinyin_so="$(find "$build" -name 'libsuperiorpinyin.so' -print -quit 2>/dev/null || true)"
-pinyin_addon_conf="$(find "$build" -name 'superiorpinyin.conf' -print -quit 2>/dev/null || true)"
 ui="$build/frontend/desktop/superior_ui"
 settings="$build/frontend/settings/superior_settings"
 config_cli="$build/tools/superior-config/superior_config_cli"
@@ -72,12 +71,22 @@ env_dir="$HOME/.config/environment.d"
 
 system_addon_dir="/usr/lib/$(gcc -print-multiarch 2>/dev/null || echo "${HOSTTYPE:-x86_64}-linux-gnu")/fcitx5"
 
+# v3 merged the observer and the engine into one addon. A system-installed v2
+# agent would be a second host for the same input method; it cannot be removed
+# without root, so fail loudly with the exact commands instead of leaving a
+# half-working hybrid.
+if [[ -f "/usr/share/fcitx5/addon/superioragent.conf" ]] ||
+   compgen -G "/usr/lib/*/fcitx5/libsuperioragent.so" >/dev/null; then
+    echo "install-user: warning: a system-installed v2 agent was found." >&2
+    echo "  Fcitx5 would load two hosts for super-ime. Remove it once with:" >&2
+    echo "    sudo rm -f /usr/lib/*/fcitx5/libsuperioragent.so \\" >&2
+    echo "               /usr/share/fcitx5/addon/superioragent.conf" >&2
+fi
+
 echo "install-user:"
-echo "  $so            -> $lib_dir/libsuperioragent.so"
-echo "  $addon_conf    -> $addon_dir/superioragent.conf"
+echo "  $so            -> $lib_dir/libsuperiorpinyin.so"
+echo "  $addon_conf    -> $addon_dir/superiorpinyin.conf"
 echo "  $entry_conf    -> $im_dir/super-ime.conf"
-[[ -n "$pinyin_so" ]] && echo "  $pinyin_so -> $lib_dir/libsuperiorpinyin.so"
-[[ -n "$pinyin_addon_conf" ]] && echo "  $pinyin_addon_conf -> $addon_dir/superiorpinyin.conf"
 [[ -f "$speech" ]] && echo "  $speech -> $app_root/bin/superior_speech_recognition"
 echo "  $ui            -> $bin_dir/superior_ui"
 [[ -x "$settings" ]] && echo "  $settings -> $bin_dir/superior_settings"
@@ -91,18 +100,13 @@ if (( dry_run )); then
     exit 0
 fi
 
-install -Dm755 "$so" "$lib_dir/libsuperioragent.so"
-install -Dm644 "$addon_conf" "$addon_dir/superioragent.conf"
+install -Dm755 "$so" "$lib_dir/libsuperiorpinyin.so"
+install -Dm644 "$addon_conf" "$addon_dir/superiorpinyin.conf"
 install -Dm644 "$entry_conf" "$im_dir/super-ime.conf"
-if [[ -n "$pinyin_so" && -n "$pinyin_addon_conf" ]]; then
-    install -Dm755 "$pinyin_so" "$lib_dir/libsuperiorpinyin.so"
-    install -Dm644 "$pinyin_addon_conf" "$addon_dir/superiorpinyin.conf"
-    # The addon was renamed with the capability; a leftover copy would make
-    # Fcitx5 load two engines that provide the same input method.
-    rm -f "$lib_dir/libsuperiorrime.so" "$addon_dir/superiorrime.conf"
-else
-    echo "install-user: no Rime engine in this build; text input will not work" >&2
-fi
+# Remove the pre-v3 observer addon and older renamed copies: any of them would
+# make Fcitx5 load a second host for the same input method.
+rm -f "$lib_dir/libsuperioragent.so" "$addon_dir/superioragent.conf" \
+      "$lib_dir/libsuperiorrime.so" "$addon_dir/superiorrime.conf"
 install -Dm644 backend/platforms/fcitx5/data/icons/org.superior.ime.svg \
     "$icon_dir/org.superior.ime.svg"
 install -Dm755 "$ui" "$bin_dir/superior_ui"

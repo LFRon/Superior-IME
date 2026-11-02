@@ -27,7 +27,7 @@
 | M1 | `superior.skin/1`、loader/validator、`specHash`、`skin-lint`、默认皮肤 | ✅ |
 | M2 | `backend/core`、`backend/runtime` | ✅ |
 | M2.5 | `backend/protocol`：帧、`Hello` / `Scene` / `Command`、Unix socket | ✅ |
-| M3 | Fcitx5 观察者 agent、Qt 桌面壳、X11 浮层 | ✅ 自绘候选窗与状态栏已实测 |
+| M3 | Fcitx5 宿主、Qt 桌面壳、X11 浮层 | ✅ 自绘候选窗与状态栏已实测 |
 | M3.5 | 统一日志、可观测性与错误路径单测 | ✅ |
 | M3.6 | 内置 librime、万象方案、独立数据目录、按键/翻页/云端行一致 | ✅ |
 | M4 | XWayland 自动选择、classicui 主题导出 | 🚧 自动选择已完成；layer-shell 状态栏待做 |
@@ -102,7 +102,7 @@ fcitx5-remote -s super-ime
 
 | 进程 | 为什么必须重启 |
 |---|---|
-| `fcitx5` | agent 是 `libsuperioragent.so`，以共享库形式加载进 Fcitx5，无法原地重载 |
+| `fcitx5` | 宿主是 `libsuperiorpinyin.so`，以共享库形式加载进 Fcitx5，无法原地重载 |
 | `superior_ui` | 只杀掉 Fcitx5 时旧浮层不会退出，它会重连到新 agent 并继续跑**旧版本**的 UI |
 
 ```bash
@@ -123,8 +123,7 @@ setsid fcitx5 -d
 
 | 产物 | 类型 |
 |---|---|
-| `libsuperioragent.so` + `superioragent.conf` | `Category=Module` 观察者 addon（不是输入法） |
-| `libsuperiorpinyin.so` + `superiorpinyin.conf` | `Category=InputMethod` 的引擎 addon（内置 librime） |
+| `libsuperiorpinyin.so` + `superiorpinyin.conf` | `Category=InputMethod` 的宿主 + 内核 + 引擎 addon（内置 librime） |
 | `super-ime.conf` | **唯一**输入法条目，uniqueName = `super-ime`，绑定 `Addon=superiorpinyin` |
 
 方案数据（万象拼音 Pure）随仓库提供，安装脚本会解压并编译一次；
@@ -154,12 +153,13 @@ DISPLAY=:0 xprop -name "Superior-IME Status" WM_HINTS _NET_WM_STATE
 浮层跟随系统缩放：X11 读 X 资源的 `Xft.dpi`，Wayland 读 `wl_output.scale`，
 策略层只收到一个比例。见 [docs/ui-scaling.md](docs/ui-scaling.md)。
 
-Fcitx5 agent 是 `Category=Module` 的被动观察者：不注册输入法、不抢 UI addon、
-不修改预编辑。因此 Wayland 客户端继续使用 Fcitx5 的 wayland 前端，
-X11 客户端继续使用 XCB/XIM 前端，应用输入框内的预编辑行为不变。
+Fcitx5 宿主是 `Category=InputMethod` 的单一 addon：它只负责按键翻译、文本执行、
+场景呈现和原生候选面板；组合、候选顺序、云与学习都在 `backend/pinyin` 的能力包里。
+Wayland 客户端继续使用 Fcitx5 的 wayland 前端，X11 客户端继续使用 XCB/XIM 前端，
+应用输入框内的预编辑行为不变。
 
-唯一例外是**内联英文模式**：轻按 Shift 后，字母由 agent 直接 `commitString`
-上屏（这是搜狗式的中英文切换，不切换输入法、不加载英文键盘布局）；
+**内联英文模式**：轻按 Shift 后，字母由内核直接提交（搜狗式的中英文切换，
+不切换输入法、不加载英文键盘布局）；
 `Ctrl` / `Alt` / `Super` 组合与功能键一律放行。规则见
 [docs/input-panel.md](docs/input-panel.md)。
 
@@ -381,11 +381,11 @@ client preedit（用它的字体和颜色），我们的皮肤只能覆盖候选
 backend/
 ├─ api/        契约（事件、场景、命令、端口）
 ├─ skin/       皮肤模型 + 校验 + 哈希
-├─ core/       纯逻辑
-├─ runtime/    串行泵 + 票据
-├─ protocol/   帧编解码 + Unix socket
-├─ rime/       内置 librime 引擎（无 Qt / 无 Fcitx5，可单测）
-└─ platforms/  fcitx5（观察者 agent + Rime 引擎适配）
+├─ core/       纯策略与状态
+├─ runtime/    内核：会话、路由、模式、设置、效果
+├─ pinyin/     拼音能力：RimeComposer + CandidatePipeline + 云/学习
+├─ protocol/   帧编解码
+└─ platforms/  fcitx5（宿主 + 组装根）、linux（音频）、stub（契约桩）
 
 frontend/
 ├─ app/        （后续）应用装配

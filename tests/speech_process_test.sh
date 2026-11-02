@@ -33,10 +33,12 @@ start_process() {
         # A short cadence keeps the suite fast; the default is 1000 ms.
         # shellcheck disable=SC2086 # `extra_env` is a deliberate list of assignments.
         env $extra_env \
+            XDG_STATE_HOME="$current/state" \
             SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
             SUPERIOR_ASR_STREAM_CMD="$stream_cmd" SUPERIOR_SPEECH_COMMIT_MS=700 \
             "$binary" < "$current/in" > "$current/out" 2> "$current/err" &
     else
+        XDG_STATE_HOME="$current/state" \
         SUPERIOR_CAPTURE_CMD="$capture" SUPERIOR_ASR_CMD="$engine" \
             SUPERIOR_DISABLE_STREAMING=1 \
             "$binary" < "$current/in" > "$current/out" 2> "$current/err" &

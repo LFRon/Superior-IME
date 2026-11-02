@@ -115,7 +115,7 @@ diag::setSink([](const diag::Record &record) { /* 写文件、转发、测试 */
 | `superior.core` | `ImeSession.cpp` | 提交（文本已脱敏）、拒绝过期 id |
 | `superior.protocol` | `Wire.cpp` | 帧解码（类型、字节数） |
 | `superior.protocol.socket` | `SceneServer.cpp` | 监听、连接/断开、队列丢弃、关闭 |
-| `superior.fcitx5` | `SuperiorAgent.cpp` | 启动/停止、焦点、光标矩形、IM 切换、事实摘要、广播、命令 |
+| `superior.fcitx5` | `Fcitx5Addon.cpp` / `runtime/Runtime.cpp` | 启动/停止、焦点、光标矩形、IM 切换、事实摘要、广播、命令 |
 | `superior.fcitx5` | `OverlayController.cpp` | socket 就绪/重试、spawn、回收僵死 overlay（P5.4 拆出） |
 | `superior.speech-recognition` | `SpeechController.cpp` | 面板开关、取消、提交/暂存、卡死与子进程退出（P5.4 拆出） |
 | `superior.pinyin` | `RimeEngine` / `LibrimePort` | 库加载、schema、部署、按键与候选（只记形状） |

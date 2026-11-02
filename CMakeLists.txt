@@ -44,6 +44,7 @@ add_subdirectory(backend/pinyin)
 add_subdirectory(backend/speech-recognition)
 add_subdirectory(backend/theme)
 add_subdirectory(backend/core)
+add_subdirectory(backend/runtime)
 add_subdirectory(backend/protocol)
 add_subdirectory(backend/platforms/fcitx5)
 

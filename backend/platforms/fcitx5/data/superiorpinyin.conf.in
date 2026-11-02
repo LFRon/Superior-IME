@@ -1,17 +1,20 @@
-# Pinyin capability for Superior-IME.
+# The Fcitx5 host.
 #
-# Named after the capability, not the engine: the library happens to be a
-# librime adapter today, but the addon contract is "provides pinyin".
+# Since v3 this one addon is both the input method engine and the runtime host:
+# it translates keys, executes text edits, presents scenes and mirrors the
+# native candidate panel. Keeping the observer and the engine in two addons made
+# the candidate list an implicit channel between them, with two owners of one
+# composition (the v2 `CloudContext` hacks).
 #
-# Separate from superioragent on purpose: a missing librime or missing schema
-# disables only the input method, never the UI agent.
+# librime is loaded at runtime with dlopen, so the addon still loads on a machine
+# without it: the runtime reports "engine unavailable" and forwards keys.
 [Addon]
-Name=Superior Pinyin Engine
-Name[zh_CN]=先进拼音引擎
-Name[zh_TW]=先進拼音引擎
-Comment=Pinyin engine backed by the bundled librime, with the Wanxiang schema
-Comment[zh_CN]=由内置 librime 提供拼音，使用万象方案
-Comment[zh_TW]=由內建 librime 提供拼音，使用萬象方案
+Name=Superior IME
+Name[zh_CN]=先！进！输入法
+Name[zh_TW]=先！進！輸入法
+Comment=Superior IME host: librime (Wanxiang schema), runtime and overlay bridge
+Comment[zh_CN]=先！进！输入法：librime（万象方案）、内核与浮层桥接
+Comment[zh_TW]=先！進！輸入法：librime（萬象方案）、內核與浮層橋接
 Type=SharedLibrary
 Library=libsuperiorpinyin
 Category=InputMethod

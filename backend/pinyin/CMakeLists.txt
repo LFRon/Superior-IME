@@ -5,9 +5,14 @@
 # dependency on it. That keeps the addon loadable on a machine without librime
 # (it reports the reason) and keeps these sources unit testable.
 add_library(superior_pinyin STATIC
+    src/CandidatePipeline.cpp
+    src/CloudService.cpp
     src/Layout.cpp
+    src/LearningStore.cpp
     src/LibrimePort.cpp
-    src/RimeEngine.cpp)
+    src/RimeComposer.cpp
+    src/RimeEngine.cpp
+    src/RimeKeys.cpp)
 
 add_library(Superior::Pinyin ALIAS superior_pinyin)
 
@@ -19,6 +24,9 @@ target_include_directories(superior_pinyin
         "${PROJECT_SOURCE_DIR}/third_party/rime")
 
 target_link_libraries(superior_pinyin
+    PUBLIC Superior::Api
+    PRIVATE Superior::CloudPinyin
+    PRIVATE Superior::Config
     PRIVATE Superior::Diagnostics
     PRIVATE Superior::Paths
     PRIVATE ${CMAKE_DL_LIBS})

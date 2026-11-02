@@ -23,6 +23,10 @@ public:
     [[nodiscard]] virtual bool onOwnerThread() const noexcept = 0;
     virtual void post(std::function<void()> work) = 0;
 
+    /// Monotonic milliseconds. Core code must never read a wall clock; every
+    /// timer and debounce takes its time from here.
+    [[nodiscard]] virtual std::uint64_t nowMs() const = 0;
+
     /// Returns a cancellation token id. Cancelling is idempotent.
     virtual std::uint64_t after(std::uint64_t delayMs, std::function<void()> work) = 0;
     virtual void cancel(std::uint64_t timerId) = 0;
@@ -74,6 +78,7 @@ enum class DegradedReason {
     PopupUnavailable,
     VoiceUnavailable,
     PresenterUnavailable,
+    EngineUnavailable,
     IpcDisconnected,
 };
 

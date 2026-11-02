@@ -21,6 +21,10 @@ struct SessionKey {
     [[nodiscard]] constexpr bool valid() const noexcept { return epoch != 0; }
 
     friend constexpr bool operator==(const SessionKey &, const SessionKey &) = default;
+    friend constexpr bool operator<(const SessionKey &left, const SessionKey &right) {
+        return left.epoch < right.epoch ||
+               (left.epoch == right.epoch && left.context < right.context);
+    }
 };
 
 /// Monotonic frame counter, owned by the producer of a scene frame.

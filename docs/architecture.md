@@ -1,142 +1,95 @@
 # 架构
 
-> 本文档描述运行拓扑与模块划分。**分层判据以仓库外的
-> [`架构设计.md`](../../架构设计.md) 为准**：状态、决策、能力、效果四个盒子，
-> 以及 P-1~P-5 五条第一原则。两者冲突时修正本文档。
+> **权威文档是仓库外的 [`架构设计.md`](../../架构设计.md)**（v3）。
+> 本文只描述当前代码目录与运行拓扑；两者冲突时以 `架构设计.md` 为准。
 
-Superior-IME 的第一原则：**前端与后端分开，UI 只能通过契约与后端通信。**
-
-参考 `fl-scx` 的排布（`lib/backend` 纯后端、`lib/pages` + `lib/widgets` 纯前端），C++ 侧对应为 `backend/` 与 `frontend/`。
+第一原则：**组合属于能力，路由属于内核，宿主只做翻译与执行。**
 
 ---
 
 ## 1. 目录与职责
 
 ```
-backend/                 纯后端：无 Qt、无窗口、headless 可测
-├─ api/                  契约：场景帧、命令、端口、能力（只含纯数据，无平台词汇）
-├─ core/                 决策层：模式、按键归属、候选、场景折叠、语音状态、文本出口策略
-├─ paths/                唯一解析 XDG_* / HOME 的地方（Roots），换平台只改这一处
-├─ pinyin/               能力：拼音（librime + 万象）
-├─ speech-recognition/   能力：语音（采集 + 一个识别器子进程，不含麦克风细节）
-├─ cloudpinyin/          能力：云输入（去抖、缓存、错误预算）
-├─ skin/                 皮肤模型、校验、内容哈希
-├─ config/               设置与学习词
-├─ theme/                classicui 主题导出
-├─ diagnostics/          日志
-├─ protocol/             IPC 帧编解码、场景广播
+backend/
+├─ api/                  契约：KeyPress / CompositionFact / Composer / 端口 / 场景 / 命令
+├─ core/                 纯策略与纯状态：decideKey、decideGesture、Modes、CandidateModel、
+│                        TextOutbox、ImeSession、SpeechState
+├─ runtime/              内核：SessionRegistry、InputRouter、CapabilityRegistry、
+│                        EffectQueue、设置、语音状态；消费 TextSessionPort /
+│                        ScenePresenter / Scheduler / LifecyclePort
+├─ pinyin/               拼音能力：RimeComposer（实现 api::Composer）、
+│                        CandidatePipeline（engine + learned + cloud）、
+│                        LearningStore、CloudService、LibrimePort
+├─ cloudpinyin/          传输与解析：百度/搜狗/Google 的请求形状与报文校验
+├─ speech-recognition/   语音识别：采集、识别子进程协议、会话服务
+├─ config/               设置、学习词、状态栏状态（纯数据）
+├─ paths/                Roots 纯数据（解析由宿主注入）
+├─ protocol/             SUPI 帧编解码（传输在宿主里）
+├─ skin/ theme/          皮肤模型与主题导出（纯数据）
+├─ diagnostics/          结构化日志
 └─ platforms/
-   ├─ fcitx5/            Fcitx5 agent addon（唯一写客户端文本的适配器）
-   ├─ linux/             Linux 桌面端口实现：麦克风采集
-   ├─ stub/              只依赖 api 的端口实现 + 编译探针（新平台的起点）
-   ├─ windows/           预留（先从 stub 抄）
-   └─ android/           预留（先从 stub 抄）
+   ├─ fcitx5/            Fcitx5 宿主：Fcitx5Addon（兼组装根）、TextSession、
+   │                     OverlayController、SpeechProcess、SpeechController
+   ├─ linux/             Linux 平台实现：音频采集
+   └─ stub/              无平台依赖的桩：第二个 TextSessionPort 实现
 
-frontend/                纯前端：只依赖 api / protocol / skin
-├─ app/                  应用装配与 main()
-├─ render/               皮肤驱动布局、九宫格、字体度量、命中区
-├─ desktop/              桌面壳：候选窗、状态栏、托盘
-├─ mobile/               移动壳（预留）
-└─ widgets/              共享绘制控件
+frontend/
+├─ desktop/              Qt 桌面壳：候选窗、状态栏、语音面板、X11/Wayland 分派
+├─ settings/             设置窗口
+├─ render/ widgets/ app/ 预留：共享渲染与装配
+└─ mobile/               预留：移动壳
 
-tools/                   开发工具
-skins/                   内置皮肤
-tests/                   单元、golden、边界
+tools/                    scene-sim、skin-lint、superior-config
+tests/                    单元、golden、conformance、真机脚本
+skins/                    内置皮肤
 ```
-
-依赖方向：
-
-```mermaid
-flowchart LR
-  subgraph backend
-    API[api]
-    SKIN[skin]
-    CORE[core]
-    PATHS[paths]
-    PROTO[protocol]
-    FC[platforms/fcitx5]
-    STUB[platforms/stub]
-    CORE --> API
-    CORE --> SKIN
-    FC --> CORE
-    FC --> PROTO
-    FC --> API
-    STUB --> API
-    PROTO --> API
-    PROTO --> PATHS
-  end
-  subgraph frontend
-    APP[app]
-    RENDER[render]
-    DESK[desktop]
-    MOB[mobile]
-    WID[widgets]
-    APP --> RENDER
-    APP --> DESK
-    APP --> MOB
-    RENDER --> WID
-  end
-  APP --> API
-  APP --> PROTO
-  APP --> SKIN
-```
-
-硬规则：
-
-1. `frontend/` 不得 include 或链接 `superior/core`、任何 `fcitx*`。
-2. `backend/core` 不得 include Qt / Fcitx5 / 平台头，也不读墙钟。
-3. `backend/skin` 是纯数据层：不依赖 Qt，不做像素解码。
-4. `backend/api` 无实现依赖。
-5. 前后端只通过 `superior::api` 类型与 `superior::proto` 帧通信。
-6. `backend/platforms/*` 只实现 `backend/api` 的端口；能力由宿主注入，适配器不认识能力实现。
-7. 根目录（`XDG_*` / `HOME`）只有 `backend/paths` 解析，其它模块一律查 `paths::Roots`。
-
-要新增一个平台宿主，按 [platform-onboarding.md](platform-onboarding.md) 施工：
-每个端口的确切签名、三种 `TextEdit` 的语义、验收清单都在那里。
-
-这些规则由 `scripts/check-boundaries.sh` 机械化检查，并作为 ctest 用例执行。它不是"注释里的约定"。
 
 ---
 
 ## 2. 运行时拓扑
 
-```mermaid
-flowchart TB
-  subgraph fcitx5[Fcitx5 进程]
-    ENGINE[拼音 / Rime 引擎]
-    AGENT[superior-agent<br/>Category=Module]
-    ENGINE --> AGENT
-  end
+```
+Fcitx5
+  └─ libsuperiorpinyin.so  (Category=InputMethod, OnDemand)
+       ├─ Fcitx5Addon      宿主 + 组装根
+       │    ├─ 键盘/焦点/光标/能力位 → api::KeyPress / api::HostFacts
+       │    ├─ TextSession           → api::TextSessionPort
+       │    ├─ ScenePresenter        → SUPI 帧 → unix socket
+       │    ├─ NativePanelSink       → fcitx::InputPanel（可选）
+       │    └─ Scheduler             → fcitx 事件循环
+       ├─ runtime::Runtime        每个输入框一个 Session
+       │    ├─ core::ImeSession / core::Modes / core::TextOutbox
+       │    ├─ 按键 → core::decideKey → 能力
+       │    ├─ 手势 → core::decideGesture → 语言/语音
+       │    └─ UI 命令 → 候选/翻页/模式/语音
+       └─ pinyin::RimeComposer
+            ├─ LibrimePort / RimeEngine
+            ├─ CandidatePipeline（engine + learned + cloud）
+            └─ CompositionFact
 
-  subgraph ui[superior-ui 进程]
-    SHELL[Qt 壳]
-    RENDER[render]
-    SHELL --> RENDER
-  end
-
-  AGENT -- UiSceneFrame --> SHELL
-  SHELL -- UiCommand --> AGENT
-  AGENT -- 提交文本 --> ENGINE
+superior_ui（独立进程）
+  ├─ SceneClient  ← SUPI 帧
+  ├─ CandidateWindow / StatusWindow / SpeechRecognitionPanel
+  └─ 命令 → SUPI Command → 宿主 → 内核
 ```
 
-- **文本输入由内置 librime 完成**（`backend/pinyin` + `libsuperiorpinyin.so`）。
-  Superior-IME 不自己实现拼音语言模型，只做引擎适配，见
-  [docs/pinyin-engine.md](pinyin-engine.md)。
-- **语义状态在 agent**：候选、选中、可见性、皮肤代次、语音状态。
-- **瞬时视觉状态在 UI**：hover、按下、动画进度。
-- UI 崩溃不影响输入；agent 继续提交文本，UI 重连后重建快照。
+**组合只有一个生产者**：`pinyin::RimeComposer` 产出 `CompositionFact`。
+浮层和 Fcitx5 原生候选列表都是它的派生；宿主不读回自己的面板。
 
 ---
 
-## 3. 为什么 agent 不是 UI addon
+## 3. 为什么只有一个 addon
 
-Fcitx5 的 `UserInterfaceManager` 同一时刻只持有一个 `ui_` 指针。如果 Superior 抢占 UI addon：
+v2 的两个 addon（观察者 + 引擎）之间没有类型化接口：引擎建
+`fcitx::CandidateList`，观察者读 `InputPanel`、用 `toModifiable()` 插云端/学习词，
+再用 `list` 指针和文本比对认自己的行。这带来三个问题：
 
-- 必须同时实现 `InputPanel` 与 `StatusArea`；
-- classicui 不能共存；
-- Wayland 下候选窗仍受 `getInputPopupSurface` 私有接口限制。
+1. 组合状态有两个 owner（`InputPanel` 与 `CandidateModel`）；
+2. 云端/学习只能存在于 Fcitx5 适配器里，Windows/Android 必须重写；
+3. commit 事件到达时 preedit 已清空，学习只能靠「组合可见时快照」的时序 hack。
 
-因此 P0 的 agent 使用 `Category=Module`，只观察 `InputContextUpdateUIEvent`，把状态转发给独立 UI 进程；classicui 继续负责 Wayland 候选窗，Superior UI 负责 X11 候选窗与右下角状态栏。P1 再评估 Wayland 输入弹窗表面。
+v3 把宿主、内核、能力放进同一个 addon，用 `api::Composer` 切分职责：
+宿主只翻译和执行，能力拥有组合，内核拥有路由。
 
 ---
 
@@ -144,63 +97,53 @@ Fcitx5 的 `UserInterfaceManager` 同一时刻只持有一个 `ui_` 指针。如
 
 ### 4.1 下行：`UiSceneFrame`
 
-完整期望场景，不是增量：
+一帧是**完整期望画面**，不是增量：丢帧永远安全。包含：
 
-```cpp
-struct UiSceneFrame {
-  FrameId frameId;
-  SessionKey session;
-  PanelScene panel;       // 可见性、锚点、皮肤、预编辑、候选、命中区
-  StatusScene status;     // 状态栏项
-  std::optional<TransitionSpec> transition;
-};
-```
-
-- 丢帧安全：下一帧仍是完整真相。
-- 动画只传 `TransitionSpec`，UI 本地采样，不跑高频 IPC。
-- 帧带 `skinGeneration`；UI 丢弃与当前代次不符的帧。
+- `panel`：可见性、锚点、皮肤代次、preedit、候选页、选中 id
+- `status`：状态栏位置与语义项
+- `speech`：语音面板阶段、模型、电平、partial、剩余时间
+- `transition`：动画数据（UI 按自己的 vsync 采样）
 
 ### 4.2 上行：`UiCommand`
 
-只允许语义命令：
+语义命令，不含绝对几何、候选列表或引擎内部状态：
 
-```cpp
-ActivateCandidate { session, candidateId }
-PageCandidates    { session, delta }
-SetInputMode      { session, mode }
-SetSkin           { skinId }
-ToggleStatusItem  { itemId }
-VoiceStart/Stop/Cancel { session }
-MovePanel         { session, deltaX, deltaY }
-```
+- `ActivateCandidate{session, id}`：点击候选（id 是代次 + 位置）
+- `PageCandidates{session, delta}`
+- `SelectIndex{session, index}`
+- `SetInputMode{session, mode}`
+- `ToggleStatusItem{id}`
+- `SpeechStart/Stop/Cancel/Reload`
+- `ShellReady/ShellLost`、`SetSkin`、`SetUiScale`
 
-不存在 `SetPanelRect { x, y }`。窗口位置由平台后端根据光标锚点与用户偏移决定。
-
-点击用 `candidateId` 而不是 index，避免异步竞态。
-
-已接通的命令（agent 侧 `applyCommand`）：
-
-| 命令 | 行为 |
-|---|---|
-| `ToggleStatusItem { itemId }` | 只认 `inline-mode`：切换内联中英文；其他 id 记日志后忽略 |
-| `SetInputMode { mode }` | 直接设定内联中英文 |
-| `SetUiScale { scale }` | UI 自己应用（它就是设置文件的读者），agent 只记日志 |
-
-未接通的命令一律**忽略并记日志**，不是报错：旧 UI 连新 agent 时不能把状态搞坏。
-命令不携带几何信息，也不携带引擎内部状态，这是这一层唯一的硬约束。
+宿主把 socket 收到的帧解码后**只调用** `runtime.command()`；它不自己解释命令。
 
 ---
 
 ## 5. 平台后端
 
-| 后端 | 候选窗 | 状态栏 | 备注 |
-|---|---|---|---|
-| X11 / XWayland | Qt override-redirect，跟随 `cursorRect` | 同左，四角可选 | M3 ✅ |
-| Wayland | 自绘输入窗（`setCustomInputPanelCallback`）；其他输入法仍用 classicui | `wlr-layer-shell` 锚定 | 见 [input-panel.md](input-panel.md) |
-| Windows | TSF + UI broker | 独立窗口 | 预留 |
-| Android | `InputMethodService` 原生 | 原生 | 预留 |
+### 5.1 Fcitx5
 
-`frontend/` 不感知这些差异；差异封装在 `backend/platforms/*` 与 `frontend/desktop` 的窗口宿主中。
+- `Fcitx5Addon` 实现 `fcitx::InputMethodEngineV2` 与全部 `api` 端口；
+- `TextSession` 是唯一写客户端文本的地方；
+- `OverlayController` 管理 UI 进程与 socket；
+- `NativePanelSink` 把 `api::NativePanel` 画进 `fcitx::InputPanel`；
+- `StatusSink` 把 runtime 的状态项映射成 Fcitx5 tray action。
+
+### 5.2 X11 / Wayland（UI 进程）
+
+`frontend/desktop/src/platform/` 是唯一出现 XCB / libwayland 的地方：
+
+- X11 统一实现（XWayland 算 X11）；
+- Wayland 按桌面分派（KDE/GNOME/…）；
+- 候选窗自行定位，不依赖桌面约定；`PanelChannel` 区分
+  `Applied` / `Unsupported` / `Unreachable`。
+
+### 5.3 Windows / Android（预留）
+
+`backend/platforms/{windows,android}/README.md` 给出起点。验收标准：
+新宿主写完后 `backend/api`、`backend/core`、`backend/runtime`、`backend/pinyin`
+零改动；`tests/conformance` 全绿。
 
 ---
 
@@ -208,28 +151,14 @@ MovePanel         { session, deltaX, deltaY }
 
 | 模块 | 状态 |
 |---|---|
-| `backend/api` | 契约头文件已就绪 |
-| `backend/diagnostics` | 已实现：统一日志、级别/类别过滤、Qt 桥 |
-| `backend/skin` | 已实现：加载、校验、token、资源、哈希 |
-| `tools/skin-lint` | 已实现 |
-| `skins/default` | 已提供 |
-| `backend/core` | 已实现：`Modes`（模式唯一 owner）、`KeyPolicy`（按键归属）、`CandidateModel`（代次稳定 id）、`SceneInput`（引擎/宿主事实折叠）、`ImeSession` |
-| `backend/protocol` | 已实现：帧、JSON 编解码、Unix socket 广播 |
-| `backend/pinyin` | 已实现：librime 端口、会话状态机、数据布局与迁移、部署检测 |
-| `backend/platforms/fcitx5` | 已实现：Rime 引擎适配、观察者 agent、内联中英文、command 处理 |
-| `frontend/desktop` | 已实现：自绘候选窗（皮肤）+ 可点击状态栏 + 设置热重载 + 平台自动选择 |
-| `frontend/settings` | 已实现：原生 Qt 设置页（外观/输入/状态栏/语音/高级/关于） |
-
----
-
-## 7. 设计决策
-
-| 编号 | 决策 | 理由 |
-|---|---|---|
-| D-01 | 自建 `superior.skin/1` | 稳定、可校验、无第三方格式与合规风险 |
-| D-02 | agent 用 `Category=Module` | 与 classicui 共存，不抢唯一 UI 槽位 |
-| D-03 | 语义状态在 agent，视觉状态在 UI | 单一真相 + 低延迟交互 |
-| D-04 | 命令用 `candidateId` | 避免异步列表更新的竞态 |
-| D-05 | 动画本地采样 | 避免 60/120Hz IPC |
-| D-06 | 皮肤模型不解码像素 | 可在无 Qt 环境测试 |
-| D-07 | 布局在 UI，语义在 core | 跨进程无法可靠共享字形度量 |
+| `backend/api` | ✅ v3 契约：Key/Composition/Composer/Host/Ports |
+| `backend/core` | ✅ 纯策略与状态；类型别名指向 `api` |
+| `backend/runtime` | ✅ Session、InputRouter、模式、设置、语音路由、效果 |
+| `backend/pinyin` | ✅ RimeComposer、CandidatePipeline、LearningStore、CloudService |
+| `backend/platforms/fcitx5` | ✅ 单 addon 宿主 + 组装根；原生候选 + 浮层 |
+| `backend/platforms/linux` | ✅ 音频采集 |
+| `backend/platforms/stub` | ✅ 第二个 TextSessionPort，conformance |
+| `frontend/desktop` | ✅ Qt 浮层、X11/Wayland 分派 |
+| `frontend/settings` | ✅ 设置页 |
+| `backend/platforms/{windows,android}` | ⏳ v3.5 |
+| `api::ProcessPort` | ⏳ v3.3（语音子进程仍是 POSIX） |

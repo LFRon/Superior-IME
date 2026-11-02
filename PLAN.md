@@ -373,9 +373,9 @@ Telegram（Flatpak，X11/XIM）里快速打字时，字母像排队一样逐个�
 
 ### 10.4 当前状态（2026-10-29）
 
-- GNU/Linux X11 路线可日常使用：Fcitx5 内加载 `libsuperioragent.so` + `libsuperiorpinyin.so`，Qt 浮层负责候选窗/状态栏，`superior_speech_recognition` 负责语音子进程。
+- GNU/Linux X11 路线可日常使用：Fcitx5 内加载单一 `libsuperiorpinyin.so`（v3 宿主 + 内核 + 拼音能力），Qt 浮层负责候选窗/状态栏，`superior_speech_recognition` 负责语音子进程。
 - 拼音使用内置 librime + 万象方案；`superior-config` 可做 `rime status/deploy/lookup` 和 `cloud probe`。
-- 云拼音默认关闭；`googlecn` 实测可用，`baidu` 端点已失效，`sogou` 仍是占位。当前实现不再插占位符，结果到达后才插入真实候选。
+- 云拼音默认关闭；`auto` 会按输入形状在百度/搜狗/Google 之间分派，结果到达后才插入真实候选。
 - 用户目录安装（`~/.local`）可用：`scripts/install-user.sh` 写入 `~/.local/lib/fcitx5`、`~/.local/share/fcitx5`、`~/.local/share/superior-ime`，并通过 `~/.config/environment.d/90-superior-ime.conf` 设置 `FCITX_ADDON_DIRS`。
 - 已实测：Telegram（XIM）连续输入/云候选正常；VSCode 等非 XIM 客户端正常；40/40 ctest 通过。
 - 未完成/边界：Wayland layer-shell 候选窗仍是 P1；Windows/macOS/Android 只有接口预留；语音为 P3 本地识别路线；`docs/` 里仍有一些早期架构描述与实现漂移，后续按模块收敛。
