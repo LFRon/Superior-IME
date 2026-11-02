@@ -102,13 +102,17 @@ UI 进程不链接 `superior/cloudpinyin`：设置页只读写 `settings.json` �
 
 ## 6. 用户输入习惯（本地偏好）
 
-Rime 的做法是 `userdb`：选过的词被写进用户词典，下次同一拼音优先它。但这**只覆盖
-引擎自己产出的候选**——云端候选是我们提交的，引擎不知道，所以那部分必须自己记。
+Rime 的做法是 `userdb`：选过的词被写进用户词典，下次同一拼音优先它。但它有两个
+够不到的地方，所以这一层自己记：
+
+- **云端候选是我们提交的**，引擎从没见过这个词；
+- **引擎自己的学习是"慢慢调频"**：`wo` 选了 `握`，要连着选好几次它才肯超过 `我`。
+  这里记的是"这个拼音用户要哪个词"，一次选中就成立。
 
 文件位置（配置目录，不是数据目录）：
 
 ```
-$XDG_CONFIG_HOME/superior-ime/learning.json      # 默认 ~/.config/superior-ime/
+$XDG_CONFIG_HOME/superior-ime/pinyin/learning.json   # 默认 ~/.config/superior-ime/pinyin/
 ```
 
 ```json
@@ -124,9 +128,9 @@ $XDG_CONFIG_HOME/superior-ime/learning.json      # 默认 ~/.config/superior-ime
 
 | 行为 | 说明 |
 |---|---|
-| 记录时机 | 只有用户**主动选中**我们插入的候选时才记，不记录单纯输入 |
+| 记录时机 | 用户**主动选中一个候选**就记——引擎的行、云端行都算；标点、`commit_code` 上屏的字母、语音片段都不算 |
 | 位置 | 该拼音的已学词放到候选**第 1 位**（其余候选顺延） |
-| 已存在 | 引擎自己已经给出同一个词时不再插入，避免重复行 |
+| 已存在 | 引擎自己已经给出同一个词时把它**移到**第 1 位，不再另插一行 |
 | 改主意 | 同一拼音选了另一个词就**替换**，不并存 |
 | 容量 | 512 条，超出按最久未用淘汰 |
 | 权限 | 强制 `0600`：`~/.config` 常常是 0755，光靠 umask 不够 |
@@ -136,8 +140,20 @@ $XDG_CONFIG_HOME/superior-ime/learning.json      # 默认 ~/.config/superior-ime
 查询只是"发现新词"的途径。早期版本把整段逻辑塞在 `if (cloudEnabled_)` 里面，导致
 关掉云拼音就把用户积累的偏好一起废掉了。
 
-已知取舍：引擎自己产生的候选被选中时我们观察不到（`commitString` 由引擎发出），
-那部分交给 Rime 的 `userdb`；两套学习各管各的，互不覆盖。
+### 为什么要在"组合还活着"的时候快照
+
+抓取点不是 `commitString` 的当下，而是每次 `refresh()` 里、组合还在屏幕上时。这是
+实测出来的：`InputContextCommitString` 到达时，引擎已经把自己的组合清空了——
+
+```text
+composing pinyin captured panelPreedit=1 stored=1     ← 输入 w 时
+composing pinyin captured panelPreedit=0 stored=0     ← 按下选择键之后、commit 之前
+commit observed bytes=3 ours=true                     ← 事件里已经读不到拼音
+```
+
+所以 `Composing{pinyin, candidates}` 快照在组合可见时做，commit 时取用后即销毁；
+"这个词当时在候选里"也来自同一份快照（事件里的 `candidateList()` 同样已经没了）。
+没有这条快照，"用户选了什么"在事件里根本无从得知。
 
 ---
 
