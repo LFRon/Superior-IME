@@ -51,6 +51,25 @@ if (instance_->inputMethod(ic) == "super-ime") {
 > 再 `updateDispatch()`，事件是延迟派发的，所以第一帧仍由 classicui 画出，
 > 而它此后不再收到更新，窗口就永远留在屏幕上。必须在激活阶段安装。
 
+### 回调必须跨 `InputPanel::reset()` 存活
+
+`fcitx::InputPanel::reset()` **会连同两个自定义回调一起清掉**。谁直接调用它，
+谁就把当前上下文交还给 classicui：下一次组合时 classicui 用 Fcitx5 自己的主题
+画一份候选窗，我们的浮层也画一份 —— 屏幕上同时出现两套皮肤。
+
+`TextSession` 在提交/取消组合时会 reset 面板（`dropComposition`），这是最常走的
+路径，所以这个 bug 表现为「选一个词之后，下一次组合出现两个候选框」。
+
+规则：
+
+- 唯一允许清空面板的地方是 `PanelCallbacks.hpp` 的
+  `resetPanelKeepingCallbacks()`：它先保存两个回调，`reset()` 后再装回去；
+- `TextSession::dropComposition()`、`Fcitx5Addon::hide()` 都走它；
+- `Fcitx5Addon::show()` 在写入候选列表前再调一次 `syncPanelOwnership()` 作为自愈，
+  并在「我们有 UI 客户端、回调却还是空」时打一条 warning —— 这条不变量是真被
+  破坏过，而不是理论风险；
+- `scripts/check-boundaries.sh` 会机械地禁止 `inputPanel().reset()` 直接出现。
+
 ## 为什么不用全局主题
 
 | 方案 | 影响面 | 结论 |

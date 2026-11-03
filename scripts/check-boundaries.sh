@@ -149,6 +149,12 @@ scan_except "backend/platforms" '#include[[:space:]]*[<"]superior/(pinyin|cloudp
 # `api/` has grown a dependency it should not have (`架构设计.md` §11 P5.5).
 scan "backend/platforms/stub" '#include[[:space:]]*[<"]superior/(core|platforms|protocol|pinyin|speech-recognition|cloudpinyin|config|skin|theme|diagnostics|paths|fcitx5)/' "stub -> anything but api"
 
+# `fcitx::InputPanel::reset()` also drops the custom input-panel callback, which
+# hands the candidate list to ClassicUI: it then paints its own window with its
+# own theme next to ours ("two skins for one composition"). Every reset has to go
+# through `resetPanelKeepingCallbacks()` in PanelCallbacks.hpp.
+scan_except "backend/platforms/fcitx5" 'inputPanel[^;]*\.reset\(\)|inputPanel\(\)\.reset\(\)' "fcitx5 -> InputPanel::reset drops the custom panel callback" 'PanelCallbacks\.hpp'
+
 if (( fail != 0 )); then
     echo "check-boundaries: FAILED" >&2
     exit 1

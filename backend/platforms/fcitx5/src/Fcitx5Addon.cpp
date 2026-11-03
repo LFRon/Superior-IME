@@ -21,6 +21,8 @@
 #include "superior/fcitx5/KeyTranslation.hpp"
 #include "superior/protocol/Wire.hpp"
 
+#include "PanelCallbacks.hpp"
+
 namespace superior::fcitx5 {
 
 namespace diag = ::superior::diagnostics;
@@ -189,6 +191,7 @@ Fcitx5Addon::Fcitx5Addon(fcitx::AddonManager *manager)
     }
     startTickTimer();
     lastClientCount_ = overlay_.clientCount();
+    hostReady_ = true;
     SUPERIOR_INFO(diag::categories::Fcitx5)
         .field("engine", pinyinFactory_.available())
         .field("overlay", overlay_.clientCount())
@@ -425,7 +428,21 @@ void Fcitx5Addon::show(const api::SessionKey &session, const api::NativePanel &p
     if (context == nullptr) {
         return;
     }
+    // Self-healing: anything that resets the panel without going through
+    // `resetPanelKeepingCallbacks` (another addon, a client-side reset) would
+    // hand the list to ClassicUI and show a second candidate window. Re-assert
+    // ownership before every list update; the check is a `std::function` test.
+    syncPanelOwnership(context);
+
     auto &inputPanel = context->inputPanel();
+    if (!inputPanel.customInputPanelCallback() && overlay_.clientCount() > 0) {
+        // The invariant `syncPanelOwnership` just established. If it does not
+        // hold, ClassicUI is about to draw this list too, so say so instead of
+        // letting "two skins" look like a paint bug.
+        SUPERIOR_WARN(diag::categories::Fcitx5)
+            .field("program", context->program())
+            << "panel callback missing while drawing our candidate list";
+    }
 
     fcitx::Text preedit(panel.preedit.text);
     preedit.setCursor(static_cast<int>(panel.preedit.cursor));
@@ -622,7 +639,7 @@ api::SessionKey Fcitx5Addon::keyIfKnown(fcitx::InputContext *context) const {
 }
 
 fcitx::InputContext *Fcitx5Addon::contextFor(const api::SessionKey &key) const {
-    if (!key.valid()) {
+    if (!key.valid() || !hostReady_) {
         return nullptr;
     }
     const auto found = contexts_.find(key);
@@ -635,7 +652,9 @@ fcitx::InputContext *Fcitx5Addon::contextFor(const api::SessionKey &key) const {
 }
 
 fcitx::InputContext *Fcitx5Addon::activeContext() const {
-    return contextFor(activeKey_);
+    // Before `hostReady_` the member maps (and `activeKey_` itself) are not
+    // constructed yet; the runtime constructor can ask for a repaint.
+    return hostReady_ ? contextFor(activeKey_) : nullptr;
 }
 
 api::HostFacts Fcitx5Addon::hostFacts(fcitx::InputContext &context) const {
@@ -760,6 +779,11 @@ void Fcitx5Addon::syncPanelOwnership(fcitx::InputContext *context) {
     if (!ours || !hasUi) {
         releasePreeditOwnership(context);
         if (panel.customInputPanelCallback()) {
+            SUPERIOR_DEBUG(diag::categories::Fcitx5)
+                .field("program", context->program())
+                .field("inputMethod", inputMethod)
+                .field("clients", static_cast<std::uint64_t>(overlay_.clientCount()))
+                << "releasing the input panel back to classicui";
             panel.setCustomInputPanelCallback({});
             context->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
         }
@@ -768,6 +792,10 @@ void Fcitx5Addon::syncPanelOwnership(fcitx::InputContext *context) {
 
     takePreeditOwnership(context);
     if (!panel.customInputPanelCallback()) {
+        SUPERIOR_DEBUG(diag::categories::Fcitx5)
+            .field("program", context->program())
+            .field("inputMethod", inputMethod)
+            << "taking over the input panel";
         // Replaces Classic UI for this context only. Fcitx5 still routes
         // update batching through the same path; the callback forwards the new
         // facts to the runtime, which repaints the overlay.
@@ -935,11 +963,7 @@ void Fcitx5Addon::toggleStatusBar() {
 }
 
 void Fcitx5Addon::clearPanelKeepingCallback(fcitx::InputPanel &panel) {
-    auto custom = panel.customInputPanelCallback();
-    auto virtualKeyboard = panel.customVirtualKeyboardCallback();
-    panel.reset();
-    panel.setCustomInputPanelCallback(std::move(custom));
-    panel.setCustomVirtualKeyboardCallback(std::move(virtualKeyboard));
+    resetPanelKeepingCallbacks(panel);
 }
 
 bool Fcitx5Addon::sensitive(const fcitx::InputContext &context) {
@@ -1031,6 +1055,9 @@ void Fcitx5Addon::wireEvents() {
         fcitx::EventWatcherPhase::PostInputMethod, [this](fcitx::Event &event) {
             auto *context = static_cast<fcitx::InputContextEvent &>(event).inputContext();
             if (context != nullptr) {
+                SUPERIOR_DEBUG(diag::categories::Fcitx5)
+                    .field("program", context->program())
+                    << "input method deactivated; classicui takes the panel back";
                 context->inputPanel().setCustomInputPanelCallback({});
                 releasePreeditOwnership(context);
             }

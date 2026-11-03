@@ -162,6 +162,11 @@ private:
 
     fcitx::AddonManager *manager_ = nullptr;
     fcitx::Instance *instance_ = nullptr;
+    /// True once the constructor has finished wiring every callback. The runtime
+    /// constructor reloads settings, and `SpeechController::setEnabled` repaints
+    /// through `activeContext()`; before this flag the session maps are not
+    /// constructed yet, so an early repaint would dereference them.
+    bool hostReady_ = false;
 
     OverlayController overlay_;
 

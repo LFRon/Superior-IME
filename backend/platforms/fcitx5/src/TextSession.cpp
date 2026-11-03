@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "PanelCallbacks.hpp"
+
 namespace superior::fcitx5 {
 
 namespace {
@@ -30,9 +32,13 @@ namespace {
 /// forgets the composition. `InputPanel::reset()` clears the list and both
 /// preedits. Doing only one of the two leaves a stale candidate window or a
 /// composition that reappears on the next keystroke.
+///
+/// The panel reset must preserve the custom callbacks: plain `reset()` drops
+/// them, and the next composition is then painted twice — once by ClassicUI
+/// with its own theme and once by our overlay.
 void dropComposition(fcitx::InputContext &context) {
     context.reset();
-    context.inputPanel().reset();
+    resetPanelKeepingCallbacks(context.inputPanel());
 }
 
 } // namespace
