@@ -31,7 +31,6 @@
 #include "SceneClient.hpp"
 #include "SpeechRecognitionPanel.hpp"
 #include "SkinTheme.hpp"
-#include "LanguageIndicator.hpp"
 #include "OverlayLayout.hpp"
 #include "StatusWindow.hpp"
 #include "platform/Platform.hpp"
@@ -127,7 +126,7 @@ int main(int argc, char **argv) {
                                   QStringLiteral("id"));
     QCommandLineOption noCandidatesOption(
         QStringLiteral("no-candidates"),
-        QStringLiteral("Do not draw the candidate window"));
+        QStringLiteral("Do not draw the input-method popup (candidates and the language badge)"));
     QCommandLineOption candidatesOption(
         QStringLiteral("candidates"),
         QStringLiteral("Accepted for compatibility; the candidate window is on by default"));
@@ -156,7 +155,6 @@ int main(int argc, char **argv) {
     superior::ui::StatusWindow status;
     superior::ui::CandidateWindow candidates;
     superior::ui::SpeechRecognitionPanel speech;
-    superior::ui::LanguageIndicator indicator;
 
     // --------------------------------------------------------------- scale
     //
@@ -196,7 +194,6 @@ int main(int argc, char **argv) {
         status.setScale(appliedScale);
         candidates.setScale(appliedScale);
         speech.setScale(appliedScale);
-        indicator.setScale(appliedScale);
         if (!changed) {
             return;
         }
@@ -263,13 +260,13 @@ int main(int argc, char **argv) {
         // A frame with both surfaces hidden means another input method is
         // active. Fcitx5 keeps its own panel and theme in that case, so nothing
         // of ours is drawn.
-        const bool ours = frame.panel.visible || frame.status.visible || frame.indicator.visible;
+        const bool ours =
+            frame.panel.visible || frame.status.visible || frame.indicator.visible;
         const superior::ui::SkinTheme theme =
             (activeSkin && ours) ? superior::ui::SkinTheme::from(*activeSkin, frame.panel.styleId)
                                  : superior::ui::SkinTheme::fallback();
 
         status.apply(frame.status, ours ? frame.panel.mode : std::string{}, {}, theme);
-        indicator.apply(frame.indicator, theme);
 
         // The speech panel shares the process with the other two overlays, so a
         // single geometry policy keeps them from ever stacking onto each other.
@@ -287,7 +284,7 @@ int main(int argc, char **argv) {
         speech.apply(frame.speech, frame.session, theme);
 
         if (!ours) {
-            candidates.apply(frame.panel, superior::ui::SkinTheme::fallback());
+            candidates.apply(frame.panel, frame.indicator, superior::ui::SkinTheme::fallback());
             return;
         }
 
@@ -297,7 +294,10 @@ int main(int argc, char **argv) {
         candidates.setAvoidRect(speech.occupiedRect());
 
         if (drawCandidates) {
-            candidates.apply(frame.panel, theme);
+            // The language badge is painted by the same popup: Treeland moves
+            // every adopted input-method panel to one anchor, so a second
+            // window could not be offset from the candidate list.
+            candidates.apply(frame.panel, frame.indicator, theme);
         }
     };
 

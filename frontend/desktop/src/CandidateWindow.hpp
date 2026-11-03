@@ -18,16 +18,26 @@
 
 namespace superior::ui {
 
-/// Candidate/preedit panel.
+/// The input-method popup: candidate list, preedit and the language badge.
 ///
 /// On X11 it is another override-redirect overlay, so it cannot steal focus
 /// from the text client. On Wayland this class is intentionally not used for
 /// the candidate panel: the compositor owns input-popup placement there.
+///
+/// The badge shares this window instead of getting its own. Treeland moves
+/// *every* window adopted as an input-method panel to the same anchor
+/// (`IMCandidatePanelManager::arrangeIMCandidatePanels()` uses one `basePos` for
+/// the whole list), so a second window could never sit beside the caret — it
+/// would stack exactly on top of the candidate list. The two contents are
+/// mutually exclusive by construction: the runtime hides the badge when a
+/// composition starts, so one popup can show either, and either way the
+/// compositor has exactly one surface to place at the caret.
 class CandidateWindow : public QWidget {
 public:
     explicit CandidateWindow(QWidget *parent = nullptr);
 
-    void apply(const api::PanelScene &panel, const SkinTheme &theme);
+    void apply(const api::PanelScene &panel, const api::IndicatorScene &indicator,
+               const SkinTheme &theme);
 
     /// `settings.json` `uiScale`; 1.0 is 100%. Re-renders the last scene so the
     /// panel matches immediately instead of on the next keystroke.
@@ -84,6 +94,15 @@ private:
         api::CandidateId id = 0;
     };
 
+    /// What this frame wants the popup to show. `None` means "not a popup":
+    /// hidden when we place it, an empty 1x1 surface when the compositor does.
+    enum class Content { None, Candidates, Badge };
+
+    /// Paints the language badge instead of the candidate list.
+    void paintBadge(QPainter &painter);
+    /// Anchor this content belongs to: the list's caret or the badge's.
+    [[nodiscard]] const api::Anchor &anchorFor(Content content) const;
+
     Session session_{};
     SkinTheme theme_ = SkinTheme::fallback();
     api::Anchor lastAnchor_;
@@ -128,6 +147,10 @@ private:
     std::uintptr_t candidatePanelWindow_ = 0;
     Rect avoid_{};
     double scale_ = 1.0;
+    Content content_ = Content::None;
+    /// Badge text and anchor ("拼" / "A"); only meaningful for `Content::Badge`.
+    QString badge_;
+    api::Anchor badgeAnchor_;
     bool panelVisible_ = false;
     QString preedit_;
     std::size_t preeditCursor_ = 0;

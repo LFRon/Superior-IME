@@ -151,10 +151,16 @@ void CandidateWindow::setScale(double scale) {
         return;
     }
     scale_ = bounded;
-    if (panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty())) {
+    if (content_ != Content::None) {
         resize(sizeHint());
-        placeAtCaret(*this, lastAnchor_);
-        stepAround(*this, avoid_);
+        if (!compositorPlaced_) {
+            placeAtCaret(*this, anchorFor(content_), content_ == Content::Badge
+                                                          ? scaled(theme_.indicator.gap)
+                                                          : 6);
+            if (content_ == Content::Candidates) {
+                stepAround(*this, avoid_);
+            }
+        }
         update();
     }
 }
@@ -163,13 +169,18 @@ void CandidateWindow::setAvoidRect(const Rect &rect) {
     avoid_ = rect;
     // The speech panel can appear while a composition is already on screen, so
     // the rule has to apply immediately rather than on the next keystroke.
-    if (panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty())) {
+    if (content_ == Content::Candidates && !compositorPlaced_) {
         placeAtCaret(*this, lastAnchor_);
         stepAround(*this, avoid_);
     }
 }
 
-void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme) {
+const api::Anchor &CandidateWindow::anchorFor(Content content) const {
+    return content == Content::Badge ? badgeAnchor_ : lastAnchor_;
+}
+
+void CandidateWindow::apply(const api::PanelScene &panel, const api::IndicatorScene &indicator,
+                            const SkinTheme &theme) {
     theme_ = theme;
     lastAnchor_ = panel.anchor;
     panelVisible_ = panel.visible;
@@ -191,8 +202,17 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     cells_.clear();
     hoverIndex_ = -1;
 
-    const bool shouldShow = panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty());
-    if (!shouldShow) {
+    badge_ = indicator.visible ? QString::fromStdString(indicator.text) : QString();
+    badgeAnchor_ = indicator.anchor;
+
+    const bool showCandidates = panelVisible_ && (!preedit_.isEmpty() || !candidates_.empty());
+    // The runtime already hides the badge when a composition starts; if both
+    // ever arrived, the list wins because it is what the user is interacting
+    // with, and one surface can only paint one of them.
+    content_ = showCandidates ? Content::Candidates
+                              : (!badge_.isEmpty() ? Content::Badge : Content::None);
+
+    if (content_ == Content::None) {
         if (managedWindow_) {
             // Staying mapped is the whole point: the compositor adopts a mapped
             // surface, and an unmap drops the adoption permanently. An empty
@@ -221,7 +241,8 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     //
     // `winId()` has to be called after `show()`: the native window does not
     // exist before the first map, and the property would be written to nothing.
-    const bool caretKnown = panel.anchor.valid;
+    const api::Anchor &anchor = anchorFor(content_);
+    const bool caretKnown = anchor.valid;
     const bool compositorHandles = !caretKnown && compositorPlacesCandidatePanel(session_);
     if (compositorHandles) {
         // A compositor only manages windows it knows about, so the panel has to
@@ -238,7 +259,7 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
             if (haveCompositorPos_) {
                 move(lastCompositorPos_);
             } else {
-                placeAtCaret(*this, panel.anchor);
+                placeAtCaret(*this, anchor);
             }
             paintReady_ = false;
             show();
@@ -252,6 +273,16 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
             }
         }
         compositorPlaced_ = true;
+        if (content_ == Content::Badge) {
+            // A badge is transient: do not wait for the placement stream to
+            // settle. The 1x1 -> badge-size resize is the geometry change the
+            // compositor re-anchors on, and the box is small enough that a
+            // single stale frame at the previous caret is invisible.
+            awaitingPlacement_ = false;
+            paintReady_ = true;
+            update();
+            return;
+        }
         if (!paintReady_) {
             awaitingPlacement_ = true;
             // Treeland repositions on a geometry change, but only when it
@@ -299,11 +330,36 @@ void CandidateWindow::apply(const api::PanelScene &panel, const SkinTheme &theme
     awaitingPlacement_ = false;
     paintReady_ = true;
     selfMoving_ = true;
-    placeAtCaret(*this, panel.anchor);
-    stepAround(*this, avoid_);
+    placeAtCaret(*this, anchor, content_ == Content::Badge ? scaled(theme_.indicator.gap) : 6);
+    if (content_ == Content::Candidates) {
+        stepAround(*this, avoid_);
+    }
     selfMoving_ = false;
     show();
     update();
+}
+
+void CandidateWindow::paintBadge(QPainter &painter) {
+    const int radius = std::max(0, scaled(theme_.indicator.radius));
+    QPainterPath background;
+    background.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+    painter.fillPath(background, theme_.indicator.surface);
+    painter.setPen(QPen(theme_.indicator.border, 1.0));
+    painter.drawPath(background);
+
+    // The badge is one glyph, so it names its own family: a skin that only
+    // overrides colours keeps the popup's font, which is what an old skin
+    // expects.
+    QFont badge = font();
+    if (!theme_.indicator.family.isEmpty()) {
+        badge.setFamily(theme_.indicator.family);
+    }
+    badge.setPixelSize(std::max(1, scaled(theme_.indicator.pixelSize)));
+    badge.setWeight(static_cast<QFont::Weight>(std::clamp(theme_.indicator.weight, 1, 1000)));
+    badge.setItalic(theme_.indicator.italic);
+    painter.setFont(badge);
+    painter.setPen(theme_.indicator.text);
+    painter.drawText(rect(), Qt::AlignCenter, badge_);
 }
 
 QFont CandidateWindow::candidateFont() const {
@@ -330,6 +386,10 @@ QFont CandidateWindow::candidateFont() const {
 }
 
 QSize CandidateWindow::sizeHint() const {
+    if (content_ == Content::Badge) {
+        return QSize(std::max(1, scaled(theme_.indicator.width)),
+                     std::max(1, scaled(theme_.indicator.height)));
+    }
     const QFont metricsFont = candidateFont();
     const QFontMetrics metrics(metricsFont);
     int width = scaled(theme_.paddingX) * 2;
@@ -366,6 +426,11 @@ void CandidateWindow::paintEvent(QPaintEvent *event) {
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
+
+    if (content_ == Content::Badge) {
+        paintBadge(painter);
+        return;
+    }
 
     QPainterPath background;
     background.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), theme_.radius,

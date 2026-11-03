@@ -403,6 +403,16 @@ void testLanguageIndicator() {
     CHECK(scene.frames.back().indicator.visible);
     CHECK(scene.frames.back().indicator.text == "拼");
 
+    // A composition takes the popup: the badge and the candidate list are never
+    // on screen together, which is what lets the UI paint both in one window
+    // (Treeland places every adopted panel at the same anchor).
+    CHECK(runtime.key(key, letter('a'), hostFacts()));
+    CHECK(scene.frames.back().panel.visible);
+    CHECK(!scene.frames.back().indicator.visible);
+    scheduler.clock += 500;
+    runtime.tick();
+    CHECK(!scene.frames.back().indicator.visible);
+
     // Losing focus must not leave the badge waiting for a caret that is gone.
     runtime.focusOut(key);
     CHECK(!scene.frames.back().indicator.visible);

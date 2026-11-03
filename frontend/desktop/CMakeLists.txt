@@ -27,7 +27,6 @@ add_executable(superior_ui
     src/CandidateWindow.cpp
     src/EmojiFont.cpp
     src/DragHandle.cpp
-    src/LanguageIndicator.cpp
     src/LayoutRules.cpp
     src/Logging.cpp
     src/ModelDownload.cpp
