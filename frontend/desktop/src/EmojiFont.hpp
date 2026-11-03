@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace superior::ui {
 
@@ -19,6 +20,20 @@ namespace superior::ui {
 /// Most preferred first. Only names that are actually installed are used; see
 /// `pickEmojiFamily`.
 [[nodiscard]] std::span<const std::string_view> emojiFamilyPreference() noexcept;
+
+/// The family list a candidate font should carry, in priority order.
+///
+/// `families` is the widget's own list (it may hold a generic name such as
+/// "Sans Serif"), `resolved` is the concrete family Qt actually picked for that
+/// font, and `emoji` is the colour emoji family to fall back to (empty when none
+/// is installed).
+///
+/// The concrete family goes **first** and the emoji family **last**. With a
+/// generic name in front, Qt resolves the whole font to the last family: the
+/// candidate text was drawn in Noto Color Emoji, whose ASCII digits are the dim
+/// keycap glyphs — which is what "the candidate numbers look wrong" was.
+[[nodiscard]] std::vector<std::string> candidateFamilies(
+    std::span<const std::string> families, std::string_view resolved, std::string_view emoji);
 
 /// The emoji family to append to the candidate font, or an empty string.
 ///

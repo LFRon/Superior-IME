@@ -208,6 +208,24 @@ emoji=true  → 库 苦 哭 😢 😭 酷      （实测，同一份词库）
 追加到候选字体族列表末尾。注意测量与绘制必须用同一个 `QFontMetrics`，否则格子按没有
 表情的宽度算，表情会被裁掉——这也是两者共用一个 `candidateFont()` 的原因。
 
+**emoji 族必须排在最后，具体族名必须排在最前。** Qt 的应用默认字体常常是一个通用名
+（"Sans Serif"），在 Wayland 会话里没有桌面主题提供字体时尤其如此。把 emoji 族追加在
+通用名后面，Qt 会把**整个字体**解析成 emoji 族：
+
+```
+QFontInfo(candidateFont()).family() == "Noto Color Emoji"
+```
+
+Noto Color Emoji 对 ASCII 数字有 glyph（给 keycap `1️⃣` 用的那种），于是候选编号被画成
+暗淡的灰字，汉字却因为 emoji 族没有 CJK 而回退到正常字体——看起来就是「数字显示不对，
+而且只有 Wayland 下明显」。`EmojiFont` 的 `candidateFamilies()` 因此把
+`QFontInfo(默认字体).family()` 解析出的**具体族**放在第一位，原列表其次，emoji 族最后：
+
+| 字体设置 | 数字 | 表情 |
+|---|---|---|
+| `{默认族(通用名), emoji}`（旧） | 暗灰 keycap | 彩色 |
+| `{具体族, 默认族, emoji}`（现） | 与汉字同色 | 彩色 |
+
 没有装任何 emoji 字体时不会报错，候选照常显示，只是单色；日志里会有一条
 `no emoji font installed; emoji candidates will be monochrome`。
 

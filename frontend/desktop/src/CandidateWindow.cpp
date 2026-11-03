@@ -5,6 +5,7 @@
 
 #include <QEvent>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QMouseEvent>
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "CandidateLabel.hpp"
 #include "EmojiFont.hpp"
@@ -365,22 +367,35 @@ void CandidateWindow::paintBadge(QPainter &painter) {
 QFont CandidateWindow::candidateFont() const {
     QFont candidate = font();
     candidate.setPointSizeF(kCandidatePointSize * scale_);
+
     // A candidate can be an emoji, and Qt's own fallback picks a monochrome
     // glyph for it even when a colour emoji font is installed. Naming the family
     // is what turns the outline into the yellow face.
-    const QString emoji = emojiFamily();
-    if (!emoji.isEmpty()) {
-        QStringList families = candidate.families();
-        families.removeAll(QString());
-        if (families.isEmpty()) {
-            families << (candidate.family().isEmpty()
-                             ? QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()
-                             : candidate.family());
+    //
+    // The concrete family has to be named first. `QFont::families()` holds a
+    // *generic* name ("Sans Serif") whenever no desktop theme supplied a font —
+    // which is exactly the Wayland-without-a-theme case — and with a generic
+    // first, Qt resolves the whole font to the last family instead: the
+    // candidate row was drawn in Noto Color Emoji, whose ASCII digits are the
+    // dim keycap glyphs, so "1." and "2." turned into faint grey marks.
+    std::vector<std::string> own;
+    for (const QString &family : candidate.families()) {
+        if (!family.isEmpty()) {
+            own.push_back(family.toStdString());
         }
-        if (!families.contains(emoji)) {
-            families << emoji;
-            candidate.setFamilies(families);
-        }
+    }
+    const std::string resolved = QFontInfo(candidate).family().toStdString();
+    const std::string emoji = emojiFamily().toStdString();
+    if (resolved.empty() && own.empty() && emoji.empty()) {
+        return candidate;
+    }
+
+    QStringList families;
+    for (const std::string &family : candidateFamilies(own, resolved, emoji)) {
+        families << QString::fromStdString(family);
+    }
+    if (!families.isEmpty()) {
+        candidate.setFamilies(families);
     }
     return candidate;
 }

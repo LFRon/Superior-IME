@@ -9,6 +9,7 @@
 
 namespace {
 
+using superior::ui::candidateFamilies;
 using superior::ui::emojiFamilyPreference;
 using superior::ui::pickEmojiFamily;
 
@@ -50,11 +51,43 @@ void testNoEmojiFamily() {
     CHECK(!emojiFamilyPreference().empty());
 }
 
+/// The concrete family has to lead. Appending the emoji family to a generic
+/// "Sans Serif" made Qt resolve the whole font to the emoji face, and its ASCII
+/// digits are the dim keycap glyphs: the candidate numbers were unreadable on a
+/// Wayland session, where no desktop theme supplies a font.
+void testConcreteFamilyLeads() {
+    CHECK(candidateFamilies(families({"Sans Serif"}), "OPPO Sans 4.0", "Noto Color Emoji") ==
+          families({"OPPO Sans 4.0", "Sans Serif", "Noto Color Emoji"}));
+    // Nothing to resolve (no font database answer): the emoji family alone.
+    CHECK(candidateFamilies({}, "", "Noto Color Emoji") ==
+          families({"Noto Color Emoji"}));
+}
+
+/// A name that appears twice must not be listed twice: Qt treats the list as an
+/// ordered fallback, and duplicates only confuse the resolver.
+void testFamiliesAreDeduplicated() {
+    CHECK(candidateFamilies(families({"Noto Sans CJK SC"}), "Noto Sans CJK SC",
+                            "Noto Color Emoji") ==
+          families({"Noto Sans CJK SC", "Noto Color Emoji"}));
+    CHECK(candidateFamilies(families({""}), "Noto Color Emoji", "Noto Color Emoji") ==
+          families({"Noto Color Emoji"}));
+}
+
+/// Without an emoji font the concrete family is still the one that draws.
+void testNoEmojiStillConcrete() {
+    CHECK(candidateFamilies(families({"Sans Serif"}), "OPPO Sans 4.0", "") ==
+          families({"OPPO Sans 4.0", "Sans Serif"}));
+    CHECK(candidateFamilies({}, "", "").empty());
+}
+
 } // namespace
 
 int main() {
     testPreferenceOrder();
     testFallbackToAnyEmojiFamily();
     testNoEmojiFamily();
+    testConcreteFamilyLeads();
+    testFamiliesAreDeduplicated();
+    testNoEmojiStillConcrete();
     return superior::test::finish("emoji font tests");
 }

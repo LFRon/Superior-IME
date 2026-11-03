@@ -48,6 +48,27 @@ bool contains(std::span<const std::string> installed, std::string_view family) n
 
 } // namespace
 
+std::vector<std::string> candidateFamilies(std::span<const std::string> families,
+                                           std::string_view resolved, std::string_view emoji) {
+    std::vector<std::string> out;
+    out.reserve(families.size() + 2);
+    const auto add = [&out](std::string_view family) {
+        if (family.empty()) {
+            return;
+        }
+        if (std::find(out.begin(), out.end(), family) != out.end()) {
+            return;
+        }
+        out.emplace_back(family);
+    };
+    add(resolved);
+    for (const std::string &family : families) {
+        add(family);
+    }
+    add(emoji);
+    return out;
+}
+
 std::span<const std::string_view> emojiFamilyPreference() noexcept {
     return kPreference;
 }
