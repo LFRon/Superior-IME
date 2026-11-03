@@ -118,6 +118,16 @@ void testDefaultSkinLoads() {
         CHECK_EQ(result.spec->schema, std::string("superior.skin/1"));
         CHECK_EQ(result.spec->panelStyles.size(), std::size_t(2));
         CHECK_EQ(result.spec->status.items.size(), std::size_t(5));
+        CHECK(result.spec->indicator.has_value());
+        if (result.spec->indicator) {
+            const superior::skin::IndicatorStyle &indicator = *result.spec->indicator;
+            CHECK(indicator.width == 34.0);
+            CHECK(indicator.height == 34.0);
+            CHECK(indicator.gap == 6.0);
+            CHECK(indicator.background.color.has_value());
+            CHECK(indicator.background.radius == 8.0);
+            CHECK(indicator.text.color.has_value());
+        }
         CHECK(!result.spec->hash.empty());
         CHECK(result.spec->hash.size() == 16);
         CHECK(!result.spec->assets.empty());
@@ -300,6 +310,44 @@ void testUnknownKeysDoNotChangeHash() {
     }
 }
 
+void testIndicatorParses() {
+    TempPackage plain;
+    plain.write("skin.json", minimalSkin());
+
+    TempPackage package;
+    package.write("skin.json", minimalSkin(R"("indicator": {
+        "background": { "color": "#11223344", "radius": 7 },
+        "text": { "color": "#AABBCC" },
+        "size": [40, 36],
+        "gap": 9
+    })"));
+
+    const LoadResult result = superior::skin::loadSkin(package.root());
+    CHECK(result.ok());
+    if (result.spec && result.spec->indicator) {
+        const superior::skin::IndicatorStyle &indicator = *result.spec->indicator;
+        CHECK(indicator.background.color.has_value());
+        CHECK(indicator.background.radius == 7.0);
+        CHECK(indicator.text.color.has_value());
+        CHECK(indicator.width == 40.0);
+        CHECK(indicator.height == 36.0);
+        CHECK(indicator.gap == 9.0);
+    } else {
+        CHECK(false);
+    }
+
+    // A skin written before the badge existed has no `indicator` object; that is
+    // valid, and the renderer derives the badge from the panel style.
+    const LoadResult old = superior::skin::loadSkin(plain.root());
+    CHECK(old.ok());
+    if (old.spec) {
+        CHECK(!old.spec->indicator.has_value());
+        if (result.spec && old.spec) {
+            CHECK(old.spec->hash != result.spec->hash);
+        }
+    }
+}
+
 void testScanSkins() {
     const auto summaries = superior::skin::scanSkins(fs::path(SUPERIOR_SOURCE_DIR) / "skins");
     CHECK(!summaries.empty());
@@ -340,6 +388,7 @@ int main() {
     testVariantMustReferenceKnownStyle();
     testHashIsStableAndContentSensitive();
     testUnknownKeysDoNotChangeHash();
+    testIndicatorParses();
     testScanSkins();
     testCanonicalJsonIsDeterministic();
 

@@ -210,8 +210,8 @@ public:
 
         checkUnknownKeys(document_,
                          {"schema", "id", "name", "version", "author", "license", "description",
-                          "preview", "modes", "defaultMode", "tokens", "panel", "status", "voice",
-                          "motion"},
+                          "preview", "modes", "defaultMode", "tokens", "panel", "status",
+                          "indicator", "voice", "motion"},
                          "");
 
         SkinSpec spec;
@@ -265,6 +265,7 @@ public:
         parseTokens();
         parsePanel(spec);
         parseStatus(spec);
+        parseIndicator(spec);
         parseVoice(spec);
         parseMotion(spec);
 
@@ -1108,6 +1109,40 @@ private:
             }
             spec.status.items.push_back(std::move(item));
         }
+    }
+
+    void parseIndicator(SkinSpec &spec) {
+        const Json *indicator = member(document_, "indicator");
+        if (indicator == nullptr) {
+            return;
+        }
+        if (!indicator->is_object()) {
+            error("/indicator", codes::FieldType, "'indicator' must be an object");
+            return;
+        }
+        checkUnknownKeys(*indicator, {"background", "text", "size", "gap"}, "/indicator");
+
+        IndicatorStyle style;
+        if (auto background = brushField(*indicator, "background", "/indicator")) {
+            style.background = *background;
+        }
+        if (const Json *text = member(*indicator, "text")) {
+            style.text = textSpecValue(*text, "/indicator/text");
+        }
+        if (const Json *size = member(*indicator, "size")) {
+            if (!size->is_array() || size->size() != 2) {
+                error("/indicator/size", codes::FieldType, "expected [width, height]");
+            } else if ((*size)[0].is_number() && (*size)[1].is_number()) {
+                style.width = (*size)[0].get<double>();
+                style.height = (*size)[1].get<double>();
+            } else {
+                error("/indicator/size", codes::FieldType, "expected numeric [width, height]");
+            }
+        }
+        if (auto gap = numberField(*indicator, "gap", "/indicator", 0.0, 256.0)) {
+            style.gap = *gap;
+        }
+        spec.indicator = std::move(style);
     }
 
     void parseVoice(SkinSpec &spec) {

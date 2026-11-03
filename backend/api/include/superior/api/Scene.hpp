@@ -102,6 +102,21 @@ struct StatusScene {
     std::vector<StatusItem> items;
 };
 
+/// The short-lived language badge shown next to the caret when the status bar
+/// is hidden.
+///
+/// The runtime decides both *whether* it is visible and *what* it says; the UI
+/// only paints the skin's `indicator` style. It exists because a user who hides
+/// the toolbar otherwise has no feedback at all when Shift flips the language.
+struct IndicatorScene {
+    bool visible = false;
+    Anchor anchor;
+    /// "拼" for Chinese, "A" for English. Already localised by the producer.
+    std::string text;
+    std::string skinId;
+    SkinGeneration skinGeneration = 0;
+};
+
 /// Animation is expressed as data so the UI can sample it on its own vsync.
 /// The agent supplies stable timing (monotonic milliseconds); it never sends
 /// one message per animation frame.
@@ -156,6 +171,7 @@ struct UiSceneFrame {
     PanelScene panel;
     StatusScene status;
     SpeechScene speech;
+    IndicatorScene indicator;
     std::optional<TransitionSpec> transition;
 };
 

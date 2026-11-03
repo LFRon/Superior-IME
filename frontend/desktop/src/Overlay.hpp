@@ -2,6 +2,7 @@
 #pragma once
 
 #include "LayoutRules.hpp"
+#include "superior/api/Scene.hpp"
 
 class QWidget;
 
@@ -15,6 +16,15 @@ namespace superior::ui {
 /// frameless window; callers should prefer an XWayland session for the status
 /// bar until the layer-shell backend lands.
 void makeOverlay(QWidget &widget);
+
+/// Places `widget` just below the caret in `anchor`, clamped to the screen that
+/// contains it. `gap` is the distance between the caret and the widget.
+///
+/// `Anchor::cursor` is in session device pixels; Qt moves windows in logical
+/// pixels, and the mapping is per screen (see `caretToLogical`). When the caret
+/// is unknown the widget falls back to the bottom-right corner, which is where a
+/// lone overlay is still visible.
+void placeAtCaret(QWidget &widget, const api::Anchor &anchor, int gap = 6);
 
 /// Window policy for a panel the **compositor** is expected to place.
 ///

@@ -34,7 +34,7 @@ backend/
    └─ stub/              无平台依赖的桩：第二个 TextSessionPort 实现
 
 frontend/
-├─ desktop/              Qt 桌面壳：候选窗、状态栏、语音面板、X11/Wayland 分派
+├─ desktop/              Qt 桌面壳：候选窗、状态栏、语言徽标、语音面板、X11/Wayland 分派
 ├─ settings/             设置窗口
 ├─ render/ widgets/ app/ 预留：共享渲染与装配
 └─ mobile/               预留：移动壳
@@ -102,6 +102,7 @@ v3 把宿主、内核、能力放进同一个 addon，用 `api::Composer` 切分
 - `panel`：可见性、锚点、皮肤代次、preedit、候选页、选中 id
 - `status`：状态栏位置与语义项
 - `speech`：语音面板阶段、模型、电平、partial、剩余时间
+- `indicator`：工具栏隐藏时 Shift 切换中/英的「拼」/「A」徽标
 - `transition`：动画数据（UI 按自己的 vsync 采样）
 
 ### 4.2 上行：`UiCommand`

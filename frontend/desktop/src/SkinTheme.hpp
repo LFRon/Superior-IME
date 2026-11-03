@@ -2,12 +2,34 @@
 #pragma once
 
 #include <QColor>
+#include <QString>
 
 #include <string>
 
 #include "superior/skin/Types.hpp"
 
 namespace superior::ui {
+
+/// Language badge shown next to the caret while the toolbar is hidden.
+///
+/// It is a separate surface from the candidate panel, so it carries only the
+/// values that surface paints. `SkinTheme::from` fills the defaults from the
+/// panel style for skins written before the badge existed.
+struct IndicatorTheme {
+    QColor surface{30, 33, 38, 242};
+    QColor text{232, 234, 237};
+    QColor border{255, 255, 255, 30};
+    int radius = 8;
+    int width = 34;
+    int height = 34;
+    int gap = 6;
+    /// Empty means "use the widget's font", which is what a skin written before
+    /// the badge existed expects.
+    QString family;
+    int pixelSize = 16;
+    int weight = 500;
+    bool italic = false;
+};
 
 /// Colours and metrics extracted from a `superior.skin/1` panel style.
 ///
@@ -30,6 +52,8 @@ struct SkinTheme {
     int cellPaddingY = 4;
     int gap = 6;
     bool showSeparator = false;
+
+    IndicatorTheme indicator;
 
     [[nodiscard]] static SkinTheme from(const skin::SkinSpec &spec, const std::string &styleId);
 

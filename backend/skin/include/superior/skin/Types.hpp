@@ -178,6 +178,16 @@ struct StatusStyle {
     std::vector<StatusItem> items;
 };
 
+/// The small language badge ("拼"/"A") shown next to the caret while the
+/// toolbar is hidden.
+struct IndicatorStyle {
+    Brush background{};
+    TextSpec text{};
+    double width = 34.0;
+    double height = 34.0;
+    double gap = 6.0;
+};
+
 struct LevelMeter {
     int bars = 24;
     std::optional<Color> color;
@@ -238,6 +248,9 @@ struct SkinSpec {
     std::vector<PanelVariant> panelVariants;
     std::map<std::string, PanelStyle> panelStyles;
     StatusStyle status;
+    /// Absent in skins written before the language badge existed; the renderer
+    /// then derives the badge from the panel style instead of failing.
+    std::optional<IndicatorStyle> indicator;
     VoiceStyle voice;
     std::map<std::string, MotionSpec> motion;
 

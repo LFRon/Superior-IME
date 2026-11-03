@@ -175,6 +175,15 @@ Json statusJson(const StatusStyle &status) {
     return out;
 }
 
+Json indicatorJson(const IndicatorStyle &indicator) {
+    Json out;
+    out["background"] = brushJson(indicator.background);
+    out["text"] = textSpecJson(indicator.text);
+    out["size"] = Json::array({indicator.width, indicator.height});
+    out["gap"] = indicator.gap;
+    return out;
+}
+
 Json voiceJson(const VoiceStyle &voice) {
     Json out;
     out["background"] = brushJson(voice.background);
@@ -242,6 +251,9 @@ std::string specToCanonicalJson(const SkinSpec &spec) {
     }
     out["panel"] = Json{{"styles", std::move(styles)}, {"variants", std::move(variants)}};
     out["status"] = statusJson(spec.status);
+    if (spec.indicator) {
+        out["indicator"] = indicatorJson(*spec.indicator);
+    }
     out["voice"] = voiceJson(spec.voice);
 
     Json motion = Json::object();

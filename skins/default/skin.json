@@ -135,6 +135,13 @@
     ]
   },
 
+  "indicator": {
+    "background": { "color": "$color.surface", "radius": 8 },
+    "text": { "font": "$font.candidate", "color": "$color.text" },
+    "size": [34, 34],
+    "gap": 6
+  },
+
   "voice": {
     "background": { "color": "$color.surface", "radius": "$radius.panel" },
     "mic": {

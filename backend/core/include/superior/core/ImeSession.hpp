@@ -39,6 +39,12 @@ public:
     void setStatus(std::vector<api::StatusItem> items);
     void setStatusPlacement(api::StatusPlacement placement);
 
+    /// Language badge shown next to the caret while the toolbar is hidden.
+    /// The runtime owns the timing; this is only the projection into a frame.
+    void showIndicator(std::string text);
+    void hideIndicator();
+    [[nodiscard]] bool indicatorVisible() const noexcept;
+
     CandidateModel &candidates() noexcept;
     [[nodiscard]] const CandidateModel &candidates() const noexcept;
 
@@ -83,6 +89,8 @@ private:
     api::SpeechScene speech_{};
     std::vector<api::StatusItem> statusItems_;
     api::StatusPlacement statusPlacement_ = api::StatusPlacement::BottomRight;
+    bool indicatorVisible_ = false;
+    std::string indicatorText_;
     std::optional<api::TransitionSpec> transition_;
     int pageIndex_ = 0;
     int pageCount_ = 0;

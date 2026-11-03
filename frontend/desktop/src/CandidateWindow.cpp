@@ -107,60 +107,6 @@ constexpr int kGeometryNudgeMs = 30;
 /// serial, so a client cannot tell "settled" from "about to change again".
 constexpr int kSettleQuietMs = 20;
 
-/// Places the panel just below the caret, clamped to the screen.
-///
-/// `Anchor::cursor` is reported by Fcitx5. For X11 clients it is a global
-/// coordinate; for Wayland clients the compositor may not expose it, in which
-/// case the anchor is invalid and the caller falls back to a fixed corner.
-void placeAtCaret(QWidget &widget, const api::Anchor &anchor) {
-    if (!anchor.valid || anchor.cursor.width < 0 || anchor.cursor.height < 0) {
-        placeBottomRight(widget, 120);
-        return;
-    }
-
-    // The scene publishes the caret in session device pixels (an X server has no
-    // logical layer); Qt moves windows in logical pixels. Skipping the division
-    // is what left a gap that grew with the distance from the origin on a
-    // fractional-scale desktop — and doing the division with one global ratio is
-    // what put the panel on the wrong screen when two screens scale differently.
-    // So: describe every screen, let the caret pick one, and map inside it.
-    std::vector<QScreen *> ordered;
-    if (QScreen *primary = QGuiApplication::primaryScreen()) {
-        ordered.push_back(primary);
-    }
-    for (QScreen *candidate : QGuiApplication::screens()) {
-        if (std::find(ordered.begin(), ordered.end(), candidate) == ordered.end()) {
-            ordered.push_back(candidate);
-        }
-    }
-    std::vector<ScreenSpace> spaces;
-    spaces.reserve(ordered.size());
-    for (const QScreen *candidate : ordered) {
-        const QRect geometry = candidate->geometry();
-        spaces.push_back(ScreenSpace{Rect{geometry.x(), geometry.y(), geometry.width(),
-                                          geometry.height()},
-                                     candidate->devicePixelRatio()});
-    }
-
-    std::size_t screenIndex = 0;
-    const Rect caretRect = caretToLogical(anchor.cursor.x, anchor.cursor.y, anchor.cursor.width,
-                                          anchor.cursor.height, spaces, &screenIndex);
-    const QPoint caret(caretRect.left, caretRect.top);
-
-    QScreen *screen = screenIndex < ordered.size() ? ordered[screenIndex] : nullptr;
-    if (screen == nullptr) {
-        return;
-    }
-    const QRect available = screen->availableGeometry();
-
-    int x = caret.x() + static_cast<int>(anchor.offsetX);
-    int y = caret.y() + caretRect.height + 6 + static_cast<int>(anchor.offsetY);
-
-    x = std::clamp(x, available.left() + 4, available.right() - widget.width() - 4);
-    y = std::clamp(y, available.top() + 4, available.bottom() - widget.height() - 4);
-    widget.move(x, y);
-}
-
 /// Keeps `widget` off `avoid` without changing any other part of its position.
 void stepAround(QWidget &widget, const Rect &avoid) {
     if (avoid.width <= 0 || avoid.height <= 0) {

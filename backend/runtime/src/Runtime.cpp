@@ -51,6 +51,14 @@ int digitSlot(const api::KeyPress &press) {
     return -1;
 }
 
+/// How long the language badge stays on screen after Shift flips 中/英 while
+/// the toolbar is hidden.
+///
+/// It is a product decision, not a UI one: the runtime owns the clock and the
+/// host only executes the resulting frame. Long enough to read a single glyph,
+/// short enough not to linger over the next word.
+constexpr std::uint64_t kLanguageIndicatorMs = 900;
+
 bool sameComposition(const api::CompositionFact &left, const api::CompositionFact &right) {
     if (left.visible != right.visible || left.preedit != right.preedit ||
         left.highlighted != right.highlighted || left.pageIndex != right.pageIndex ||
@@ -77,6 +85,9 @@ struct Runtime::Session {
     api::HostFacts host;
     bool composerFailed = false;
     std::string composerError;
+    /// Monotonic deadline for the language badge; 0 when it is not showing.
+    /// The text itself lives in `scene`, so there is still one owner per fact.
+    std::uint64_t indicatorUntilMs = 0;
 };
 
 Runtime::Runtime(Ports ports, api::ComposerFactory &pinyin, SpeechPort &speech, Options options)
@@ -240,6 +251,10 @@ void Runtime::focusIn(const api::SessionKey &key, const api::HostFacts &host) {
 void Runtime::focusOut(const api::SessionKey &key) {
     if (Session *session = find(key)) {
         session->host.focused = false;
+        // The badge belongs to the caret that just lost focus; leaving it would
+        // make the next focus-in flash a stale language state.
+        session->indicatorUntilMs = 0;
+        session->scene.hideIndicator();
         presentHidden(key);
     }
     speech_.holdCommits();
@@ -438,6 +453,12 @@ void Runtime::setLanguage(Session &session, bool english, const char *reason) {
         outbox_.abandonComposition();
     }
     applyModes(session);
+    if (!settings_.showStatusBar) {
+        // With the toolbar hidden the badge is the only feedback the user gets
+        // for a Shift toggle; with it visible the 中/英 chip already answers.
+        session.indicatorUntilMs = nowMs() + kLanguageIndicatorMs;
+        session.scene.showIndicator(english ? "A" : "拼");
+    }
     SUPERIOR_INFO(diag::categories::Fcitx5)
         .field("english", session.modes.english())
         .field("reason", std::string(reason))
@@ -506,6 +527,14 @@ void Runtime::present(Session &session) {
     api::CompositionFact composition;
     if (session.composer) {
         composition = session.composer->frame();
+    }
+
+    // A new composition takes the space next to the caret, and a toolbar that
+    // became visible already shows the mode. Either way the badge loses its
+    // reason to exist; the deadline is dropped so it cannot come back.
+    if (composition.composing || settings_.showStatusBar) {
+        session.indicatorUntilMs = 0;
+        session.scene.hideIndicator();
     }
 
     api::HostFacts host = session.host;
@@ -757,7 +786,13 @@ void Runtime::tick() {
     // Speech level/partial updates arrive at ~20 Hz and are not part of the
     // composition; while a session is live the panel needs every tick.
     if (Session *session = find(active_)) {
-        if (activeChanged || speech_.busy()) {
+        bool indicatorExpired = false;
+        if (session->scene.indicatorVisible() && now >= session->indicatorUntilMs) {
+            session->indicatorUntilMs = 0;
+            session->scene.hideIndicator();
+            indicatorExpired = true;
+        }
+        if (activeChanged || speech_.busy() || indicatorExpired) {
             present(*session);
         }
     }

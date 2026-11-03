@@ -46,4 +46,14 @@ struct OverlayGeometry {
 [[nodiscard]] Rect liftAbove(Rect candidate, Rect speechPanel, Rect screen,
                              int margin = kOverlayMargin) noexcept;
 
+/// Position of a popup anchored to a caret: left-aligned with it, `gap` below.
+///
+/// `caret` and the result are in the overlay's logical pixel space. `offset`
+/// carries a user drag offset for the candidate panel; the language badge passes
+/// zero because dragging the panel must not move it. The result is clamped so a
+/// popup near an edge stays fully visible.
+[[nodiscard]] Rect caretPopupPosition(Rect caret, Size desired, Rect screen,
+                                      Point offset = {}, int gap = 6,
+                                      int margin = 4) noexcept;
+
 } // namespace superior::ui

@@ -84,8 +84,7 @@ Rect clampToScreen(Rect screen, Size desired, Point position, int margin) noexce
     return rect;
 }
 
-Rect liftAbove(Rect candidate, Rect speechPanel, Rect screen, int margin) noexcept {
-    if (empty(candidate) || empty(speechPanel) || !intersects(candidate, speechPanel)) {
+Rect liftAbove(Rect candidate, Rect speechPanel, Rect screen, int margin) noexcept {    if (empty(candidate) || empty(speechPanel) || !intersects(candidate, speechPanel)) {
         return candidate;
     }
     Rect lifted = candidate;
@@ -100,6 +99,25 @@ Rect liftAbove(Rect candidate, Rect speechPanel, Rect screen, int margin) noexce
                             std::max(screen.top + margin,
                                      screen.top + screen.height - lifted.height - margin));
     return lifted;
+}
+
+Rect caretPopupPosition(Rect caret, Size desired, Rect screen, Point offset, int gap,
+                        int margin) noexcept {
+    if (screen.width <= 0 || screen.height <= 0 || desired.width <= 0 || desired.height <= 0) {
+        return Rect{};
+    }
+    Rect popup;
+    popup.width = std::min(desired.width, std::max(0, screen.width - 2 * margin));
+    popup.height = std::min(desired.height, std::max(0, screen.height - 2 * margin));
+    popup.left = caret.left + offset.x;
+    popup.top = caret.top + caret.height + gap + offset.y;
+    popup.left = std::clamp(popup.left, screen.left + margin,
+                            std::max(screen.left + margin,
+                                     screen.left + screen.width - popup.width - margin));
+    popup.top = std::clamp(popup.top, screen.top + margin,
+                           std::max(screen.top + margin,
+                                    screen.top + screen.height - popup.height - margin));
+    return popup;
 }
 
 } // namespace superior::ui

@@ -439,6 +439,15 @@ std::string encodeScene(const api::UiSceneFrame &frame) {
                 {"skinGeneration", frame.status.skinGeneration},
                 {"items", std::move(items)}};
 
+    Json indicator{{"visible", frame.indicator.visible},
+                   {"text", frame.indicator.text},
+                   {"skinId", frame.indicator.skinId},
+                   {"skinGeneration", frame.indicator.skinGeneration}};
+    indicator["anchor"] = Json{{"cursor", rectJson(frame.indicator.anchor.cursor)},
+                               {"offsetX", frame.indicator.anchor.offsetX},
+                               {"offsetY", frame.indicator.anchor.offsetY},
+                               {"valid", frame.indicator.anchor.valid}};
+
     Json speech{{"visible", frame.speech.visible},
                 {"phase", api::speechPhaseName(frame.speech.phase)},
                 {"modelId", frame.speech.modelId},
@@ -457,7 +466,8 @@ std::string encodeScene(const api::UiSceneFrame &frame) {
               {"session", sessionJson(frame.session)},
               {"panel", std::move(panel)},
               {"status", std::move(status)},
-              {"speech", std::move(speech)}};
+              {"speech", std::move(speech)},
+              {"indicator", std::move(indicator)}};
     if (frame.transition) {
         json["transition"] = Json{{"motion", frame.transition->motion},
                                   {"startMs", frame.transition->startMs},
@@ -527,6 +537,26 @@ std::optional<api::UiSceneFrame> decodeScene(std::string_view payload, DecodeErr
                 frame.speech.skinId = speech.value("skinId", std::string{});
                 frame.speech.skinGeneration =
                     speech.value("skinGeneration", api::SkinGeneration{0});
+            }
+
+            // Absent in frames from an older agent: the badge stays hidden
+            // instead of failing the whole frame.
+            if (json.contains("indicator")) {
+                const auto &indicator = json.at("indicator");
+                frame.indicator.visible = indicator.value("visible", false);
+                frame.indicator.text = indicator.value("text", std::string{});
+                frame.indicator.skinId = indicator.value("skinId", std::string{});
+                frame.indicator.skinGeneration =
+                    indicator.value("skinGeneration", api::SkinGeneration{0});
+                if (indicator.contains("anchor")) {
+                    const auto &badgeAnchor = indicator.at("anchor");
+                    if (badgeAnchor.contains("cursor")) {
+                        frame.indicator.anchor.cursor = rectFrom(badgeAnchor.at("cursor"));
+                    }
+                    frame.indicator.anchor.offsetX = badgeAnchor.value("offsetX", 0.0);
+                    frame.indicator.anchor.offsetY = badgeAnchor.value("offsetY", 0.0);
+                    frame.indicator.anchor.valid = badgeAnchor.value("valid", false);
+                }
             }
 
             if (json.contains("transition")) {

@@ -137,6 +137,12 @@ api::UiSceneFrame sampleScene() {
     frame.status.items.push_back(api::StatusItem{"ime", "CN", "icon", true, true});
     frame.status.items.push_back(api::StatusItem{"punctuation", "\u5168\u89d2\u6807\u70b9", "", true,
                                                  true, api::StatusRole::Punctuation});
+    frame.indicator.visible = true;
+    frame.indicator.text = "\u62fc";
+    frame.indicator.anchor.cursor = api::Rect{10.0, 20.0, 0.0, 18.0};
+    frame.indicator.anchor.valid = true;
+    frame.indicator.skinId = "org.test";
+    frame.indicator.skinGeneration = 4;
     frame.transition = api::TransitionSpec{"panel.show", 1234, 0.0, 1.0};
     return frame;
 }
@@ -166,6 +172,10 @@ void testSceneRoundTrip() {
     CHECK(decoded->status.items.front().role == api::StatusRole::Text);
     CHECK(decoded->status.items.back().role == api::StatusRole::Punctuation);
     CHECK(decoded->status.placement == api::StatusPlacement::TopLeft);
+    CHECK(decoded->indicator.visible);
+    CHECK(decoded->indicator.text == "\u62fc");
+    CHECK(decoded->indicator.anchor.valid);
+    CHECK(decoded->indicator.skinGeneration == 4);
     CHECK(decoded->transition.has_value());
     CHECK(decoded->transition->motion == "panel.show");
     CHECK(decoded->transition->startMs == 1234);
@@ -213,6 +223,7 @@ void testSpeechSceneRoundTrip() {
     if (fallback) {
         CHECK(!fallback->speech.visible);
         CHECK(fallback->speech.phase == api::SpeechPhase::Hidden);
+        CHECK(!fallback->indicator.visible);
     }
 }
 

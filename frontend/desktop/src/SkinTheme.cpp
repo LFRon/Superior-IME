@@ -23,8 +23,53 @@ double luminance(const QColor &color) {
 } // namespace
 
 SkinTheme SkinTheme::fallback() {
-    return SkinTheme{};
+    SkinTheme theme;
+    // Keep the badge in step with the panel when a skin predates it.
+    theme.indicator.surface = theme.surface;
+    theme.indicator.text = theme.text;
+    theme.indicator.border = theme.border;
+    theme.indicator.radius = theme.radius;
+    return theme;
 }
+
+namespace {
+
+void applyIndicator(const skin::SkinSpec &spec, SkinTheme &theme) {
+    theme.indicator.surface = theme.surface;
+    theme.indicator.text = theme.text;
+    theme.indicator.border = theme.border;
+    theme.indicator.radius = theme.radius;
+
+    if (!spec.indicator) {
+        return;
+    }
+    const skin::IndicatorStyle &indicator = *spec.indicator;
+    if (indicator.background.color) {
+        theme.indicator.surface = toColor(*indicator.background.color);
+    }
+    if (indicator.text.color) {
+        theme.indicator.text = toColor(*indicator.text.color);
+    }
+    if (indicator.text.font) {
+        const skin::Font &font = *indicator.text.font;
+        if (!font.family.empty()) {
+            theme.indicator.family = QString::fromStdString(font.family);
+        }
+        if (font.size > 0.0) {
+            theme.indicator.pixelSize = std::max(1, toPixels(font.size));
+        }
+        theme.indicator.weight = std::clamp(font.weight, 1, 1000);
+        theme.indicator.italic = font.italic;
+    }
+    if (indicator.background.color || indicator.background.image) {
+        theme.indicator.radius = toPixels(indicator.background.radius);
+    }
+    theme.indicator.width = std::max(1, toPixels(indicator.width));
+    theme.indicator.height = std::max(1, toPixels(indicator.height));
+    theme.indicator.gap = std::max(0, toPixels(indicator.gap));
+}
+
+} // namespace
 
 SkinTheme SkinTheme::from(const skin::SkinSpec &spec, const std::string &styleId) {
     SkinTheme theme = fallback();
@@ -37,6 +82,7 @@ SkinTheme SkinTheme::from(const skin::SkinSpec &spec, const std::string &styleId
         it = spec.panelStyles.begin();
     }
     if (it == spec.panelStyles.end()) {
+        applyIndicator(spec, theme);
         return theme;
     }
 
@@ -74,6 +120,7 @@ SkinTheme SkinTheme::from(const skin::SkinSpec &spec, const std::string &styleId
     theme.cellPaddingY = toPixels(std::max(style.candidates.cell.padding.top,
                                            style.candidates.cell.padding.bottom));
     theme.gap = std::max(0, toPixels(style.candidates.cell.gap));
+    applyIndicator(spec, theme);
     return theme;
 }
 

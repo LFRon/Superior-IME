@@ -358,11 +358,94 @@ void testCandidateCommandAndFocusLifecycle() {
     CHECK(speech.flushes > 0);
 }
 
+void testLanguageIndicator() {
+    const auto path = settingsPath();
+    {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream << R"({"schema":"superior.settings/1","showStatusBar":false})";
+    }
+
+    superior::stub::RecordingTextSession text;
+    FakeScene scene;
+    FakeScheduler scheduler;
+    FakeLifecycle lifecycle;
+    FakeNativePanel native;
+    FakeStatus status;
+    FakeFactory factory;
+    FakeSpeech speech;
+
+    Runtime runtime(superior::runtime::Ports{text, scene, scheduler, lifecycle, &native, &status},
+                    factory, speech,
+                    superior::runtime::Options{path, "org.superior.default"});
+    const SessionKey key{2, 1};
+    runtime.focusIn(key, hostFacts());
+
+    // Shift flips to English: with the toolbar hidden the badge is the only
+    // feedback, so it carries both the state and the caret it belongs to.
+    CHECK(runtime.gesture(key, superior::api::Gesture::ShiftTap, hostFacts()));
+    CHECK(runtime.english(key));
+    CHECK(scene.frames.back().indicator.visible);
+    CHECK(scene.frames.back().indicator.text == "A");
+    CHECK(scene.frames.back().indicator.anchor.valid);
+
+    // The runtime owns the timeout; a tick before the deadline must not unmap it.
+    scheduler.clock += 500;
+    runtime.tick();
+    CHECK(scene.frames.back().indicator.visible);
+
+    scheduler.clock += 500;
+    runtime.tick();
+    CHECK(!scene.frames.back().indicator.visible);
+
+    // The next tap flips back and re-arms the badge with the Chinese glyph.
+    CHECK(runtime.gesture(key, superior::api::Gesture::ShiftTap, hostFacts()));
+    CHECK(!runtime.english(key));
+    CHECK(scene.frames.back().indicator.visible);
+    CHECK(scene.frames.back().indicator.text == "拼");
+
+    // Losing focus must not leave the badge waiting for a caret that is gone.
+    runtime.focusOut(key);
+    CHECK(!scene.frames.back().indicator.visible);
+    scheduler.clock += 500;
+    runtime.tick();
+    CHECK(!scene.frames.back().indicator.visible);
+}
+
+void testLanguageIndicatorHiddenWithToolbar() {
+    const auto path = settingsPath();
+    {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream << R"({"schema":"superior.settings/1","showStatusBar":true})";
+    }
+
+    superior::stub::RecordingTextSession text;
+    FakeScene scene;
+    FakeScheduler scheduler;
+    FakeLifecycle lifecycle;
+    FakeNativePanel native;
+    FakeStatus status;
+    FakeFactory factory;
+    FakeSpeech speech;
+
+    Runtime runtime(superior::runtime::Ports{text, scene, scheduler, lifecycle, &native, &status},
+                    factory, speech,
+                    superior::runtime::Options{path, "org.superior.default"});
+    const SessionKey key{2, 2};
+    runtime.focusIn(key, hostFacts());
+    CHECK(runtime.gesture(key, superior::api::Gesture::ShiftTap, hostFacts()));
+    CHECK(runtime.english(key));
+    // The toolbar's 中/英 chip already shows the state; a second badge next to
+    // the caret would be noise.
+    CHECK(!scene.frames.back().indicator.visible);
+}
+
 } // namespace
 
 int main() {
     testKeySelectionAndMode();
     testSettingsReachTheCapability();
     testCandidateCommandAndFocusLifecycle();
+    testLanguageIndicator();
+    testLanguageIndicatorHiddenWithToolbar();
     return superior::test::finish("runtime");
 }

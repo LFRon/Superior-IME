@@ -11,6 +11,7 @@ namespace {
 
 using superior::ui::Rect;
 using superior::ui::Size;
+using superior::ui::caretPopupPosition;
 using superior::ui::clampToScreen;
 using superior::ui::liftAbove;
 using superior::ui::placeSpeechPanel;
@@ -158,6 +159,41 @@ void testDraggedPanelTallerThanScreen() {
     CHECK(clamped.left >= 12);
 }
 
+void testCaretPopupSitsBelowTheCaret() {
+    const Rect screen{0, 0, 1920, 1080};
+    const Rect caret{300, 200, 1, 20};
+    const Rect popup = caretPopupPosition(caret, Size{34, 34}, screen);
+    // Left-aligned with the caret and one gap below its baseline.
+    CHECK(popup.left == 300);
+    CHECK(popup.top == 200 + 20 + 6);
+    CHECK(popup.width == 34);
+    CHECK(popup.height == 34);
+}
+
+void testCaretPopupStaysOnScreen() {
+    const Rect screen{0, 0, 800, 600};
+    const Rect nearRight{795, 10, 1, 20};
+    const Rect right = caretPopupPosition(nearRight, Size{34, 34}, screen);
+    CHECK(right.left + right.width <= 800 - 4);
+    CHECK(right.left >= 4);
+
+    const Rect nearBottom{10, 590, 1, 20};
+    const Rect bottom = caretPopupPosition(nearBottom, Size{34, 34}, screen);
+    CHECK(bottom.top + bottom.height <= 600 - 4);
+    CHECK(bottom.top >= 4);
+}
+
+void testCaretPopupOffset() {
+    const Rect screen{0, 0, 1920, 1080};
+    const Rect caret{300, 200, 1, 20};
+    const Rect shifted = caretPopupPosition(caret, Size{34, 34}, screen, {12, -4});
+    CHECK(shifted.left == 312);
+    CHECK(shifted.top == 200 + 20 + 6 - 4);
+    // Nothing to place means nothing is drawn, not a zero-at-origin window.
+    CHECK(caretPopupPosition({}, {}, screen).width == 0);
+    CHECK(caretPopupPosition(caret, Size{34, 34}, {}).width == 0);
+}
+
 void testEmptyInputs() {
     CHECK(clampToScreen({}, Size{100, 100}, {0, 0}).width == 0);
     CHECK(clampToScreen({0, 0, 100, 100}, Size{}, {0, 0}).width == 0);
@@ -182,6 +218,9 @@ int main() {
     testDraggedPositionWins();
     testDraggedPositionClamped();
     testDraggedPanelTallerThanScreen();
+    testCaretPopupSitsBelowTheCaret();
+    testCaretPopupStaysOnScreen();
+    testCaretPopupOffset();
     testEmptyInputs();
     return superior::test::finish("overlay layout tests");
 }

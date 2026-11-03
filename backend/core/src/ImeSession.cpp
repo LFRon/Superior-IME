@@ -77,6 +77,20 @@ void ImeSession::setStatusPlacement(api::StatusPlacement placement) {
     statusPlacement_ = placement;
 }
 
+void ImeSession::showIndicator(std::string text) {
+    indicatorText_ = std::move(text);
+    indicatorVisible_ = !indicatorText_.empty();
+}
+
+void ImeSession::hideIndicator() {
+    indicatorVisible_ = false;
+    indicatorText_.clear();
+}
+
+bool ImeSession::indicatorVisible() const noexcept {
+    return indicatorVisible_;
+}
+
 CandidateModel &ImeSession::candidates() noexcept {
     return candidates_;
 }
@@ -185,6 +199,12 @@ api::UiSceneFrame ImeSession::snapshot(api::FrameId frameId) const {
     frame.status.skinId = skinId_;
     frame.status.skinGeneration = skinGeneration_;
     frame.status.items = statusItems_;
+
+    frame.indicator.visible = indicatorVisible_;
+    frame.indicator.anchor = anchor_;
+    frame.indicator.text = indicatorText_;
+    frame.indicator.skinId = skinId_;
+    frame.indicator.skinGeneration = skinGeneration_;
 
     frame.transition = transition_;
     return frame;
