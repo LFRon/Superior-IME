@@ -109,6 +109,15 @@ public:
 
     void setOptions(const PipelineOptions &value) override { pipeline = value; }
 
+    /// The state librime leaves after a partial commit: text in the composition
+    /// and no candidates ("weibrds" -> 为brds). Driving it directly keeps the
+    /// test about the runtime's space rule, not about the fake's key handling.
+    void leaveCompositionOnly(std::string text) {
+        preedit_ = std::move(text);
+        candidates_.clear();
+        highlighted_ = -1;
+    }
+
     std::map<std::string, bool> options;
     PipelineOptions pipeline;
 
@@ -246,6 +255,43 @@ std::filesystem::path settingsPath() {
     std::filesystem::remove_all(dir, error);
     std::filesystem::create_directories(dir, error);
     return dir / "settings.json";
+}
+
+void testSpaceCommitsAnUnparseableRemainder() {
+    superior::stub::RecordingTextSession text;
+    FakeScene scene;
+    FakeScheduler scheduler;
+    FakeLifecycle lifecycle;
+    FakeNativePanel native;
+    FakeStatus status;
+    FakeFactory factory;
+    FakeSpeech speech;
+
+    Runtime runtime(superior::runtime::Ports{text, scene, scheduler, lifecycle, &native, &status},
+                    factory, speech,
+                    superior::runtime::Options{settingsPath(), "org.superior.default"});
+    const SessionKey key{3, 3};
+    runtime.focusIn(key, hostFacts());
+    CHECK(factory.last != nullptr);
+
+    // "weibrds": the engine turns "wei" into a word and cannot segment "brds",
+    // so after the pick the composition carries text but no candidates. Space
+    // then types that text, exactly as librime's own space key would.
+    CHECK(runtime.key(key, letter('a'), hostFacts()));
+    factory.last->leaveCompositionOnly("为brds");
+    KeyPress space;
+    space.code = KeyCode::Space;
+    CHECK(runtime.key(key, space, hostFacts()));
+    CHECK(text.committed() == "为brds");
+    CHECK(scene.frames.back().panel.preedit.text.empty());
+    CHECK(!scene.frames.back().panel.visible);
+
+    // The same rule covers a bare unparseable syllable: nothing selectable, so
+    // space is a commit of the letters rather than a key that does nothing.
+    factory.last->leaveCompositionOnly("brds");
+    CHECK(runtime.key(key, space, hostFacts()));
+    CHECK(text.committed() == "为brdsbrds");
+    CHECK(!scene.frames.back().panel.visible);
 }
 
 void testKeySelectionAndMode() {
@@ -453,6 +499,7 @@ void testLanguageIndicatorHiddenWithToolbar() {
 
 int main() {
     testKeySelectionAndMode();
+    testSpaceCommitsAnUnparseableRemainder();
     testSettingsReachTheCapability();
     testCandidateCommandAndFocusLifecycle();
     testLanguageIndicator();

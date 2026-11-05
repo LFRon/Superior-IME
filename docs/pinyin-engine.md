@@ -94,6 +94,12 @@ v3 的分工：
 - 内核（`runtime::Runtime`）先识别选择/翻页键：
   `1`–`9`/`0` → `Composer::select(row)`，`Space` → 选中高亮行，
   `↑`/`↓` → `Composer::moveSelection()`，`+`/小键盘 `-` → `Composer::page()`；
+- **没有候选时空格按「上屏原文」处理**：`weibrds` 这种输入引擎只能切出 `wei`，
+  选完之后合成里只剩文本（`为brds`）、候选页是空的。此时空格不是「选中第 0 行」
+  （那会什么都不发生，按键被吞掉），而是 `Composer::commitLetters()` → 把
+  `为brds` 原样交给宿主。这与 librime 自己处理空格的结果逐字相同（实测：
+  `select_candidate(0)` 之后 preedit 为 `为brds`、无候选，引擎空格 commit `为brds`），
+  也不再依赖「空格总能选中点什么」这个不成立的前提；
 - `CandidatePipeline` 保存每一行的 `source` 与 `engineRow`：
   - `Engine` 行：`engine.selectCandidate(engineRow)`，再取引擎真正产出的文本；
   - `Learned`/`Cloud` 行：直接提交该文本；

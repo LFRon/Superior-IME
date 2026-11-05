@@ -364,6 +364,19 @@ bool Runtime::key(const api::SessionKey &key, const api::KeyPress &press,
         if (frame.composing) {
             const std::uint64_t now = nowMs();
             if (press.code == api::KeyCode::Space) {
+                if (frame.candidates.empty()) {
+                    // Nothing to pick: the engine could not turn the rest of the
+                    // input into candidates, so the composition is left holding
+                    // text only ("weibrds" -> 为 + brds, or a bare "brds").
+                    // Space then types what is being composed as it stands, the
+                    // same text librime's own space key would commit.
+                    std::string letters;
+                    if (session.composer->commitLetters(letters) && !letters.empty()) {
+                        outbox_.commit(session.key, letters, core::WhenUnfocused::Drop);
+                    }
+                    present(session);
+                    return true;
+                }
                 const auto row = frame.highlighted >= 0
                                      ? static_cast<std::size_t>(frame.highlighted)
                                      : 0U;
